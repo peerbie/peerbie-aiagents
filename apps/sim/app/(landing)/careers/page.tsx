@@ -496,7 +496,7 @@ export default function CareersPage() {
                 <Button
                   type='submit'
                   disabled={isSubmitting || submitStatus === 'success'}
-                  className='min-w-[200px] rounded-[10px] border border-[#6F3DFA] bg-gradient-to-b from-[#8357FF] to-[#6F3DFA] text-white shadow-[inset_0_2px_4px_0_#9B77FF] transition-all duration-300 hover:opacity-90 disabled:opacity-50'
+                  className='min-w-[200px] rounded-[10px] border border-[#1992fc] bg-gradient-to-b from-[#1992fc] to-[#1992fc] text-white shadow-[inset_0_2px_4px_0_#1992fc] transition-all duration-300 hover:opacity-90 disabled:opacity-50'
                   size='lg'
                 >
                   {isSubmitting ? (

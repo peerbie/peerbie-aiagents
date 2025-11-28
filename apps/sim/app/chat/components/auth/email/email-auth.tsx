@@ -66,7 +66,7 @@ export default function EmailAuth({
       const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
 
       // Check if the CSS variable exists and is different from the default
-      if (brandAccent && brandAccent !== '#6f3dfa') {
+      if (brandAccent && brandAccent !== '#1992fc') {
         setButtonClass('auth-button-custom')
       } else {
         setButtonClass('auth-button-gradient')

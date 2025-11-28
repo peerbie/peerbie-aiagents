@@ -65,7 +65,7 @@ function VerificationForm({
       const computedStyle = getComputedStyle(document.documentElement)
       const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
 
-      if (brandAccent && brandAccent !== '#6f3dfa') {
+      if (brandAccent && brandAccent !== '#1992fc') {
         setButtonClass('auth-button-custom')
       } else {
         setButtonClass('auth-button-gradient')

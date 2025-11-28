@@ -145,7 +145,7 @@ export default function LoginPage({
       const computedStyle = getComputedStyle(document.documentElement)
       const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
 
-      if (brandAccent && brandAccent !== '#6f3dfa') {
+      if (brandAccent && brandAccent !== '#1992fc') {
         setButtonClass('auth-button-custom')
       } else {
         setButtonClass('auth-button-gradient')
@@ -401,7 +401,8 @@ export default function LoginPage({
       )}
 
       {/* Email/Password Form - show unless explicitly disabled */}
-      {!isFalsy(getEnv('NEXT_PUBLIC_EMAIL_PASSWORD_SIGNUP_ENABLED')) && (
+      {/*!isFalsy(getEnv('NEXT_PUBLIC_EMAIL_PASSWORD_SIGNUP_ENABLED')) && */}
+      {(
         <form onSubmit={onSubmit} className={`${inter.className} mt-8 space-y-8`}>
           <div className='space-y-6'>
             <div className='space-y-2'>
@@ -486,7 +487,7 @@ export default function LoginPage({
             type='submit'
             onMouseEnter={() => setIsButtonHovered(true)}
             onMouseLeave={() => setIsButtonHovered(false)}
-            className='group inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[#6F3DFA] bg-gradient-to-b from-[#8357FF] to-[#6F3DFA] py-[6px] pr-[10px] pl-[12px] text-[15px] text-white shadow-[inset_0_2px_4px_0_#9B77FF] transition-all'
+            className='group inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[#1992fc] bg-gradient-to-b from-[#1992fc] to-[#1992fc] py-[6px] pr-[10px] pl-[12px] text-[15px] text-white shadow-[inset_0_2px_4px_0_#1992fc] transition-all'
             disabled={isLoading}
           >
             <span className='flex items-center gap-1'>
@@ -615,7 +616,7 @@ export default function LoginPage({
               onClick={handleForgotPassword}
               onMouseEnter={() => setIsResetButtonHovered(true)}
               onMouseLeave={() => setIsResetButtonHovered(false)}
-              className='group inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[#6F3DFA] bg-gradient-to-b from-[#8357FF] to-[#6F3DFA] py-[6px] pr-[10px] pl-[12px] text-[15px] text-white shadow-[inset_0_2px_4px_0_#9B77FF] transition-all'
+              className='group inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[#1992fc] bg-gradient-to-b from-[#1992fc] to-[#1992fc] py-[6px] pr-[10px] pl-[12px] text-[15px] text-white shadow-[inset_0_2px_4px_0_#1992fc] transition-all'
               disabled={isSubmittingReset}
             >
               <span className='flex items-center gap-1'>

@@ -127,7 +127,7 @@ function SignupFormContent({
       const computedStyle = getComputedStyle(document.documentElement)
       const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
 
-      if (brandAccent && brandAccent !== '#6f3dfa') {
+      if (brandAccent && brandAccent !== '#1992fc') {
         setButtonClass('auth-button-custom')
       } else {
         setButtonClass('auth-button-gradient')
@@ -509,7 +509,7 @@ function SignupFormContent({
             type='submit'
             onMouseEnter={() => setIsButtonHovered(true)}
             onMouseLeave={() => setIsButtonHovered(false)}
-            className='group inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[#6F3DFA] bg-gradient-to-b from-[#8357FF] to-[#6F3DFA] py-[6px] pr-[10px] pl-[12px] text-[15px] text-white shadow-[inset_0_2px_4px_0_#9B77FF] transition-all'
+            className='group inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[#1992fc] bg-gradient-to-b from-[#1992fc] to-[#1992fc] py-[6px] pr-[10px] pl-[12px] text-[15px] text-white shadow-[inset_0_2px_4px_0_#1992fc] transition-all'
             disabled={isLoading}
           >
             <span className='flex items-center gap-1'>
