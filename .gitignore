@@ -70,4 +70,4 @@ start-collector.sh
 ## Helm Chart Tests
 helm/sim/test
 i18n.cache
-k8s/agent-secrets.yaml
+k8s/agent-secrets.yml
