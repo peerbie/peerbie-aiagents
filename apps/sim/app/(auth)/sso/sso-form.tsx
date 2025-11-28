@@ -277,7 +277,7 @@ export default function SSOForm() {
       >
         By signing in, you agree to our{' '}
         <Link
-          href='/terms'
+          href='/'
           target='_blank'
           rel='noopener noreferrer'
           className='auth-link underline-offset-4 transition hover:underline'
@@ -286,7 +286,7 @@ export default function SSOForm() {
         </Link>{' '}
         and{' '}
         <Link
-          href='/privacy'
+          href='/'
           target='_blank'
           rel='noopener noreferrer'
           className='auth-link underline-offset-4 transition hover:underline'

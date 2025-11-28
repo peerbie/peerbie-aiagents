@@ -519,10 +519,10 @@ export default function CareersPage() {
             <p>
               Questions? Email us at{' '}
               <a
-                href='mailto:careers@sim.ai'
+                href='mailto:careers@peerbie.com'
                 className='font-medium text-gray-900 underline transition-colors hover:text-gray-700'
               >
-                careers@sim.ai
+                careers@peerbie.com
               </a>
             </p>
           </section>

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
-  metadataBase: new URL('https://sim.ai'),
+  metadataBase: new URL('https://peerbie.com'),
   manifest: '/manifest.json',
   icons: {
     icon: '/favicon.ico',

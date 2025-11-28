@@ -54,7 +54,7 @@
     "url": "https://github.com/simstudioai/sim.git",
     "directory": "packages/ts-sdk"
   },
-  "homepage": "https://sim.ai",
+  "homepage": "https://peerbie.com",
   "bugs": {
     "url": "https://github.com/simstudioai/sim/issues"
   }

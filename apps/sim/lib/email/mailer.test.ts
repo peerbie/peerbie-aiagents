@@ -37,7 +37,7 @@ vi.mock('@/lib/env', () => ({
     AZURE_ACS_CONNECTION_STRING: 'test-azure-connection-string',
     AZURE_COMMUNICATION_EMAIL_DOMAIN: 'test.azurecomm.net',
     NEXT_PUBLIC_APP_URL: 'https://test.sim.ai',
-    FROM_EMAIL_ADDRESS: 'Sim <noreply@sim.ai>',
+    FROM_EMAIL_ADDRESS: 'Sim <noreply@peerbie.com>',
   },
 }))
 
@@ -99,7 +99,7 @@ describe('mailer', () => {
 
       // Should call Resend with correct parameters
       expect(mockSend).toHaveBeenCalledWith({
-        from: 'Sim <noreply@sim.ai>',
+        from: 'Sim <noreply@peerbie.com>',
         to: testEmailOptions.to,
         subject: testEmailOptions.subject,
         html: testEmailOptions.html,
@@ -126,7 +126,7 @@ describe('mailer', () => {
 
       // Should call Resend with unsubscribe headers
       expect(mockSend).toHaveBeenCalledWith({
-        from: 'Sim <noreply@sim.ai>',
+        from: 'Sim <noreply@peerbie.com>',
         to: testEmailOptions.to,
         subject: testEmailOptions.subject,
         html: '<p>Test content</p><a href="mock-token-123">Unsubscribe</a>',
@@ -255,7 +255,7 @@ describe('mailer', () => {
 
       // Should have fallen back to Azure
       expect(mockAzureBeginSend).toHaveBeenCalledWith({
-        senderAddress: 'noreply@sim.ai',
+        senderAddress: 'noreply@peerbie.com',
         content: {
           subject: testEmailOptions.subject,
           html: testEmailOptions.html,

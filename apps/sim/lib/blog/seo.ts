@@ -82,7 +82,7 @@ export function buildArticleJsonLd(post: BlogMeta) {
       name: 'Sim',
       logo: {
         '@type': 'ImageObject',
-        url: 'https://sim.ai/logo/primary/medium.png',
+        url: 'https://peerbie.com/logo/primary/medium.png',
       },
     },
     mainEntityOfPage: {
@@ -103,8 +103,8 @@ export function buildBreadcrumbJsonLd(post: BlogMeta) {
     '@context': 'https://schema.org',
     '@type': 'BreadcrumbList',
     itemListElement: [
-      { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://sim.ai' },
-      { '@type': 'ListItem', position: 2, name: 'Sim Studio', item: 'https://sim.ai/studio' },
+      { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://peerbie.com' },
+      { '@type': 'ListItem', position: 2, name: 'Sim Studio', item: 'https://peerbie.com/studio' },
       { '@type': 'ListItem', position: 3, name: post.title, item: post.canonical },
     ],
   }
@@ -128,7 +128,7 @@ export function buildBlogJsonLd() {
     '@context': 'https://schema.org',
     '@type': 'Blog',
     name: 'Sim Studio',
-    url: 'https://sim.ai/studio',
+    url: 'https://peerbie.com/studio',
     description: 'Announcements, insights, and guides for building AI agent workflows.',
   }
 }

@@ -605,10 +605,10 @@ export default function PrivacyPolicy() {
           or "share" under CCPA/CPRA. You have the right to opt-out of such data sharing. To
           exercise this right, contact us at{' '}
           <Link
-            href='mailto:privacy@sim.ai'
+            href='mailto:privacy@peerbie.com'
             className='text-[var(--brand-primary-hex)] underline hover:text-[var(--brand-primary-hover-hex)]'
           >
-            privacy@sim.ai
+            privacy@peerbie.com
           </Link>
           .
         </p>
@@ -694,10 +694,10 @@ export default function PrivacyPolicy() {
           solution vendor in accordance with their disclosure policy (if any). Before beginning your
           inquiry, email us at{' '}
           <Link
-            href='mailto:security@sim.ai'
+            href='mailto:security@peerbie.com'
             className='text-[var(--brand-primary-hex)] underline hover:text-[var(--brand-primary-hover-hex)]'
           >
-            security@sim.ai
+            security@peerbie.com
           </Link>{' '}
           if you're unsure whether a system or endpoint is in scope.
         </p>
@@ -716,10 +716,10 @@ export default function PrivacyPolicy() {
         <p className='mb-4'>
           To report any security flaws, send an email to{' '}
           <Link
-            href='mailto:security@sim.ai'
+            href='mailto:security@peerbie.com'
             className='text-[var(--brand-primary-hex)] underline hover:text-[var(--brand-primary-hover-hex)]'
           >
-            security@sim.ai
+            security@peerbie.com
           </Link>
           . The next business day, we'll acknowledge receipt of your vulnerability report and keep
           you updated on our progress. Reports can be anonymously submitted.
@@ -761,10 +761,10 @@ export default function PrivacyPolicy() {
           <li>
             Email:{' '}
             <Link
-              href='mailto:privacy@sim.ai'
+              href='mailto:privacy@peerbie.com'
               className='text-[var(--brand-primary-hex)] underline hover:text-[var(--brand-primary-hover-hex)]'
             >
-              privacy@sim.ai
+              privacy@peerbie.com
             </Link>
           </li>
           <li>Mailing Address: Sim, 80 Langton St, San Francisco, CA 94133, USA</li>

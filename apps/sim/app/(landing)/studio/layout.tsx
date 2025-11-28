@@ -5,8 +5,8 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
     '@context': 'https://schema.org',
     '@type': 'Organization',
     name: 'Sim',
-    url: 'https://sim.ai',
-    logo: 'https://sim.ai/logo/primary/small.png',
+    url: 'https://peerbie.com',
+    logo: 'https://peerbie.com/logo/primary/small.png',
     sameAs: ['https://x.com/simdotai'],
   }
 
@@ -14,10 +14,10 @@ export default function StudioLayout({ children }: { children: React.ReactNode }
     '@context': 'https://schema.org',
     '@type': 'WebSite',
     name: 'Sim',
-    url: 'https://sim.ai',
+    url: 'https://peerbie.com',
     potentialAction: {
       '@type': 'SearchAction',
-      target: 'https://sim.ai/search?q={search_term_string}',
+      target: 'https://peerbie.com/search?q={search_term_string}',
       'query-input': 'required name=search_term_string',
     },
   }

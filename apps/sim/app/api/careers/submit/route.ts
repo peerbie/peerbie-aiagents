@@ -121,7 +121,7 @@ export async function POST(request: NextRequest) {
     )
 
     const careersEmailResult = await sendEmail({
-      to: 'careers@sim.ai',
+      to: 'careers@peerbie.com',
       subject: `New Career Application: ${validatedData.name} - ${validatedData.position}`,
       html: careersEmailHtml,
       emailType: 'transactional',
@@ -136,7 +136,7 @@ export async function POST(request: NextRequest) {
     })
 
     if (!careersEmailResult.success) {
-      logger.error(`[${requestId}] Failed to send email to careers@sim.ai`, {
+      logger.error(`[${requestId}] Failed to send email to careers@peerbie.com`, {
         error: careersEmailResult.message,
       })
       throw new Error('Failed to submit application')
@@ -185,7 +185,7 @@ export async function POST(request: NextRequest) {
       {
         success: false,
         message:
-          'Failed to submit application. Please try again or email us directly at careers@sim.ai',
+          'Failed to submit application. Please try again or email us directly at careers@peerbie.com',
       },
       { status: 500 }
     )

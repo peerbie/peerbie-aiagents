@@ -2006,7 +2006,7 @@ export const useCopilotStore = create<CopilotStore>()(
           let errorContent = result.error || 'Failed to send message'
           if (result.status === 401) {
             errorContent =
-              '_Unauthorized request. You need a valid API key to use the copilot. You can get one by going to [sim.ai](https://sim.ai) settings and generating one there._'
+              '_Unauthorized request. You need a valid API key to use the copilot. You can get one by going to [sim.ai](https://peerbie.com) settings and generating one there._'
           } else if (result.status === 402) {
             errorContent =
               '_Usage limit exceeded. To continue using this service, upgrade your plan or top up on credits._'

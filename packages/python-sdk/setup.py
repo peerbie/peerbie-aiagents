@@ -7,7 +7,7 @@ setup(
     name="simstudio-sdk",
     version="0.1.0",
     author="Sim",
-    author_email="support@sim.ai",
+    author_email="support@peerbie.com",
     description="Sim SDK - Execute workflows programmatically",
     long_description=long_description,
     long_description_content_type="text/markdown",

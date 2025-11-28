@@ -27,7 +27,7 @@ export const pageSummaryTool: ToolConfig<WikipediaPageSummaryParams, WikipediaPa
       },
       method: 'GET',
       headers: () => ({
-        'User-Agent': 'SimStudio/1.0 (https://sim.ai)',
+        'User-Agent': 'SimStudio/1.0 (https://peerbie.com)',
         Accept: 'application/json',
       }),
     },

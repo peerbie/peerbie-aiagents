@@ -18,7 +18,7 @@ export function TOCFooter() {
           Build Agentic workflows visually on a drag-and-drop canvas or with natural language.
         </div>
         <Link
-          href='https://sim.ai/signup'
+          href='https://peerbie.com/signup'
           target='_blank'
           rel='noopener noreferrer'
           onMouseEnter={() => setIsHovered(true)}

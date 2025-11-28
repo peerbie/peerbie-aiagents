@@ -20,7 +20,7 @@ export default async function AuthorPage({ params }: { params: Promise<{ id: str
     '@context': 'https://schema.org',
     '@type': 'Person',
     name: author.name,
-    url: `https://sim.ai/studio/authors/${author.id}`,
+    url: `https://peerbie.com/studio/authors/${author.id}`,
     sameAs: author.url ? [author.url] : [],
     image: author.avatarUrl,
   }

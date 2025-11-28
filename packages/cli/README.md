@@ -1,6 +1,6 @@
 # Sim CLI
 
-Sim CLI allows you to run [Sim](https://sim.ai) using Docker with a single command.
+Sim CLI allows you to run [Sim](https://peerbie.com) using Docker with a single command.
 
 ## Installation
 

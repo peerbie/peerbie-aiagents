@@ -206,7 +206,7 @@ export async function POST(request: NextRequest) {
         if (isDev) {
           chatUrl = `http://localhost:3000/chat/${identifier}`
         } else {
-          chatUrl = `https://sim.ai/chat/${identifier}`
+          chatUrl = `https://peerbie.com/chat/${identifier}`
         }
       }
 

@@ -11,48 +11,48 @@ export const metadata: Metadata = {
     'Open-source AI agent workflow builder used by 60,000+ developers. Build and deploy agentic workflows with a visual drag-and-drop canvas. Connect 100+ apps and ship SOC2 & HIPAA-ready AI automations from startups to Fortune 500.',
   keywords:
     'AI agent workflow builder, agentic workflows, open source AI, visual workflow builder, AI automation, LLM workflows, AI agents, workflow automation, no-code AI, SOC2 compliant, HIPAA compliant, enterprise AI',
-  authors: [{ name: 'Sim Studio' }],
-  creator: 'Sim Studio',
-  publisher: 'Sim Studio',
+  authors: [{ name: 'Peerbie Agent Studio' }],
+  creator: 'Peerbie Agent Studio',
+  publisher: 'Peerbie Agent Studio',
   formatDetection: {
     email: false,
     address: false,
     telephone: false,
   },
   openGraph: {
-    title: 'Sim - AI Agent Workflow Builder | Open Source',
+    title: 'Peerbie Agent Studio - AI Agent Workflow Builder | Open Source',
     description:
       'Open-source platform used by 60,000+ developers. Design, deploy, and monitor agentic workflows with a visual drag-and-drop interface, 100+ integrations, and enterprise-grade security.',
     type: 'website',
     url: baseUrl,
-    siteName: 'Sim',
+    siteName: 'Peerbie Agent Studio',
     locale: 'en_US',
     images: [
       {
         url: '/social/og-image.png',
         width: 1200,
         height: 630,
-        alt: 'Sim - Visual AI Workflow Builder',
+        alt: 'Peerbie Agent Studio - Visual AI Workflow Builder',
         type: 'image/png',
       },
       {
         url: '/social/og-image-square.png',
         width: 600,
         height: 600,
-        alt: 'Sim Logo',
+        alt: 'Peerbie Agent Studio Logo',
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    site: '@simdotai',
-    creator: '@simdotai',
-    title: 'Sim - AI Agent Workflow Builder | Open Source',
+    site: '@peerbie',
+    creator: '@peerbie',
+    title: 'Peerbie Agent Studio - AI Agent Workflow Builder | Open Source',
     description:
       'Open-source platform for agentic workflows. 60,000+ developers. Visual builder. 100+ integrations. SOC2 & HIPAA compliant.',
     images: {
       url: '/social/twitter-image.png',
-      alt: 'Sim - Visual AI Workflow Builder',
+      alt: 'Peerbie Agent Studio - Visual AI Workflow Builder',
     },
   },
   alternates: {

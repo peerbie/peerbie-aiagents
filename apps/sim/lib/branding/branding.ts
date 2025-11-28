@@ -24,19 +24,19 @@ export interface BrandConfig {
  * Default brand configuration values
  */
 const defaultConfig: BrandConfig = {
-  name: 'Sim',
+  name: 'Peerbie Agent Studio',
   logoUrl: undefined,
   faviconUrl: '/favicon/favicon.ico',
   customCssUrl: undefined,
-  supportEmail: 'help@sim.ai',
+  supportEmail: 'hello@peerbie.com',
   documentationUrl: undefined,
   termsUrl: undefined,
   privacyUrl: undefined,
   theme: {
-    primaryColor: '#701ffc',
-    primaryHoverColor: '#802fff',
-    accentColor: '#9d54ff',
-    accentHoverColor: '#a66fff',
+    primaryColor: '#0086c9',
+    primaryHoverColor: '#0876adff',
+    accentColor: '#62c4f5ff',
+    accentHoverColor: '#8bd4f8ff',
     backgroundColor: '#0c0c0c',
   },
 }

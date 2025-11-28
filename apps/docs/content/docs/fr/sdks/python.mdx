@@ -31,7 +31,7 @@ from simstudio import SimStudioClient
 # Initialize the client
 client = SimStudioClient(
     api_key="your-api-key-here",
-    base_url="https://sim.ai"  # optional, defaults to https://sim.ai
+    base_url="https://peerbie.com"  # optional, defaults to https://peerbie.com
 )
 
 # Execute a workflow
@@ -49,7 +49,7 @@ except Exception as error:
 #### Constructeur
 
 ```python
-SimStudioClient(api_key: str, base_url: str = "https://sim.ai")
+SimStudioClient(api_key: str, base_url: str = "https://peerbie.com")
 ```
 
 **Paramètres :**
@@ -656,7 +656,7 @@ def stream_workflow():
 
     def generate():
         response = requests.post(
-            'https://sim.ai/api/workflows/WORKFLOW_ID/execute',
+            'https://peerbie.com/api/workflows/WORKFLOW_ID/execute',
             headers={
                 'Content-Type': 'application/json',
                 'X-API-Key': os.getenv('SIM_API_KEY')
@@ -711,7 +711,7 @@ Configurez le client en utilisant des variables d'environnement :
     # Development configuration
     client = SimStudioClient(
         api_key=os.getenv("SIM_API_KEY")
-        base_url=os.getenv("SIM_BASE_URL", "https://sim.ai")
+        base_url=os.getenv("SIM_BASE_URL", "https://peerbie.com")
     )
     ```
 
@@ -729,7 +729,7 @@ Configurez le client en utilisant des variables d'environnement :
 
     client = SimStudioClient(
         api_key=api_key,
-        base_url=os.getenv("SIM_BASE_URL", "https://sim.ai")
+        base_url=os.getenv("SIM_BASE_URL", "https://peerbie.com")
     )
     ```
 
@@ -740,7 +740,7 @@ Configurez le client en utilisant des variables d'environnement :
 
 <Steps>
   <Step title="Connectez-vous à Sim">
-    Accédez à [Sim](https://sim.ai) et connectez-vous à votre compte.
+    Accédez à [Sim](https://peerbie.com) et connectez-vous à votre compte.
   </Step>
   <Step title="Ouvrez votre workflow">
     Accédez au workflow que vous souhaitez exécuter par programmation.

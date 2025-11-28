@@ -437,13 +437,13 @@ export default function LoginPage({
             <div className='space-y-2'>
               <div className='flex items-center justify-between'>
                 <Label htmlFor='password'>Password</Label>
-                <button
+                {/* <button
                   type='button'
                   onClick={() => setForgotPasswordOpen(true)}
                   className='font-medium text-muted-foreground text-xs transition hover:text-foreground'
                 >
                   Forgot password?
-                </button>
+                </button> */}
               </div>
               <div className='relative'>
                 <Input
@@ -553,7 +553,7 @@ export default function LoginPage({
       >
         By signing in, you agree to our{' '}
         <Link
-          href='/terms'
+          href='/'
           target='_blank'
           rel='noopener noreferrer'
           className='auth-link underline-offset-4 transition hover:underline'
@@ -562,7 +562,7 @@ export default function LoginPage({
         </Link>{' '}
         and{' '}
         <Link
-          href='/privacy'
+          href='/'
           target='_blank'
           rel='noopener noreferrer'
           className='auth-link underline-offset-4 transition hover:underline'

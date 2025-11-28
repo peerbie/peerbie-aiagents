@@ -144,7 +144,7 @@ export function generateStructuredData() {
     creator: {
       '@type': 'Organization',
       name: 'Sim',
-      url: 'https://sim.ai',
+      url: 'https://peerbie.com',
     },
     featureList: [
       'Visual AI Agent Builder',

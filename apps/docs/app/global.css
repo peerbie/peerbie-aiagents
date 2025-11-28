@@ -346,12 +346,12 @@ aside[data-sidebar] > *:not([data-sidebar-viewport]) {
   aside[data-sidebar] a[href="/"] img,
   aside[data-sidebar] > a:first-child,
   aside[data-sidebar] > div > a:first-child,
-  aside[data-sidebar] img[alt="Sim"],
+  aside[data-sidebar] img[alt="Peerbie Agent Studio"],
   [data-sidebar-header],
   [data-sidebar] [data-title],
   #nd-sidebar > a:first-child,
   #nd-sidebar > div:first-child > a:first-child,
-  #nd-sidebar img[alt="Sim"] {
+  #nd-sidebar img[alt="Peerbie Agent Studio"] {
     display: none !important;
     visibility: hidden !important;
     height: 0 !important;

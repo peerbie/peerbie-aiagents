@@ -213,12 +213,12 @@ const nextConfig: NextConfig = {
     redirects.push(
       {
         source: '/building/:path*',
-        destination: 'https://sim.ai/studio/:path*',
+        destination: 'https://peerbie.com/studio/:path*',
         permanent: true,
       },
       {
         source: '/blog/:path*',
-        destination: 'https://sim.ai/studio/:path*',
+        destination: 'https://peerbie.com/studio/:path*',
         permanent: true,
       }
     )

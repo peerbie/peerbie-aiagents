@@ -110,11 +110,11 @@ app:
     MANUAL_EXECUTION_LIMIT: "999999"                      # Manual execution bypass value
     
     # UI Branding & Whitelabeling Configuration
-    NEXT_PUBLIC_BRAND_NAME: "Sim"                         # Custom brand name
+    NEXT_PUBLIC_BRAND_NAME: "Peerbie Agent Studio"                         # Custom brand name
     NEXT_PUBLIC_BRAND_LOGO_URL: ""                        # Custom logo URL (leave empty for default)
     NEXT_PUBLIC_BRAND_FAVICON_URL: ""                     # Custom favicon URL (leave empty for default)
     NEXT_PUBLIC_CUSTOM_CSS_URL: ""                        # Custom stylesheet URL (leave empty for none)
-    NEXT_PUBLIC_SUPPORT_EMAIL: "help@sim.ai"             # Support email address
+    NEXT_PUBLIC_SUPPORT_EMAIL: "hello@peerbie.com"             # Support email address
     NEXT_PUBLIC_DOCUMENTATION_URL: ""                    # Documentation URL (leave empty for none)
     NEXT_PUBLIC_TERMS_URL: ""                            # Terms of service URL (leave empty for none)
     NEXT_PUBLIC_PRIVACY_URL: ""                          # Privacy policy URL (leave empty for none)
