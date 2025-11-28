@@ -11,7 +11,7 @@ const logger = createLogger('McpUrlValidator')
 
 // Blocked IPv4 ranges
 const PRIVATE_IP_RANGES = [
-  /^127\./, // Loopback (127.0.0.0/8)
+  // /^127\./, // Loopback (127.0.0.0/8)
   /^10\./, // Private class A (10.0.0.0/8)
   /^172\.(1[6-9]|2[0-9]|3[01])\./, // Private class B (172.16.0.0/12)
   /^192\.168\./, // Private class C (192.168.0.0/16)
@@ -30,7 +30,7 @@ const PRIVATE_IPV6_RANGES = [
 
 // Blocked hostnames - SSRF protection
 const BLOCKED_HOSTNAMES = [
-  'localhost',
+  // 'localhost',
   // Cloud metadata endpoints
   'metadata.google.internal', // Google Cloud metadata
   'metadata.gce.internal', // Google Compute Engine metadata (legacy)
