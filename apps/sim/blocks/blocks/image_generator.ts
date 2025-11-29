@@ -8,7 +8,7 @@ export const ImageGeneratorBlock: BlockConfig<DalleResponse> = {
   description: 'Generate images',
   authMode: AuthMode.ApiKey,
   longDescription:
-    'Integrate Image Generator into the workflow. Can generate images using DALL-E 3 or GPT Image.',
+    'Integrate Image Generator into the workflow. Can generate images using DALL-E 3, GPT Image, Gemini 2.5 Flash, or Gemini 3 Pro.',
   docsLink: 'https://docs.sim.ai/tools/image_generator',
   category: 'tools',
   bgColor: '#4D5FFF',
@@ -21,6 +21,8 @@ export const ImageGeneratorBlock: BlockConfig<DalleResponse> = {
       options: [
         { label: 'DALL-E 3', id: 'dall-e-3' },
         { label: 'GPT Image', id: 'gpt-image-1' },
+        { label: 'Gemini 2.5 Flash', id: 'gemini-2.5-flash-image' },
+        { label: 'Gemini 3 Pro', id: 'gemini-3-pro-image' },
       ],
       value: () => 'dall-e-3',
     },
@@ -55,6 +57,23 @@ export const ImageGeneratorBlock: BlockConfig<DalleResponse> = {
       ],
       value: () => 'auto',
       condition: { field: 'model', value: 'gpt-image-1' },
+    },
+    {
+      id: 'aspectRatio',
+      title: 'Aspect Ratio',
+      type: 'dropdown',
+      options: [
+        { label: '1:1 (Square)', id: '1:1' },
+        { label: '16:9 (Landscape)', id: '16:9' },
+        { label: '9:16 (Portrait)', id: '9:16' },
+        { label: '4:3 (Standard)', id: '4:3' },
+        { label: '3:4 (Portrait)', id: '3:4' },
+      ],
+      value: () => '1:1',
+      condition: {
+        field: 'model',
+        value: ['gemini-2.5-flash-image', 'gemini-3-pro-image'],
+      },
     },
     {
       id: 'quality',
@@ -98,12 +117,36 @@ export const ImageGeneratorBlock: BlockConfig<DalleResponse> = {
       placeholder: 'Enter your OpenAI API key',
       password: true,
       connectionDroppable: false,
+      condition: { field: 'model', value: ['dall-e-3', 'gpt-image-1'] },
+    },
+    {
+      id: 'apiKey',
+      title: 'Google API Key',
+      type: 'short-input',
+      required: true,
+      placeholder: 'Enter your Google API key',
+      password: true,
+      connectionDroppable: false,
+      condition: {
+        field: 'model',
+        value: ['gemini-2.5-flash-image', 'gemini-3-pro-image'],
+      },
     },
   ],
   tools: {
-    access: ['openai_image'],
+    access: ['openai_image', 'gemini_image'],
     config: {
-      tool: () => 'openai_image',
+      tool: (params) => {
+        // Route to Gemini tool for Gemini models
+        if (
+          params.model === 'gemini-2.5-flash-image' ||
+          params.model === 'gemini-3-pro-image'
+        ) {
+          return 'gemini_image'
+        }
+        // Default to OpenAI tool for DALL-E and GPT Image
+        return 'openai_image'
+      },
       params: (params) => {
         if (!params.apiKey) {
           throw new Error('API key is required')
@@ -112,10 +155,22 @@ export const ImageGeneratorBlock: BlockConfig<DalleResponse> = {
           throw new Error('Prompt is required')
         }
 
-        // Base parameters for all models
+        const model = params.model || 'dall-e-3'
+
+        // Gemini models
+        if (model === 'gemini-2.5-flash-image' || model === 'gemini-3-pro-image') {
+          return {
+            prompt: params.prompt,
+            model: model,
+            aspectRatio: params.aspectRatio || '1:1',
+            apiKey: params.apiKey,
+          }
+        }
+
+        // OpenAI models (DALL-E 3 and GPT Image)
         const baseParams = {
           prompt: params.prompt,
-          model: params.model || 'dall-e-3',
+          model: model,
           size: params.size || '1024x1024',
           apiKey: params.apiKey,
         }
@@ -142,14 +197,19 @@ export const ImageGeneratorBlock: BlockConfig<DalleResponse> = {
     prompt: { type: 'string', description: 'Image description prompt' },
     model: { type: 'string', description: 'Image generation model' },
     size: { type: 'string', description: 'Image dimensions' },
+    aspectRatio: { type: 'string', description: 'Image aspect ratio (Gemini models)' },
     quality: { type: 'string', description: 'Image quality level' },
     style: { type: 'string', description: 'Image style' },
     background: { type: 'string', description: 'Background type' },
-    apiKey: { type: 'string', description: 'OpenAI API key' },
+    apiKey: { type: 'string', description: 'API key (OpenAI or Google)' },
   },
   outputs: {
     content: { type: 'string', description: 'Generation response' },
     image: { type: 'string', description: 'Generated image URL' },
     metadata: { type: 'json', description: 'Generation metadata' },
+    visualization: {
+      type: 'image',
+      url: 'image',
+    },
   },
 }

@@ -434,6 +434,7 @@ import {
   onedriveUploadTool,
 } from '@/tools/onedrive'
 import { imageTool, embeddingsTool as openAIEmbeddings } from '@/tools/openai'
+import { geminiImageTool } from '@/tools/gemini/gemini-image'
 import {
   outlookCopyTool,
   outlookDeleteTool,
@@ -1139,6 +1140,7 @@ export const tools: Record<string, ToolConfig> = {
   discord_get_webhook: discordGetWebhookTool,
   discord_delete_webhook: discordDeleteWebhookTool,
   openai_image: imageTool,
+  gemini_image: geminiImageTool,
   microsoft_teams_read_chat: microsoftTeamsReadChatTool,
   microsoft_teams_write_chat: microsoftTeamsWriteChatTool,
   microsoft_teams_read_channel: microsoftTeamsReadChannelTool,
