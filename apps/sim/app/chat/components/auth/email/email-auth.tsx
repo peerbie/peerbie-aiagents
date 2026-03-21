@@ -47,39 +47,6 @@ export default function EmailAuth({ identifier, onAuthSuccess }: EmailAuthProps)
   const [isResendDisabled, setIsResendDisabled] = useState(false)
 
   useEffect(() => {
-<<<<<<< HEAD
-    // Check if CSS variable has been customized
-    const checkCustomBrand = () => {
-      const computedStyle = getComputedStyle(document.documentElement)
-      const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
-
-      // Check if the CSS variable exists and is different from the default
-      if (brandAccent && brandAccent !== '#1992fc') {
-        setButtonClass('auth-button-custom')
-      } else {
-        setButtonClass('auth-button-gradient')
-      }
-    }
-
-    checkCustomBrand()
-
-    // Also check on window resize or theme changes
-    window.addEventListener('resize', checkCustomBrand)
-    const observer = new MutationObserver(checkCustomBrand)
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['style', 'class'],
-    })
-
-    return () => {
-      window.removeEventListener('resize', checkCustomBrand)
-      observer.disconnect()
-    }
-  }, [])
-
-  useEffect(() => {
-=======
->>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b
     if (countdown > 0) {
       const timer = setTimeout(() => setCountdown((c) => c - 1), 1000)
       return () => clearTimeout(timer)

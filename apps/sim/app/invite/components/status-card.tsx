@@ -27,34 +27,6 @@ export function InviteStatusCard({
   isExpiredError = false,
 }: InviteStatusCardProps) {
   const router = useRouter()
-<<<<<<< HEAD
-  const [buttonClass, setButtonClass] = useState('auth-button-gradient')
-  const brandConfig = useBrandConfig()
-
-  useEffect(() => {
-    const checkCustomBrand = () => {
-      const computedStyle = getComputedStyle(document.documentElement)
-      const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
-      if (brandAccent && brandAccent !== '#1992fc') {
-        setButtonClass('auth-button-custom')
-      } else {
-        setButtonClass('auth-button-gradient')
-      }
-    }
-    checkCustomBrand()
-    window.addEventListener('resize', checkCustomBrand)
-    const observer = new MutationObserver(checkCustomBrand)
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['style', 'class'],
-    })
-    return () => {
-      window.removeEventListener('resize', checkCustomBrand)
-      observer.disconnect()
-    }
-  }, [])
-=======
->>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b
 
   if (type === 'loading') {
     return (
@@ -66,23 +38,7 @@ export function InviteStatusCard({
         <div className='mt-8 flex w-full items-center justify-center py-8'>
           <Loader2 className='h-8 w-8 animate-spin text-[#999]' />
         </div>
-<<<<<<< HEAD
-
-        <div
-          className={`${inter.className} auth-text-muted fixed right-0 bottom-0 left-0 z-50 pb-8 text-center font-[340] text-[13px] leading-relaxed`}
-        >
-          Need help?{' '}
-          <a
-            href='mailto:help@peerbie.com'
-            className='auth-link underline-offset-4 transition hover:underline'
-          >
-            Contact support
-          </a>
-        </div>
-      </div>
-=======
       </>
->>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b
     )
   }
 

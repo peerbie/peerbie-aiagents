@@ -40,36 +40,6 @@ export default function SSOAuth({ identifier }: SSOAuthProps) {
   const [showEmailValidationError, setShowEmailValidationError] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
 
-<<<<<<< HEAD:apps/sim/app/chat/components/auth/sso/sso-auth.tsx
-  useEffect(() => {
-    const checkCustomBrand = () => {
-      const computedStyle = getComputedStyle(document.documentElement)
-      const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
-
-      if (brandAccent && brandAccent !== '#1992fc') {
-        setButtonClass('auth-button-custom')
-      } else {
-        setButtonClass('auth-button-gradient')
-      }
-    }
-
-    checkCustomBrand()
-
-    window.addEventListener('resize', checkCustomBrand)
-    const observer = new MutationObserver(checkCustomBrand)
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['style', 'class'],
-    })
-
-    return () => {
-      window.removeEventListener('resize', checkCustomBrand)
-      observer.disconnect()
-    }
-  }, [])
-
-=======
->>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b:apps/sim/ee/sso/components/sso-auth.tsx
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault()

@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createLogger } from '@sim/logger'
-import { Eye, EyeOff } from 'lucide-react'
+import { Eye, EyeOff, ArrowRight, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { Inter } from 'next/font/google'
 import {
   Input,
   Label,
@@ -13,6 +14,7 @@ import {
   ModalContent,
   ModalDescription,
   ModalHeader,
+  Button,
 } from '@/components/emcn'
 import { client } from '@/lib/auth/auth-client'
 import { getEnv, isFalsy, isTruthy } from '@/lib/core/config/env'
@@ -26,6 +28,7 @@ import { SSOLoginButton } from '@/app/(auth)/components/sso-login-button'
 import { useBrandedButtonClass } from '@/hooks/use-branded-button-class'
 
 const logger = createLogger('LoginForm')
+const inter = Inter({ subsets: ['latin'] })
 
 const validateEmailField = (emailValue: string): string[] => {
   const errors: string[] = []
@@ -87,6 +90,9 @@ export default function LoginPage({
   const [passwordErrors, setPasswordErrors] = useState<string[]>([])
   const [showValidationError, setShowValidationError] = useState(false)
   const buttonClass = useBrandedButtonClass()
+  const [resetSuccessMessage, setResetSuccessMessage] = useState<string | null>(null)
+  const [isResetButtonHovered, setIsResetButtonHovered] = useState(false)
+  const [isButtonHovered, setIsButtonHovered] = useState(false)
 
   const callbackUrlParam = searchParams?.get('callbackUrl')
   const isValidCallbackUrl = callbackUrlParam ? validateCallbackUrl(callbackUrlParam) : false
@@ -109,49 +115,6 @@ export default function LoginPage({
   const [email, setEmail] = useState('')
   const [emailErrors, setEmailErrors] = useState<string[]>([])
   const [showEmailValidationError, setShowEmailValidationError] = useState(false)
-
-  useEffect(() => {
-    setMounted(true)
-
-    if (searchParams) {
-      const callback = searchParams.get('callbackUrl')
-      if (callback) {
-        if (validateCallbackUrl(callback)) {
-          setCallbackUrl(callback)
-        } else {
-          logger.warn('Invalid callback URL detected and blocked:', { url: callback })
-        }
-      }
-
-      const inviteFlow = searchParams.get('invite_flow') === 'true'
-      setIsInviteFlow(inviteFlow)
-    }
-
-    const checkCustomBrand = () => {
-      const computedStyle = getComputedStyle(document.documentElement)
-      const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
-
-      if (brandAccent && brandAccent !== '#1992fc') {
-        setButtonClass('auth-button-custom')
-      } else {
-        setButtonClass('auth-button-gradient')
-      }
-    }
-
-    checkCustomBrand()
-
-    window.addEventListener('resize', checkCustomBrand)
-    const observer = new MutationObserver(checkCustomBrand)
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['style', 'class'],
-    })
-
-    return () => {
-      window.removeEventListener('resize', checkCustomBrand)
-      observer.disconnect()
-    }
-  }, [searchParams])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -633,9 +596,10 @@ export default function LoginPage({
                 </span>
               </span>
             </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+          </ModalBody>
+        </ModalContent>
+      </Modal>
     </>
   )
 }
+

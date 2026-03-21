@@ -42,11 +42,7 @@ export const searchTool: ToolConfig<WikipediaSearchParams, WikipediaSearchRespon
     },
     method: 'GET',
     headers: () => ({
-<<<<<<< HEAD
-      'User-Agent': 'SimStudio/1.0 (https://peerbie.com)',
-=======
       'User-Agent': 'Sim/1.0 (https://sim.ai)',
->>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b
       Accept: 'application/json',
     }),
   },

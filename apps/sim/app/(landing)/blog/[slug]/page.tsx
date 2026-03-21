@@ -46,13 +46,7 @@ export default async function Page({ params }: { params: Promise<{ slug: string 
       />
       <header className='mx-auto max-w-[1450px] px-6 pt-8 sm:px-8 sm:pt-12 md:px-12 md:pt-16'>
         <div className='mb-6'>
-<<<<<<< HEAD:apps/sim/app/(landing)/studio/[slug]/page.tsx
-          <Link href='/studio' className='text-gray-600 text-sm hover:text-gray-900'>
-            ← Back to Peerbie Agent Studio
-          </Link>
-=======
           <BackLink />
->>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b:apps/sim/app/(landing)/blog/[slug]/page.tsx
         </div>
         <div className='flex flex-col gap-8 md:flex-row md:gap-12'>
           <div className='w-full flex-shrink-0 md:w-[450px]'>

@@ -1601,10 +1601,6 @@ import {
   onedriveListTool,
   onedriveUploadTool,
 } from '@/tools/onedrive'
-<<<<<<< HEAD
-import { imageTool, embeddingsTool as openAIEmbeddings } from '@/tools/openai'
-import { geminiImageTool } from '@/tools/gemini/gemini-image'
-=======
 import {
   onepasswordCreateItemTool,
   onepasswordDeleteItemTool,
@@ -1617,7 +1613,6 @@ import {
   onepasswordUpdateItemTool,
 } from '@/tools/onepassword'
 import { openAIEmbeddingsTool, openAIImageTool } from '@/tools/openai'
->>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b
 import {
   outlookCopyTool,
   outlookDeleteTool,
@@ -3957,10 +3952,6 @@ export const tools: Record<string, ToolConfig> = {
   discord_execute_webhook: discordExecuteWebhookTool,
   discord_get_webhook: discordGetWebhookTool,
   discord_delete_webhook: discordDeleteWebhookTool,
-<<<<<<< HEAD
-  openai_image: imageTool,
-  gemini_image: geminiImageTool,
-=======
   docusign_create_from_template: docusignCreateFromTemplateTool,
   docusign_download_document: docusignDownloadDocumentTool,
   docusign_get_envelope: docusignGetEnvelopeTool,
@@ -3995,7 +3986,6 @@ export const tools: Record<string, ToolConfig> = {
   microsoft_ad_list_group_members: microsoftAdListGroupMembersTool,
   microsoft_ad_add_group_member: microsoftAdAddGroupMemberTool,
   microsoft_ad_remove_group_member: microsoftAdRemoveGroupMemberTool,
->>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b
   microsoft_teams_read_chat: microsoftTeamsReadChatTool,
   microsoft_teams_write_chat: microsoftTeamsWriteChatTool,
   microsoft_teams_read_channel: microsoftTeamsReadChannelTool,

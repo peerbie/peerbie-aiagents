@@ -1,13 +1,5 @@
 import { getBaseUrl } from '@/lib/core/utils/urls'
 
-<<<<<<< HEAD
-Website: https://peerbie.com
-App: https://peerbie.com/workspace
-Docs: https://docs.sim.ai
-GitHub: https://github.com/simstudioai/sim
-Region: global
-Primary language: en
-=======
 export async function GET() {
   const baseUrl = getBaseUrl()
 
@@ -37,7 +29,6 @@ Sim lets teams create agents, workflows, knowledge bases, tables, and docs. Over
 - **Trigger**: Event or schedule that initiates workflow execution
 - **Execution**: A single run of a workflow with logs and outputs
 - **Knowledge Base**: Vector-indexed document store for retrieval-augmented generation
->>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b
 
 ## Capabilities
 
