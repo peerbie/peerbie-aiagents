@@ -1,49 +1,31 @@
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
+import { sanitizeFileName } from '@/executor/constants'
 import '@/lib/uploads/core/setup.server'
 import { getSession } from '@/lib/auth'
-import { getUserEntityPermissions } from '@/lib/permissions/utils'
 import type { StorageContext } from '@/lib/uploads/config'
-import { isImageFileType } from '@/lib/uploads/utils/file-utils'
-import { validateFileType } from '@/lib/uploads/utils/validation'
+import { generateWorkspaceFileKey } from '@/lib/uploads/contexts/workspace/workspace-file-manager'
+import { isImageFileType, resolveFileType } from '@/lib/uploads/utils/file-utils'
+import {
+  SUPPORTED_AUDIO_EXTENSIONS,
+  SUPPORTED_DOCUMENT_EXTENSIONS,
+  SUPPORTED_VIDEO_EXTENSIONS,
+  validateFileType,
+} from '@/lib/uploads/utils/validation'
+import { getUserEntityPermissions } from '@/lib/workspaces/permissions/utils'
 import {
   createErrorResponse,
   createOptionsResponse,
   InvalidRequestError,
 } from '@/app/api/files/utils'
 
-const ALLOWED_EXTENSIONS = new Set([
-  // Documents
-  'pdf',
-  'doc',
-  'docx',
-  'txt',
-  'md',
-  'csv',
-  'xlsx',
-  'xls',
-  'json',
-  'yaml',
-  'yml',
-  // Images
-  'png',
-  'jpg',
-  'jpeg',
-  'gif',
-  // Audio
-  'mp3',
-  'm4a',
-  'wav',
-  'webm',
-  'ogg',
-  'flac',
-  'aac',
-  'opus',
-  // Video
-  'mp4',
-  'mov',
-  'avi',
-  'mkv',
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'] as const
+
+const ALLOWED_EXTENSIONS = new Set<string>([
+  ...SUPPORTED_DOCUMENT_EXTENSIONS,
+  ...IMAGE_EXTENSIONS,
+  ...SUPPORTED_AUDIO_EXTENSIONS,
+  ...SUPPORTED_VIDEO_EXTENSIONS,
 ])
 
 function validateFileExtension(filename: string): boolean {
@@ -65,9 +47,10 @@ export async function POST(request: NextRequest) {
 
     const formData = await request.formData()
 
-    const files = formData.getAll('file') as File[]
+    const rawFiles = formData.getAll('file')
+    const files = rawFiles.filter((f): f is File => f instanceof File)
 
-    if (!files || files.length === 0) {
+    if (files.length === 0) {
       throw new InvalidRequestError('No files provided')
     }
 
@@ -92,7 +75,7 @@ export async function POST(request: NextRequest) {
     const uploadResults = []
 
     for (const file of files) {
-      const originalName = file.name
+      const originalName = file.name || 'untitled.md'
 
       if (!validateFileExtension(originalName)) {
         const extension = originalName.split('.').pop()?.toLowerCase() || 'unknown'
@@ -154,7 +137,7 @@ export async function POST(request: NextRequest) {
         logger.info(`Uploading knowledge-base file: ${originalName}`)
 
         const timestamp = Date.now()
-        const safeFileName = originalName.replace(/\s+/g, '-')
+        const safeFileName = sanitizeFileName(originalName)
         const storageKey = `kb/${timestamp}-${safeFileName}`
 
         const metadata: Record<string, string> = {
@@ -205,6 +188,13 @@ export async function POST(request: NextRequest) {
         if (!workspaceId) {
           throw new InvalidRequestError('Workspace context requires workspaceId parameter')
         }
+        const permission = await getUserEntityPermissions(session.user.id, 'workspace', workspaceId)
+        if (permission !== 'admin' && permission !== 'write') {
+          return NextResponse.json(
+            { error: 'Write or Admin access required for workspace uploads' },
+            { status: 403 }
+          )
+        }
 
         try {
           const { uploadWorkspaceFile } = await import('@/lib/uploads/contexts/workspace')
@@ -243,9 +233,66 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // Handle image-only contexts (copilot, chat, profile-pictures)
+      // Handle mothership context (chat-scoped uploads to workspace S3)
+      if (context === 'mothership') {
+        if (!workspaceId) {
+          throw new InvalidRequestError('Mothership context requires workspaceId parameter')
+        }
+
+        logger.info(`Uploading mothership file: ${originalName}`)
+
+        const storageKey = generateWorkspaceFileKey(workspaceId, originalName)
+
+        const metadata: Record<string, string> = {
+          originalName: originalName,
+          uploadedAt: new Date().toISOString(),
+          purpose: 'mothership',
+          userId: session.user.id,
+          workspaceId,
+        }
+
+        const fileInfo = await storageService.uploadFile({
+          file: buffer,
+          fileName: storageKey,
+          contentType: file.type || 'application/octet-stream',
+          context: 'mothership',
+          preserveKey: true,
+          customKey: storageKey,
+          metadata,
+        })
+
+        const finalPath = usingCloudStorage ? `${fileInfo.path}?context=mothership` : fileInfo.path
+
+        uploadResults.push({
+          fileName: originalName,
+          presignedUrl: '',
+          fileInfo: {
+            path: finalPath,
+            key: fileInfo.key,
+            name: originalName,
+            size: buffer.length,
+            type: file.type || 'application/octet-stream',
+          },
+          directUploadSupported: false,
+        })
+
+        logger.info(`Successfully uploaded mothership file: ${fileInfo.key}`)
+        continue
+      }
+
+      // Handle copilot, chat, profile-pictures contexts
       if (context === 'copilot' || context === 'chat' || context === 'profile-pictures') {
-        if (!isImageFileType(file.type)) {
+        if (context === 'copilot') {
+          const { isSupportedFileType: isCopilotSupported } = await import(
+            '@/lib/uploads/contexts/copilot/copilot-file-manager'
+          )
+          const resolvedType = resolveFileType(file)
+          if (!isImageFileType(resolvedType) && !isCopilotSupported(resolvedType)) {
+            throw new InvalidRequestError(
+              'Unsupported file type. Allowed: images, PDF, and text files (TXT, CSV, MD, HTML, JSON, XML).'
+            )
+          }
+        } else if (!isImageFileType(file.type)) {
           throw new InvalidRequestError(
             `Only image files (JPEG, PNG, GIF, WebP, SVG) are allowed for ${context} uploads`
           )
@@ -267,9 +314,8 @@ export async function POST(request: NextRequest) {
 
         logger.info(`Uploading ${context} file: ${originalName}`)
 
-        // Generate storage key with context prefix and timestamp to ensure uniqueness
         const timestamp = Date.now()
-        const safeFileName = originalName.replace(/\s+/g, '-')
+        const safeFileName = sanitizeFileName(originalName)
         const storageKey = `${context}/${timestamp}-${safeFileName}`
 
         const metadata: Record<string, string> = {

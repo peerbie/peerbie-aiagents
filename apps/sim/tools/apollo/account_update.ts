@@ -21,13 +21,13 @@ export const apolloAccountUpdateTool: ToolConfig<
       type: 'string',
       required: true,
       visibility: 'user-or-llm',
-      description: 'ID of the account to update',
+      description: 'ID of the account to update (e.g., "acc_abc123")',
     },
     name: {
       type: 'string',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Company name',
+      description: 'Company name (e.g., "Acme Corporation")',
     },
     website_url: {
       type: 'string',
@@ -79,16 +79,14 @@ export const apolloAccountUpdateTool: ToolConfig<
     return {
       success: true,
       output: {
-        account: data.account || {},
-        metadata: {
-          updated: !!data.account,
-        },
+        account: data.account ?? null,
+        updated: !!data.account,
       },
     }
   },
 
   outputs: {
-    account: { type: 'json', description: 'Updated account data from Apollo' },
-    metadata: { type: 'json', description: 'Update metadata including updated status' },
+    account: { type: 'json', description: 'Updated account data from Apollo', optional: true },
+    updated: { type: 'boolean', description: 'Whether the account was successfully updated' },
   },
 }

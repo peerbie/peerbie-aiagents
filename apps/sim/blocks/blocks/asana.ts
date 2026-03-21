@@ -1,4 +1,5 @@
 import { AsanaIcon } from '@/components/icons'
+import { getScopesForService } from '@/lib/oauth/utils'
 import type { BlockConfig } from '@/blocks/types'
 import { AuthMode } from '@/blocks/types'
 import type { AsanaResponse } from '@/tools/asana/types'
@@ -32,19 +33,47 @@ export const AsanaBlock: BlockConfig<AsanaResponse> = {
       id: 'credential',
       title: 'Asana Account',
       type: 'oauth-input',
-
+      canonicalParamId: 'oauthCredential',
+      mode: 'basic',
       required: true,
-      provider: 'asana',
       serviceId: 'asana',
-      requiredScopes: ['default'],
+      requiredScopes: getScopesForService('asana'),
       placeholder: 'Select Asana account',
+    },
+    {
+      id: 'manualCredential',
+      title: 'Asana Account',
+      type: 'short-input',
+      canonicalParamId: 'oauthCredential',
+      mode: 'advanced',
+      placeholder: 'Enter credential ID',
+      required: true,
+    },
+    {
+      id: 'workspaceSelector',
+      title: 'Workspace',
+      type: 'project-selector',
+      canonicalParamId: 'workspace',
+      serviceId: 'asana',
+      selectorKey: 'asana.workspaces',
+      selectorAllowSearch: false,
+      placeholder: 'Select Asana workspace',
+      dependsOn: ['credential'],
+      mode: 'basic',
+      condition: {
+        field: 'operation',
+        value: ['create_task', 'get_projects', 'search_tasks'],
+      },
+      required: true,
     },
     {
       id: 'workspace',
       title: 'Workspace GID',
       type: 'short-input',
+      canonicalParamId: 'workspace',
       required: true,
       placeholder: 'Enter Asana workspace GID',
+      mode: 'advanced',
       condition: {
         field: 'operation',
         value: ['create_task', 'get_projects', 'search_tasks'],
@@ -73,10 +102,28 @@ export const AsanaBlock: BlockConfig<AsanaResponse> = {
       },
     },
     {
+      id: 'getTasksWorkspaceSelector',
+      title: 'Workspace',
+      type: 'project-selector',
+      canonicalParamId: 'getTasks_workspace',
+      serviceId: 'asana',
+      selectorKey: 'asana.workspaces',
+      selectorAllowSearch: false,
+      placeholder: 'Select Asana workspace',
+      dependsOn: ['credential'],
+      mode: 'basic',
+      condition: {
+        field: 'operation',
+        value: ['get_task'],
+      },
+    },
+    {
       id: 'getTasks_workspace',
       title: 'Workspace GID',
       type: 'short-input',
+      canonicalParamId: 'getTasks_workspace',
       placeholder: 'Enter workspace GID',
+      mode: 'advanced',
       condition: {
         field: 'operation',
         value: ['get_task'],
@@ -148,6 +195,19 @@ export const AsanaBlock: BlockConfig<AsanaResponse> = {
         field: 'operation',
         value: ['create_task', 'update_task'],
       },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date in YYYY-MM-DD format based on the user's description.
+Examples:
+- "tomorrow" -> Calculate tomorrow's date in YYYY-MM-DD format
+- "next Friday" -> Calculate the next Friday's date in YYYY-MM-DD format
+- "in 3 days" -> Calculate 3 days from now in YYYY-MM-DD format
+- "end of week" -> Calculate the upcoming Friday or Sunday in YYYY-MM-DD format
+
+Return ONLY the date string in YYYY-MM-DD format - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the due date (e.g., "tomorrow", "next Friday", "in 3 days")...',
+        generationType: 'timestamp',
+      },
     },
 
     {
@@ -203,7 +263,7 @@ export const AsanaBlock: BlockConfig<AsanaResponse> = {
         }
       },
       params: (params) => {
-        const { credential, operation } = params
+        const { oauthCredential, operation } = params
 
         const projectsArray = params.projects
           ? params.projects
@@ -213,7 +273,7 @@ export const AsanaBlock: BlockConfig<AsanaResponse> = {
           : undefined
 
         const baseParams = {
-          accessToken: credential?.accessToken,
+          accessToken: oauthCredential?.accessToken,
         }
 
         switch (operation) {
@@ -272,6 +332,7 @@ export const AsanaBlock: BlockConfig<AsanaResponse> = {
   },
   inputs: {
     operation: { type: 'string', description: 'Operation to perform' },
+    oauthCredential: { type: 'string', description: 'Asana OAuth credential' },
     workspace: { type: 'string', description: 'Workspace GID' },
     taskGid: { type: 'string', description: 'Task GID' },
     getTasks_workspace: { type: 'string', description: 'Workspace GID for getting tasks' },
@@ -288,6 +349,19 @@ export const AsanaBlock: BlockConfig<AsanaResponse> = {
   },
   outputs: {
     success: { type: 'boolean', description: 'Operation success status' },
-    output: { type: 'string', description: 'Operation result (JSON)' },
+    ts: { type: 'string', description: 'Timestamp of the response' },
+    gid: { type: 'string', description: 'Resource globally unique identifier' },
+    name: { type: 'string', description: 'Resource name' },
+    notes: { type: 'string', description: 'Task notes or description' },
+    completed: { type: 'boolean', description: 'Whether the task is completed' },
+    text: { type: 'string', description: 'Comment text content' },
+    assignee: { type: 'json', description: 'Assignee details (gid, name)' },
+    created_by: { type: 'json', description: 'Creator details (gid, name)' },
+    due_on: { type: 'string', description: 'Due date (YYYY-MM-DD)' },
+    created_at: { type: 'string', description: 'Creation timestamp' },
+    modified_at: { type: 'string', description: 'Last modified timestamp' },
+    permalink_url: { type: 'string', description: 'URL to the resource in Asana' },
+    tasks: { type: 'json', description: 'Array of tasks' },
+    projects: { type: 'json', description: 'Array of projects' },
   },
 }

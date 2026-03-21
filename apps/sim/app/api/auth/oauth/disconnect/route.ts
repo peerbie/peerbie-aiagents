@@ -1,11 +1,13 @@
 import { db } from '@sim/db'
-import { account } from '@sim/db/schema'
+import { account, credentialSet, credentialSetMember } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq, like, or } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
+import { AuditAction, AuditResourceType, recordAudit } from '@/lib/audit/log'
 import { getSession } from '@/lib/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { syncAllWebhooksForCredentialSet } from '@/lib/webhooks/utils.server'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,6 +16,7 @@ const logger = createLogger('OAuthDisconnectAPI')
 const disconnectSchema = z.object({
   provider: z.string({ required_error: 'Provider is required' }).min(1, 'Provider is required'),
   providerId: z.string().optional(),
+  accountId: z.string().optional(),
 })
 
 /**
@@ -49,15 +52,20 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const { provider, providerId } = parseResult.data
+    const { provider, providerId, accountId } = parseResult.data
 
     logger.info(`[${requestId}] Processing OAuth disconnect request`, {
       provider,
       hasProviderId: !!providerId,
     })
 
-    // If a specific providerId is provided, delete only that account
-    if (providerId) {
+    // If a specific account row ID is provided, delete that exact account
+    if (accountId) {
+      await db
+        .delete(account)
+        .where(and(eq(account.userId, session.user.id), eq(account.id, accountId)))
+    } else if (providerId) {
+      // If a specific providerId is provided, delete accounts for that provider ID
       await db
         .delete(account)
         .where(and(eq(account.userId, session.user.id), eq(account.providerId, providerId)))
@@ -73,6 +81,63 @@ export async function POST(request: NextRequest) {
           )
         )
     }
+
+    // Sync webhooks for all credential sets the user is a member of
+    // This removes webhooks that were using the disconnected credential
+    const userMemberships = await db
+      .select({
+        id: credentialSetMember.id,
+        credentialSetId: credentialSetMember.credentialSetId,
+        providerId: credentialSet.providerId,
+      })
+      .from(credentialSetMember)
+      .innerJoin(credentialSet, eq(credentialSetMember.credentialSetId, credentialSet.id))
+      .where(
+        and(
+          eq(credentialSetMember.userId, session.user.id),
+          eq(credentialSetMember.status, 'active')
+        )
+      )
+
+    for (const membership of userMemberships) {
+      // Only sync if the credential set matches this provider
+      // Credential sets store OAuth provider IDs like 'google-email' or 'outlook'
+      const matchesProvider =
+        membership.providerId === provider ||
+        membership.providerId === providerId ||
+        membership.providerId?.startsWith(`${provider}-`)
+
+      if (matchesProvider) {
+        try {
+          await syncAllWebhooksForCredentialSet(membership.credentialSetId, requestId)
+          logger.info(`[${requestId}] Synced webhooks after credential disconnect`, {
+            credentialSetId: membership.credentialSetId,
+            provider,
+          })
+        } catch (error) {
+          // Log but don't fail the disconnect - credential is already removed
+          logger.error(`[${requestId}] Failed to sync webhooks after credential disconnect`, {
+            credentialSetId: membership.credentialSetId,
+            provider,
+            error,
+          })
+        }
+      }
+    }
+
+    recordAudit({
+      workspaceId: null,
+      actorId: session.user.id,
+      action: AuditAction.OAUTH_DISCONNECTED,
+      resourceType: AuditResourceType.OAUTH,
+      resourceId: providerId ?? provider,
+      actorName: session.user.name ?? undefined,
+      actorEmail: session.user.email ?? undefined,
+      resourceName: provider,
+      description: `Disconnected OAuth provider: ${provider}`,
+      metadata: { provider, providerId },
+      request,
+    })
 
     return NextResponse.json({ success: true }, { status: 200 })
   } catch (error) {

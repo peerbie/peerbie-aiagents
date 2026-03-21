@@ -1,38 +1,12 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
+import type {
+  SalesforceCreateAccountParams,
+  SalesforceCreateAccountResponse,
+} from '@/tools/salesforce/types'
+import { SOBJECT_CREATE_OUTPUT_PROPERTIES } from '@/tools/salesforce/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('SalesforceCreateAccount')
-
-export interface SalesforceCreateAccountParams {
-  accessToken: string
-  idToken?: string
-  instanceUrl?: string
-  name: string
-  type?: string
-  industry?: string
-  phone?: string
-  website?: string
-  billingStreet?: string
-  billingCity?: string
-  billingState?: string
-  billingPostalCode?: string
-  billingCountry?: string
-  description?: string
-  annualRevenue?: string
-  numberOfEmployees?: string
-}
-
-export interface SalesforceCreateAccountResponse {
-  success: boolean
-  output: {
-    id: string
-    success: boolean
-    created: boolean
-    metadata: {
-      operation: 'create_account'
-    }
-  }
-}
 
 export const salesforceCreateAccountTool: ToolConfig<
   SalesforceCreateAccountParams,
@@ -67,80 +41,80 @@ export const salesforceCreateAccountTool: ToolConfig<
     name: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Account name (required)',
     },
     type: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Account type (e.g., Customer, Partner, Prospect)',
     },
     industry: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Industry (e.g., Technology, Healthcare, Finance)',
     },
     phone: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Phone number',
     },
     website: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Website URL',
     },
     billingStreet: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Billing street address',
     },
     billingCity: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Billing city',
     },
     billingState: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Billing state/province',
     },
     billingPostalCode: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Billing postal code',
     },
     billingCountry: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Billing country',
     },
     description: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Account description',
     },
     annualRevenue: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Annual revenue (number)',
+      visibility: 'user-or-llm',
+      description: 'Annual revenue as a number',
     },
     numberOfEmployees: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Number of employees (number)',
+      visibility: 'user-or-llm',
+      description: 'Number of employees as an integer',
     },
   },
 
@@ -230,9 +204,6 @@ export const salesforceCreateAccountTool: ToolConfig<
         id: data.id,
         success: data.success,
         created: true,
-        metadata: {
-          operation: 'create_account' as const,
-        },
       },
     }
   },
@@ -242,12 +213,7 @@ export const salesforceCreateAccountTool: ToolConfig<
     output: {
       type: 'object',
       description: 'Created account data',
-      properties: {
-        id: { type: 'string', description: 'Created account ID' },
-        success: { type: 'boolean', description: 'Salesforce operation success' },
-        created: { type: 'boolean', description: 'Whether account was created' },
-        metadata: { type: 'object', description: 'Operation metadata' },
-      },
+      properties: SOBJECT_CREATE_OUTPUT_PROPERTIES,
     },
   },
 }

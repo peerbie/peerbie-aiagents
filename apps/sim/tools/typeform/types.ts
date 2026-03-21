@@ -1,4 +1,4 @@
-import type { ToolResponse } from '@/tools/types'
+import type { ToolFileData, ToolResponse } from '@/tools/types'
 
 export interface TypeformFilesParams {
   formId: string
@@ -12,6 +12,7 @@ export interface TypeformFilesParams {
 export interface TypeformFilesResponse extends ToolResponse {
   output: {
     fileUrl: string
+    file: ToolFileData
     contentType: string
     filename: string
   }
@@ -61,6 +62,8 @@ export interface TypeformResponsesParams {
   formId: string
   apiKey: string
   pageSize?: number
+  before?: string
+  after?: string
   since?: string
   until?: string
   completed?: string
@@ -221,20 +224,7 @@ export interface TypeformUpdateFormParams {
 
 export interface TypeformUpdateFormResponse extends ToolResponse {
   output: {
-    id: string
-    title: string
-    type: string
-    created_at: string
-    last_updated_at: string
-    settings: Record<string, any>
-    theme: Record<string, any>
-    workspace?: {
-      href: string
-    }
-    fields: Array<Record<string, any>>
-    thankyou_screens?: Array<Record<string, any>>
-    _links: Record<string, any>
-    [key: string]: any
+    message: string
   }
 }
 

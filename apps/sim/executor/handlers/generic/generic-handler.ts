@@ -1,5 +1,6 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import { getBlock } from '@/blocks/index'
+import { isMcpTool } from '@/executor/constants'
 import type { BlockHandler, ExecutionContext } from '@/executor/types'
 import type { SerializedBlock } from '@/serializer/types'
 import { executeTool } from '@/tools'
@@ -17,10 +18,10 @@ export class GenericBlockHandler implements BlockHandler {
     block: SerializedBlock,
     inputs: Record<string, any>
   ): Promise<any> {
-    const isMcpTool = block.config.tool?.startsWith('mcp-')
+    const isMcp = block.config.tool ? isMcpTool(block.config.tool) : false
     let tool = null
 
-    if (!isMcpTool) {
+    if (!isMcp) {
       tool = getTool(block.config.tool)
       if (!tool) {
         throw new Error(`Tool not found: ${block.config.tool}`)
@@ -33,14 +34,8 @@ export class GenericBlockHandler implements BlockHandler {
     if (blockType) {
       const blockConfig = getBlock(blockType)
       if (blockConfig?.tools?.config?.params) {
-        try {
-          const transformedParams = blockConfig.tools.config.params(inputs)
-          finalInputs = { ...inputs, ...transformedParams }
-        } catch (error) {
-          logger.warn(`Failed to apply parameter transformation for block type ${blockType}:`, {
-            error: error instanceof Error ? error.message : String(error),
-          })
-        }
+        const transformedParams = blockConfig.tools.config.params(inputs)
+        finalInputs = { ...inputs, ...transformedParams }
       }
 
       if (blockConfig?.inputs) {
@@ -71,9 +66,11 @@ export class GenericBlockHandler implements BlockHandler {
             workflowId: ctx.workflowId,
             workspaceId: ctx.workspaceId,
             executionId: ctx.executionId,
+            userId: ctx.userId,
+            isDeployedContext: ctx.isDeployedContext,
+            enforceCredentialAccess: ctx.enforceCredentialAccess,
           },
         },
-        false,
         false,
         ctx
       )
@@ -101,27 +98,7 @@ export class GenericBlockHandler implements BlockHandler {
         throw error
       }
 
-      const output = result.output
-      let cost = null
-
-      if (block.config.tool?.startsWith('knowledge_') && output?.cost) {
-        cost = output.cost
-      }
-
-      if (cost) {
-        return {
-          ...output,
-          cost: {
-            input: cost.input,
-            output: cost.output,
-            total: cost.total,
-          },
-          tokens: cost.tokens,
-          model: cost.model,
-        }
-      }
-
-      return output
+      return result.output
     } catch (error: any) {
       if (!error.message || error.message === 'undefined (undefined)') {
         let errorMessage = `Block execution of ${tool?.name || block.config.tool} failed`

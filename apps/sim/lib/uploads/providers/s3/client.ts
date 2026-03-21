@@ -9,7 +9,7 @@ import {
   UploadPartCommand,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
-import { env } from '@/lib/env'
+import { env } from '@/lib/core/config/env'
 import { S3_CONFIG, S3_KB_CONFIG } from '@/lib/uploads/config'
 import type {
   S3Config,
@@ -22,8 +22,16 @@ import {
   sanitizeFilenameForMetadata,
   sanitizeStorageMetadata,
 } from '@/lib/uploads/utils/file-utils'
+import { sanitizeFileName } from '@/executor/constants'
 
 let _s3Client: S3Client | null = null
+
+/**
+ * Reset the cached S3 client. Only intended for use in tests.
+ */
+export function resetS3ClientForTesting(): void {
+  _s3Client = null
+}
 
 export function getS3Client(): S3Client {
   if (_s3Client) return _s3Client
@@ -84,7 +92,7 @@ export async function uploadToS3(
     shouldSkipTimestamp = skipTimestampPrefix ?? false
   }
 
-  const safeFileName = fileName.replace(/\s+/g, '-') // Replace spaces with hyphens
+  const safeFileName = sanitizeFileName(fileName)
   const uniqueKey = shouldSkipTimestamp ? fileName : `${Date.now()}-${safeFileName}`
 
   const s3Client = getS3Client()
@@ -223,7 +231,7 @@ export async function initiateS3MultipartUpload(
   const config = customConfig || { bucket: S3_KB_CONFIG.bucket, region: S3_KB_CONFIG.region }
   const s3Client = getS3Client()
 
-  const safeFileName = fileName.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9.-]/g, '_')
+  const safeFileName = sanitizeFileName(fileName)
   const { v4: uuidv4 } = await import('uuid')
   const uniqueKey = `kb/${uuidv4()}-${safeFileName}`
 

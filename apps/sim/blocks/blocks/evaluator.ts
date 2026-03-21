@@ -1,22 +1,16 @@
+import { createLogger } from '@sim/logger'
 import { ChartBarIcon } from '@/components/icons'
-import { isHosted } from '@/lib/environment'
-import { createLogger } from '@/lib/logs/console/logger'
 import type { BlockConfig, ParamType } from '@/blocks/types'
-import type { ProviderId } from '@/providers/types'
 import {
-  getAllModelProviders,
-  getHostedModels,
-  getProviderIcon,
-  providers,
-} from '@/providers/utils'
-import { useProvidersStore } from '@/stores/providers/store'
+  getModelOptions,
+  getProviderCredentialSubBlocks,
+  PROVIDER_CREDENTIAL_INPUTS,
+} from '@/blocks/utils'
+import type { ProviderId } from '@/providers/types'
+import { getBaseModelProviders } from '@/providers/utils'
 import type { ToolResponse } from '@/tools/types'
 
 const logger = createLogger('EvaluatorBlock')
-
-const getCurrentOllamaModels = () => {
-  return useProvidersStore.getState().providers.ollama.models
-}
 
 interface Metric {
   name: string
@@ -183,62 +177,10 @@ export const EvaluatorBlock: BlockConfig<EvaluatorResponse> = {
       type: 'combobox',
       placeholder: 'Type or select a model...',
       required: true,
-      options: () => {
-        const providersState = useProvidersStore.getState()
-        const baseModels = providersState.providers.base.models
-        const ollamaModels = providersState.providers.ollama.models
-        const openrouterModels = providersState.providers.openrouter.models
-        const allModels = Array.from(new Set([...baseModels, ...ollamaModels, ...openrouterModels]))
-
-        return allModels.map((model) => {
-          const icon = getProviderIcon(model)
-          return { label: model, id: model, ...(icon && { icon }) }
-        })
-      },
+      defaultValue: 'claude-sonnet-4-5',
+      options: getModelOptions,
     },
-    {
-      id: 'apiKey',
-      title: 'API Key',
-      type: 'short-input',
-      placeholder: 'Enter your API key',
-      password: true,
-      connectionDroppable: false,
-      required: true,
-      condition: isHosted
-        ? {
-            field: 'model',
-            value: getHostedModels(),
-            not: true, // Show for all models EXCEPT those listed
-          }
-        : () => ({
-            field: 'model',
-            value: getCurrentOllamaModels(),
-            not: true, // Show for all models EXCEPT Ollama models
-          }),
-    },
-    {
-      id: 'azureEndpoint',
-      title: 'Azure OpenAI Endpoint',
-      type: 'short-input',
-      password: true,
-      placeholder: 'https://your-resource.openai.azure.com',
-      connectionDroppable: false,
-      condition: {
-        field: 'model',
-        value: providers['azure-openai'].models,
-      },
-    },
-    {
-      id: 'azureApiVersion',
-      title: 'Azure API Version',
-      type: 'short-input',
-      placeholder: '2024-07-01-preview',
-      connectionDroppable: false,
-      condition: {
-        field: 'model',
-        value: providers['azure-openai'].models,
-      },
-    },
+    ...getProviderCredentialSubBlocks(),
     {
       id: 'temperature',
       title: 'Temperature',
@@ -307,7 +249,7 @@ export const EvaluatorBlock: BlockConfig<EvaluatorResponse> = {
         if (!model) {
           throw new Error('No model selected')
         }
-        const tool = getAllModelProviders()[model as ProviderId]
+        const tool = getBaseModelProviders()[model as ProviderId]
         if (!tool) {
           throw new Error(`Invalid model selected: ${model}`)
         }
@@ -353,9 +295,7 @@ export const EvaluatorBlock: BlockConfig<EvaluatorResponse> = {
       },
     },
     model: { type: 'string' as ParamType, description: 'AI model to use' },
-    apiKey: { type: 'string' as ParamType, description: 'Provider API key' },
-    azureEndpoint: { type: 'string' as ParamType, description: 'Azure OpenAI endpoint URL' },
-    azureApiVersion: { type: 'string' as ParamType, description: 'Azure API version' },
+    ...PROVIDER_CREDENTIAL_INPUTS,
     temperature: {
       type: 'number' as ParamType,
       description: 'Response randomness level (low for consistent evaluation)',

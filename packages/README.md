@@ -1,11 +1,21 @@
-# Sim SDKs
+# Packages
 
+<<<<<<< HEAD
 This directory contains the official SDKs for [Sim](https://peerbie.com), allowing developers to execute workflows programmatically from their applications.
+=======
+## Internal
+>>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b
 
-## Available SDKs
+| Package | Description |
+|---------|-------------|
+| [@sim/tsconfig](./tsconfig) | Shared TypeScript configs (base, nextjs, library, library-build) |
+| [@sim/db](./db) | Database schema and Drizzle ORM utilities |
+| [@sim/logger](./logger) | Structured logging with colored output |
+| [@sim/testing](./testing) | Test factories, builders, and assertions |
 
-### Package Installation Commands
+## Published
 
+<<<<<<< HEAD
 - **TypeScript/JavaScript**: `npm install simstudio-ts-sdk`
 - **Python**: `pip install simstudio-sdk`
 
@@ -247,3 +257,10 @@ Both SDKs are licensed under the Apache-2.0 License. See the [LICENSE](../LICENS
 - 💬 [Discord Community](https://discord.gg/simstudio)
 - 🐛 [Issue Tracker](https://github.com/simstudioai/sim/issues)
 - 📧 [Email Support](mailto:support@peerbie.com) 
+=======
+| Package | npm | Description |
+|---------|-----|-------------|
+| [cli](./cli) | `simstudio` | Run Sim locally via Docker |
+| [ts-sdk](./ts-sdk) | `simstudio-ts-sdk` | TypeScript SDK for workflow execution |
+| [python-sdk](./python-sdk) | `simstudio-sdk` | Python SDK for workflow execution |
+>>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b

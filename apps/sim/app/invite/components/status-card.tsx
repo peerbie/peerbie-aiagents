@@ -1,21 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import {
-  AlertCircle,
-  CheckCircle2,
-  Loader2,
-  Mail,
-  RotateCcw,
-  ShieldX,
-  UserPlus,
-  Users2,
-} from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
-import { Button } from '@/components/ui/button'
-import { useBrandConfig } from '@/lib/branding/branding'
-import { inter } from '@/app/_styles/fonts/inter/inter'
-import { soehne } from '@/app/_styles/fonts/soehne/soehne'
+import { BrandedButton } from '@/app/(auth)/components/branded-button'
 
 interface InviteStatusCardProps {
   type: 'login' | 'loading' | 'error' | 'success' | 'invitation' | 'warning'
@@ -25,49 +12,22 @@ interface InviteStatusCardProps {
   actions?: Array<{
     label: string
     onClick: () => void
-    variant?: 'default' | 'outline' | 'ghost'
     disabled?: boolean
     loading?: boolean
   }>
   isExpiredError?: boolean
 }
 
-const iconMap = {
-  userPlus: UserPlus,
-  mail: Mail,
-  users: Users2,
-  error: ShieldX,
-  success: CheckCircle2,
-  warning: AlertCircle,
-}
-
-const iconColorMap = {
-  userPlus: 'text-[var(--brand-primary-hex)]',
-  mail: 'text-[var(--brand-primary-hex)]',
-  users: 'text-[var(--brand-primary-hex)]',
-  error: 'text-red-500 dark:text-red-400',
-  success: 'text-green-500 dark:text-green-400',
-  warning: 'text-yellow-600 dark:text-yellow-500',
-}
-
-const iconBgMap = {
-  userPlus: 'bg-[var(--brand-primary-hex)]/10',
-  mail: 'bg-[var(--brand-primary-hex)]/10',
-  users: 'bg-[var(--brand-primary-hex)]/10',
-  error: 'bg-red-50 dark:bg-red-950/20',
-  success: 'bg-green-50 dark:bg-green-950/20',
-  warning: 'bg-yellow-50 dark:bg-yellow-950/20',
-}
-
 export function InviteStatusCard({
   type,
   title,
   description,
-  icon,
+  icon: _icon,
   actions = [],
   isExpiredError = false,
 }: InviteStatusCardProps) {
   const router = useRouter()
+<<<<<<< HEAD
   const [buttonClass, setButtonClass] = useState('auth-button-gradient')
   const brandConfig = useBrandConfig()
 
@@ -93,19 +53,20 @@ export function InviteStatusCard({
       observer.disconnect()
     }
   }, [])
+=======
+>>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b
 
   if (type === 'loading') {
     return (
-      <div className={`${soehne.className} space-y-6`}>
+      <>
         <div className='space-y-1 text-center'>
-          <h1 className='font-medium text-[32px] text-black tracking-tight'>Loading</h1>
-          <p className={`${inter.className} font-[380] text-[16px] text-muted-foreground`}>
-            {description}
-          </p>
+          <h1 className='font-[500] text-[#ECECEC] text-[32px] tracking-tight'>Loading</h1>
+          <p className='font-[380] text-[#999] text-[16px]'>{description}</p>
         </div>
-        <div className='flex w-full items-center justify-center py-8'>
-          <Loader2 className='h-8 w-8 animate-spin text-[var(--brand-primary-hex)]' />
+        <div className='mt-8 flex w-full items-center justify-center py-8'>
+          <Loader2 className='h-8 w-8 animate-spin text-[#999]' />
         </div>
+<<<<<<< HEAD
 
         <div
           className={`${inter.className} auth-text-muted fixed right-0 bottom-0 left-0 z-50 pb-8 text-center font-[340] text-[13px] leading-relaxed`}
@@ -119,73 +80,44 @@ export function InviteStatusCard({
           </a>
         </div>
       </div>
+=======
+      </>
+>>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b
     )
   }
 
-  const IconComponent = icon ? iconMap[icon] : null
-  const iconColor = icon ? iconColorMap[icon] : ''
-  const iconBg = icon ? iconBgMap[icon] : ''
-
   return (
-    <div className={`${soehne.className} space-y-6`}>
+    <>
       <div className='space-y-1 text-center'>
-        <h1 className='font-medium text-[32px] text-black tracking-tight'>{title}</h1>
-        <p className={`${inter.className} font-[380] text-[16px] text-muted-foreground`}>
-          {description}
-        </p>
+        <h1 className='font-[500] text-[#ECECEC] text-[32px] tracking-tight'>{title}</h1>
+        <p className='font-[380] text-[#999] text-[16px]'>{description}</p>
       </div>
 
-      <div className={`${inter.className} mt-8 space-y-8`}>
-        <div className='flex w-full flex-col gap-3'>
-          {isExpiredError && (
-            <Button
-              variant='outline'
-              className='w-full rounded-[10px] border-[var(--brand-primary-hex)] font-medium text-[15px] text-[var(--brand-primary-hex)] transition-colors duration-200 hover:bg-[var(--brand-primary-hex)] hover:text-white'
-              onClick={() => router.push('/')}
-            >
-              <RotateCcw className='mr-2 h-4 w-4' />
-              Request New Invitation
-            </Button>
-          )}
+      <div className='mt-8 w-full max-w-[410px] space-y-3'>
+        {isExpiredError && (
+          <BrandedButton onClick={() => router.push('/')} showArrow={false}>
+            Request New Invitation
+          </BrandedButton>
+        )}
 
-          {actions.map((action, index) => (
-            <Button
-              key={index}
-              variant={action.variant || 'default'}
-              className={
-                (action.variant || 'default') === 'default'
-                  ? `${buttonClass} flex w-full items-center justify-center gap-2 rounded-[10px] border font-medium text-[15px] text-white transition-all duration-200`
-                  : action.variant === 'outline'
-                    ? 'w-full rounded-[10px] border-[var(--brand-primary-hex)] font-medium text-[15px] text-[var(--brand-primary-hex)] transition-colors duration-200 hover:bg-[var(--brand-primary-hex)] hover:text-white'
-                    : 'w-full rounded-[10px] text-muted-foreground hover:bg-secondary hover:text-foreground'
-              }
-              onClick={action.onClick}
-              disabled={action.disabled || action.loading}
-            >
-              {action.loading ? (
-                <>
-                  <Loader2 className='mr-2 h-4 w-4 animate-spin' />
-                  {action.label}...
-                </>
-              ) : (
-                action.label
-              )}
-            </Button>
-          ))}
-        </div>
+        {actions.map((action, index) => (
+          <BrandedButton
+            key={index}
+            onClick={action.onClick}
+            disabled={action.disabled || action.loading}
+            loading={action.loading}
+            loadingText={action.label}
+            showArrow={false}
+            className={
+              index !== 0
+                ? 'border-[#3d3d3d] bg-transparent text-[#ECECEC] hover:border-[#3d3d3d] hover:bg-[#2A2A2A]'
+                : undefined
+            }
+          >
+            {action.label}
+          </BrandedButton>
+        ))}
       </div>
-
-      <div
-        className={`${inter.className} auth-text-muted fixed right-0 bottom-0 left-0 z-50 pb-8 text-center font-[340] text-[13px] leading-relaxed`}
-      >
-        Need help?{' '}
-        <a
-          href={`mailto:${brandConfig.supportEmail}`}
-          className='auth-link underline-offset-4 transition hover:underline'
-        >
-          Contact support
-        </a>
-      </div>
-    </div>
+    </>
   )
 }

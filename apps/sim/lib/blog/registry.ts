@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import path from 'path'
+import { cache } from 'react'
 import matter from 'gray-matter'
 import { compileMDX } from 'next-mdx-remote/rsc'
 import rehypeAutolinkHeadings from 'rehype-autolink-headings'
@@ -9,6 +10,8 @@ import { mdxComponents } from '@/lib/blog/mdx'
 import type { BlogMeta, BlogPost, TagWithCount } from '@/lib/blog/schema'
 import { AuthorSchema, BlogFrontmatterSchema } from '@/lib/blog/schema'
 import { AUTHORS_DIR, BLOG_DIR, byDateDesc, ensureContentDirs, toIsoDate } from '@/lib/blog/utils'
+
+const postComponentsRegistry: Record<string, Record<string, React.ComponentType>> = {}
 
 let cachedMeta: BlogMeta[] | null = null
 let cachedAuthors: Record<string, any> | null = null
@@ -38,7 +41,9 @@ function slugify(text: string): string {
 }
 
 async function scanFrontmatters(): Promise<BlogMeta[]> {
-  if (cachedMeta) return cachedMeta
+  if (cachedMeta) {
+    return cachedMeta
+  }
   await ensureContentDirs()
   const entries = await fs.readdir(BLOG_DIR).catch(() => [])
   const authorsMap = await loadAuthors()
@@ -86,6 +91,20 @@ export async function getAllPostMeta(): Promise<BlogMeta[]> {
   return (await scanFrontmatters()).filter((p) => !p.draft)
 }
 
+export const getNavBlogPosts = cache(
+  async (): Promise<Pick<BlogMeta, 'slug' | 'title' | 'ogImage'>[]> => {
+    const allPosts = await getAllPostMeta()
+    const featuredPost = allPosts.find((p) => p.featured) ?? allPosts[0]
+    if (!featuredPost) return []
+    const recentPosts = allPosts.filter((p) => p.slug !== featuredPost.slug).slice(0, 4)
+    return [featuredPost, ...recentPosts].map((p) => ({
+      slug: p.slug,
+      title: p.title,
+      ogImage: p.ogImage,
+    }))
+  }
+)
+
 export async function getAllTags(): Promise<TagWithCount[]> {
   const posts = await getAllPostMeta()
   const counts: Record<string, number> = {}
@@ -97,6 +116,21 @@ export async function getAllTags(): Promise<TagWithCount[]> {
     .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
 }
 
+async function loadPostComponents(slug: string): Promise<Record<string, React.ComponentType>> {
+  if (postComponentsRegistry[slug]) {
+    return postComponentsRegistry[slug]
+  }
+
+  try {
+    const postComponents = await import(`@/content/blog/${slug}/components`)
+    postComponentsRegistry[slug] = postComponents
+    return postComponents
+  } catch {
+    postComponentsRegistry[slug] = {}
+    return {}
+  }
+}
+
 export async function getPostBySlug(slug: string): Promise<BlogPost> {
   const meta = await scanFrontmatters()
   const found = meta.find((m) => m.slug === slug)
@@ -105,9 +139,13 @@ export async function getPostBySlug(slug: string): Promise<BlogPost> {
   const raw = await fs.readFile(mdxPath, 'utf-8')
   const { content, data } = matter(raw)
   const fm = BlogFrontmatterSchema.parse(data)
+
+  const postComponents = await loadPostComponents(slug)
+  const mergedComponents = { ...mdxComponents, ...postComponents }
+
   const compiled = await compileMDX({
     source: content,
-    components: mdxComponents as any,
+    components: mergedComponents as any,
     options: {
       parseFrontmatter: false,
       mdxOptions: {
@@ -139,6 +177,7 @@ export async function getPostBySlug(slug: string): Promise<BlogPost> {
 export function invalidateBlogCaches() {
   cachedMeta = null
   cachedAuthors = null
+  Object.keys(postComponentsRegistry).forEach((key) => delete postComponentsRegistry[key])
 }
 
 export async function getRelatedPosts(slug: string, limit = 3): Promise<BlogMeta[]> {

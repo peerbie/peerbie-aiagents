@@ -1,4 +1,9 @@
-import type { KnowledgeCreateDocumentResponse } from '@/tools/knowledge/types'
+import {
+  inferDocumentFileInfo,
+  type KnowledgeCreateDocumentResponse,
+} from '@/tools/knowledge/types'
+import { enrichKBTagsSchema } from '@/tools/schema-enrichers'
+import { formatDocumentTagsForAPI, parseDocumentTags } from '@/tools/shared/tags'
 import type { ToolConfig } from '@/tools/types'
 
 export const knowledgeCreateDocumentTool: ToolConfig<any, KnowledgeCreateDocumentResponse> = {
@@ -26,61 +31,18 @@ export const knowledgeCreateDocumentTool: ToolConfig<any, KnowledgeCreateDocumen
       visibility: 'user-or-llm',
       description: 'Content of the document',
     },
-    tag1: {
-      type: 'string',
+    documentTags: {
+      type: 'object',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Tag 1 value for the document',
+      description: 'Document tags',
     },
-    tag2: {
-      type: 'string',
-      required: false,
-      visibility: 'user-or-llm',
-      description: 'Tag 2 value for the document',
-    },
-    tag3: {
-      type: 'string',
-      required: false,
-      visibility: 'user-or-llm',
-      description: 'Tag 3 value for the document',
-    },
-    tag4: {
-      type: 'string',
-      required: false,
-      visibility: 'user-or-llm',
-      description: 'Tag 4 value for the document',
-    },
-    tag5: {
-      type: 'string',
-      required: false,
-      visibility: 'user-or-llm',
-      description: 'Tag 5 value for the document',
-    },
-    tag6: {
-      type: 'string',
-      required: false,
-      visibility: 'user-or-llm',
-      description: 'Tag 6 value for the document',
-    },
-    tag7: {
-      type: 'string',
-      required: false,
-      visibility: 'user-or-llm',
-      description: 'Tag 7 value for the document',
-    },
-    documentTagsData: {
-      type: 'array',
-      required: false,
-      visibility: 'user-or-llm',
-      description: 'Structured tag data with names, types, and values',
-      items: {
-        type: 'object',
-        properties: {
-          tagName: { type: 'string' },
-          tagValue: { type: 'string' },
-          tagType: { type: 'string' },
-        },
-      },
+  },
+
+  schemaEnrichment: {
+    documentTags: {
+      dependsOn: 'knowledgeBaseId',
+      enrichSchema: enrichKBTagsSchema,
     },
   },
 
@@ -104,45 +66,36 @@ export const knowledgeCreateDocumentTool: ToolConfig<any, KnowledgeCreateDocumen
       if (!textContent || textContent.length < 1) {
         throw new Error('Document content cannot be empty')
       }
-      if (textContent.length > 1000000) {
+      const utf8Bytes = new TextEncoder().encode(textContent)
+      const contentBytes = utf8Bytes.length
+
+      if (contentBytes > 1_000_000) {
         throw new Error('Document content exceeds maximum size of 1MB')
       }
 
-      const contentBytes = new TextEncoder().encode(textContent).length
-
-      const utf8Bytes = new TextEncoder().encode(textContent)
-      const base64Content =
-        typeof Buffer !== 'undefined'
-          ? Buffer.from(textContent, 'utf8').toString('base64')
-          : btoa(String.fromCharCode(...utf8Bytes))
-
-      const dataUri = `data:text/plain;base64,${base64Content}`
-
-      const tagData: Record<string, string> = {}
-
-      if (params.documentTags) {
-        let parsedTags = params.documentTags
-
-        // Handle both string (JSON) and array formats
-        if (typeof params.documentTags === 'string') {
-          try {
-            parsedTags = JSON.parse(params.documentTags)
-          } catch (error) {
-            parsedTags = []
-          }
+      let base64Content: string
+      if (typeof Buffer !== 'undefined') {
+        base64Content = Buffer.from(textContent, 'utf8').toString('base64')
+      } else {
+        let binary = ''
+        for (let i = 0; i < utf8Bytes.length; i++) {
+          binary += String.fromCharCode(utf8Bytes[i])
         }
-
-        if (Array.isArray(parsedTags)) {
-          tagData.documentTagsData = JSON.stringify(parsedTags)
-        }
+        base64Content = btoa(binary)
       }
+
+      const { filename, mimeType } = inferDocumentFileInfo(documentName)
+      const dataUri = `data:${mimeType};base64,${base64Content}`
+
+      const parsedTags = parseDocumentTags(params.documentTags)
+      const tagData = formatDocumentTagsForAPI(parsedTags)
 
       const documents = [
         {
-          filename: documentName.endsWith('.txt') ? documentName : `${documentName}.txt`,
+          filename,
           fileUrl: dataUri,
           fileSize: contentBytes,
-          mimeType: 'text/plain',
+          mimeType,
           ...tagData,
         },
       ]

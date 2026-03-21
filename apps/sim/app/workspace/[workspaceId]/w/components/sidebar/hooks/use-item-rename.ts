@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 
 const logger = createLogger('useItemRename')
 
@@ -41,13 +41,6 @@ export function useItemRename({ initialName, onSave, itemType, itemId }: UseItem
   const [editValue, setEditValue] = useState(initialName)
   const [isRenaming, setIsRenaming] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
-
-  /**
-   * Update edit value when initial name changes
-   */
-  useEffect(() => {
-    setEditValue(initialName)
-  }, [initialName])
 
   /**
    * Focus and select input when entering edit mode

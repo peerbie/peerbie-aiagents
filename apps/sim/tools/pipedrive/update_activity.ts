@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   PipedriveUpdateActivityParams,
   PipedriveUpdateActivityResponse,
@@ -26,43 +26,43 @@ export const pipedriveUpdateActivityTool: ToolConfig<
     activity_id: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the activity to update',
+      visibility: 'user-or-llm',
+      description: 'The ID of the activity to update (e.g., "12345")',
     },
     subject: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'New subject/title for the activity',
+      visibility: 'user-or-llm',
+      description: 'New subject/title for the activity (e.g., "Updated meeting with client")',
     },
     due_date: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'New due date in YYYY-MM-DD format',
+      visibility: 'user-or-llm',
+      description: 'New due date in YYYY-MM-DD format (e.g., "2025-03-20")',
     },
     due_time: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'New due time in HH:MM format',
+      visibility: 'user-or-llm',
+      description: 'New due time in HH:MM format (e.g., "15:00")',
     },
     duration: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'New duration in HH:MM format',
+      visibility: 'user-or-llm',
+      description: 'New duration in HH:MM format (e.g., "00:30" for 30 minutes)',
     },
     done: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Mark as done: 0 for not done, 1 for done',
     },
     note: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'New notes for the activity',
     },
   },
@@ -106,31 +106,14 @@ export const pipedriveUpdateActivityTool: ToolConfig<
     return {
       success: true,
       output: {
-        activity: data.data,
-        metadata: {
-          operation: 'update_activity' as const,
-        },
+        activity: data.data ?? null,
         success: true,
       },
     }
   },
 
   outputs: {
+    activity: { type: 'object', description: 'The updated activity object', optional: true },
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Updated activity details',
-      properties: {
-        activity: {
-          type: 'object',
-          description: 'The updated activity object',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

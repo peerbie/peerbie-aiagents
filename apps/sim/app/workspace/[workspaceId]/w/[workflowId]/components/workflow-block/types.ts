@@ -10,6 +10,10 @@ export interface WorkflowBlockProps {
   isActive?: boolean
   isPending?: boolean
   isPreview?: boolean
+  /** Whether this block is selected in preview mode */
+  isPreviewSelected?: boolean
+  /** Whether this block is rendered inside an embedded (read-only) workflow view */
+  isEmbedded?: boolean
   subBlockValues?: Record<string, any>
   blockState?: any
 }
@@ -24,5 +28,6 @@ export interface ScheduleInfo {
   timezone: string
   status?: string
   isDisabled?: boolean
+  failedCount?: number
   id?: string
 }

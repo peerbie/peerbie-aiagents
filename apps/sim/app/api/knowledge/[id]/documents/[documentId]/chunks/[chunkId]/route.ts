@@ -1,9 +1,9 @@
 import { randomUUID } from 'crypto'
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getSession } from '@/lib/auth'
 import { deleteChunk, updateChunk } from '@/lib/knowledge/chunks/service'
-import { createLogger } from '@/lib/logs/console/logger'
 import { checkChunkAccess } from '@/app/api/knowledge/utils'
 
 const logger = createLogger('ChunkByIdAPI')
@@ -95,12 +95,27 @@ export async function PUT(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
+    if (accessCheck.document?.connectorId) {
+      logger.warn(
+        `[${requestId}] User ${session.user.id} attempted to update chunk on connector-synced document: Doc=${documentId}`
+      )
+      return NextResponse.json(
+        { error: 'Chunks from connector-synced documents are read-only' },
+        { status: 403 }
+      )
+    }
+
     const body = await req.json()
 
     try {
       const validatedData = UpdateChunkSchema.parse(body)
 
-      const updatedChunk = await updateChunk(chunkId, validatedData, requestId)
+      const updatedChunk = await updateChunk(
+        chunkId,
+        validatedData,
+        requestId,
+        accessCheck.knowledgeBase?.workspaceId
+      )
 
       logger.info(
         `[${requestId}] Chunk updated: ${chunkId} in document ${documentId} in knowledge base ${knowledgeBaseId}`
@@ -160,6 +175,16 @@ export async function DELETE(
         `[${requestId}] User ${session.user.id} attempted unauthorized chunk deletion: ${accessCheck.reason}`
       )
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    if (accessCheck.document?.connectorId) {
+      logger.warn(
+        `[${requestId}] User ${session.user.id} attempted to delete chunk on connector-synced document: Doc=${documentId}`
+      )
+      return NextResponse.json(
+        { error: 'Chunks from connector-synced documents are read-only' },
+        { status: 403 }
+      )
     }
 
     await deleteChunk(chunkId, documentId, requestId)

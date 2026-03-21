@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   PipedriveDeleteLeadParams,
   PipedriveDeleteLeadResponse,
@@ -31,8 +31,8 @@ export const pipedriveDeleteLeadTool: ToolConfig<
     lead_id: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the lead to delete',
+      visibility: 'user-or-llm',
+      description: 'The ID of the lead to delete (e.g., "abc123-def456-ghi789")',
     },
   },
 
@@ -62,31 +62,14 @@ export const pipedriveDeleteLeadTool: ToolConfig<
     return {
       success: true,
       output: {
-        data: data.data,
-        metadata: {
-          operation: 'delete_lead' as const,
-        },
+        data: data.data ?? null,
         success: true,
       },
     }
   },
 
   outputs: {
+    data: { type: 'object', description: 'Deletion confirmation data', optional: true },
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Deletion result',
-      properties: {
-        data: {
-          type: 'object',
-          description: 'Deletion confirmation data',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

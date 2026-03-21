@@ -1,5 +1,7 @@
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
+import { REDIS_TOOL_CALL_PREFIX, REDIS_TOOL_CALL_TTL_SECONDS } from '@/lib/copilot/constants'
 import {
   authenticateCopilotRequestSessionOnly,
   createBadRequestResponse,
@@ -7,82 +9,54 @@ import {
   createRequestTracker,
   createUnauthorizedResponse,
   type NotificationStatus,
-} from '@/lib/copilot/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { getRedisClient } from '@/lib/redis'
+} from '@/lib/copilot/request-helpers'
+import { getRedisClient } from '@/lib/core/config/redis'
 
 const logger = createLogger('CopilotConfirmAPI')
 
 // Schema for confirmation request
 const ConfirmationSchema = z.object({
   toolCallId: z.string().min(1, 'Tool call ID is required'),
-  status: z.enum(['success', 'error', 'accepted', 'rejected', 'background'] as const, {
+  status: z.enum(['success', 'error', 'accepted', 'rejected', 'background', 'cancelled'] as const, {
     errorMap: () => ({ message: 'Invalid notification status' }),
   }),
-  message: z.string().optional(), // Optional message for background moves or additional context
+  message: z.string().optional(),
+  data: z.record(z.unknown()).optional(),
 })
 
 /**
- * Update tool call status in Redis
+ * Write the user's tool decision to Redis. The server-side orchestrator's
+ * waitForToolDecision() polls Redis for this value.
  */
 async function updateToolCallStatus(
   toolCallId: string,
   status: NotificationStatus,
-  message?: string
+  message?: string,
+  data?: Record<string, unknown>
 ): Promise<boolean> {
   const redis = getRedisClient()
   if (!redis) {
-    logger.warn('updateToolCallStatus: Redis client not available')
+    logger.warn('Redis client not available for tool confirmation')
     return false
   }
 
   try {
-    const key = `tool_call:${toolCallId}`
-    const timeout = 600000 // 10 minutes timeout for user confirmation
-    const pollInterval = 100 // Poll every 100ms
-    const startTime = Date.now()
-
-    logger.info('Polling for tool call in Redis', { toolCallId, key, timeout })
-
-    // Poll until the key exists or timeout
-    while (Date.now() - startTime < timeout) {
-      const exists = await redis.exists(key)
-      if (exists) {
-        break
-      }
-
-      // Wait before next poll
-      await new Promise((resolve) => setTimeout(resolve, pollInterval))
-    }
-
-    // Final check if key exists after polling
-    const exists = await redis.exists(key)
-    if (!exists) {
-      logger.warn('Tool call not found in Redis after polling timeout', {
-        toolCallId,
-        key,
-        timeout,
-        pollDuration: Date.now() - startTime,
-      })
-      return false
-    }
-
-    // Store both status and message as JSON
-    const toolCallData = {
+    const key = `${REDIS_TOOL_CALL_PREFIX}${toolCallId}`
+    const payload: Record<string, unknown> = {
       status,
       message: message || null,
       timestamp: new Date().toISOString(),
     }
-
-    await redis.set(key, JSON.stringify(toolCallData), 'EX', 86400) // Keep 24 hour expiry
-
+    if (data) {
+      payload.data = data
+    }
+    await redis.set(key, JSON.stringify(payload), 'EX', REDIS_TOOL_CALL_TTL_SECONDS)
     return true
   } catch (error) {
-    logger.error('Failed to update tool call status in Redis', {
+    logger.error('Failed to update tool call status', {
       toolCallId,
       status,
-      message,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: error instanceof Error ? error.message : String(error),
     })
     return false
   }
@@ -105,10 +79,10 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
-    const { toolCallId, status, message } = ConfirmationSchema.parse(body)
+    const { toolCallId, status, message, data } = ConfirmationSchema.parse(body)
 
     // Update the tool call status in Redis
-    const updated = await updateToolCallStatus(toolCallId, status, message)
+    const updated = await updateToolCallStatus(toolCallId, status, message, data)
 
     if (!updated) {
       logger.error(`[${tracker.requestId}] Failed to update tool call status`, {

@@ -1,12 +1,32 @@
+import { createLogger } from '@sim/logger'
+import { getBYOKKey } from '@/lib/api-key/byok'
 import { generateInternalToken } from '@/lib/auth/internal'
-import { createLogger } from '@/lib/logs/console/logger'
+import { logFixedUsage } from '@/lib/billing/core/usage-log'
+import { isHosted } from '@/lib/core/config/feature-flags'
+import { DEFAULT_EXECUTION_TIMEOUT_MS } from '@/lib/core/execution-limits'
+import { getHostedKeyRateLimiter } from '@/lib/core/rate-limiter'
+import {
+  secureFetchWithPinnedIP,
+  validateUrlWithDNS,
+} from '@/lib/core/security/input-validation.server'
+import { PlatformEvents } from '@/lib/core/telemetry'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { getBaseUrl, getInternalApiBaseUrl } from '@/lib/core/utils/urls'
+import { SIM_VIA_HEADER, serializeCallChain } from '@/lib/execution/call-chain'
 import { parseMcpToolId } from '@/lib/mcp/utils'
-import { getBaseUrl } from '@/lib/urls/utils'
-import { generateRequestId } from '@/lib/utils'
+import { isCustomTool, isMcpTool } from '@/executor/constants'
+import { resolveSkillContent } from '@/executor/handlers/agent/skills-resolver'
 import type { ExecutionContext } from '@/executor/types'
 import type { ErrorInfo } from '@/tools/error-extractors'
 import { extractErrorMessage } from '@/tools/error-extractors'
-import type { OAuthTokenPayload, ToolConfig, ToolResponse } from '@/tools/types'
+import type {
+  BYOKProviderId,
+  OAuthTokenPayload,
+  ToolConfig,
+  ToolHostingPricing,
+  ToolResponse,
+  ToolRetryConfig,
+} from '@/tools/types'
 import {
   formatRequestParams,
   getTool,
@@ -16,12 +36,507 @@ import {
 
 const logger = createLogger('Tools')
 
+/** Result from hosted key injection */
+interface HostedKeyInjectionResult {
+  isUsingHostedKey: boolean
+  envVarName?: string
+}
+
+/**
+ * Inject hosted API key if tool supports it and user didn't provide one.
+ * Checks BYOK workspace keys first, then uses the HostedKeyRateLimiter for round-robin key selection.
+ * Returns whether a hosted (billable) key was injected and which env var it came from.
+ */
+async function injectHostedKeyIfNeeded(
+  tool: ToolConfig,
+  params: Record<string, unknown>,
+  executionContext: ExecutionContext | undefined,
+  requestId: string
+): Promise<HostedKeyInjectionResult> {
+  if (!tool.hosting) return { isUsingHostedKey: false }
+  if (!isHosted) return { isUsingHostedKey: false }
+
+  const { envKeyPrefix, apiKeyParam, byokProviderId, rateLimit } = tool.hosting
+
+  // Derive workspace/user/workflow IDs from executionContext or params._context
+  const ctx = params._context as Record<string, unknown> | undefined
+  const workspaceId = executionContext?.workspaceId || (ctx?.workspaceId as string | undefined)
+  const userId = executionContext?.userId || (ctx?.userId as string | undefined)
+  const workflowId = executionContext?.workflowId || (ctx?.workflowId as string | undefined)
+
+  // Check BYOK workspace key first
+  if (byokProviderId && workspaceId) {
+    try {
+      const byokResult = await getBYOKKey(workspaceId, byokProviderId as BYOKProviderId)
+      if (byokResult) {
+        params[apiKeyParam] = byokResult.apiKey
+        logger.info(`[${requestId}] Using BYOK key for ${tool.id}`)
+        return { isUsingHostedKey: false } // Don't bill - user's own key
+      }
+    } catch (error) {
+      logger.error(`[${requestId}] Failed to get BYOK key for ${tool.id}:`, error)
+      // Fall through to hosted key
+    }
+  }
+
+  const rateLimiter = getHostedKeyRateLimiter()
+  const provider = byokProviderId || tool.id
+  const billingActorId = workspaceId
+
+  if (!billingActorId) {
+    logger.error(`[${requestId}] No workspace ID available for hosted key rate limiting`)
+    return { isUsingHostedKey: false }
+  }
+
+  const acquireResult = await rateLimiter.acquireKey(
+    provider,
+    envKeyPrefix,
+    rateLimit,
+    billingActorId
+  )
+
+  if (!acquireResult.success && acquireResult.billingActorRateLimited) {
+    logger.warn(`[${requestId}] Billing actor ${billingActorId} rate limited for ${tool.id}`, {
+      provider,
+      retryAfterMs: acquireResult.retryAfterMs,
+    })
+
+    PlatformEvents.hostedKeyUserThrottled({
+      toolId: tool.id,
+      reason: 'billing_actor_limit',
+      provider,
+      retryAfterMs: acquireResult.retryAfterMs ?? 0,
+      userId,
+      workspaceId,
+      workflowId,
+    })
+
+    const error = new Error(acquireResult.error || `Rate limit exceeded for ${tool.id}`)
+    ;(error as any).status = 429
+    ;(error as any).retryAfterMs = acquireResult.retryAfterMs
+    throw error
+  }
+
+  // Handle no keys configured (503)
+  if (!acquireResult.success) {
+    logger.error(`[${requestId}] No hosted keys configured for ${tool.id}: ${acquireResult.error}`)
+    const error = new Error(acquireResult.error || `No hosted keys configured for ${tool.id}`)
+    ;(error as any).status = 503
+    throw error
+  }
+
+  params[apiKeyParam] = acquireResult.key
+  logger.info(`[${requestId}] Using hosted key for ${tool.id} (${acquireResult.envVarName})`, {
+    keyIndex: acquireResult.keyIndex,
+    provider,
+  })
+
+  return {
+    isUsingHostedKey: true,
+    envVarName: acquireResult.envVarName,
+  }
+}
+
+/**
+ * Check if an error is a rate limit (throttling) or quota exhaustion error.
+ * Some providers (e.g. Perplexity) return 401/403 with "insufficient_quota"
+ * instead of the standard 429, so we also inspect the error message.
+ */
+function isRateLimitError(error: unknown): boolean {
+  if (error && typeof error === 'object') {
+    const status = (error as { status?: number }).status
+    if (status === 429 || status === 503) return true
+
+    if (status === 401 || status === 403) {
+      const message = ((error as { message?: string }).message || '').toLowerCase()
+      if (message.includes('quota') || message.includes('rate limit')) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/** Context for retry with rate limit tracking */
+interface RetryContext {
+  requestId: string
+  toolId: string
+  envVarName: string
+  executionContext?: ExecutionContext
+}
+
+/**
+ * Execute a function with exponential backoff retry for rate limiting errors.
+ * Only used for hosted key requests. Tracks rate limit events via telemetry.
+ */
+async function executeWithRetry<T>(
+  fn: () => Promise<T>,
+  context: RetryContext,
+  maxRetries = 3,
+  baseDelayMs = 1000
+): Promise<T> {
+  const { requestId, toolId, envVarName, executionContext } = context
+  let lastError: unknown
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn()
+    } catch (error) {
+      lastError = error
+
+      if (!isRateLimitError(error) || attempt === maxRetries) {
+        if (isRateLimitError(error) && attempt === maxRetries) {
+          PlatformEvents.hostedKeyUserThrottled({
+            toolId,
+            reason: 'upstream_retries_exhausted',
+            userId: executionContext?.userId,
+            workspaceId: executionContext?.workspaceId,
+            workflowId: executionContext?.workflowId,
+          })
+        }
+        throw error
+      }
+
+      const delayMs = baseDelayMs * 2 ** attempt
+
+      // Track throttling event via telemetry
+      PlatformEvents.hostedKeyRateLimited({
+        toolId,
+        envVarName,
+        attempt: attempt + 1,
+        maxRetries,
+        delayMs,
+        userId: executionContext?.userId,
+        workspaceId: executionContext?.workspaceId,
+        workflowId: executionContext?.workflowId,
+      })
+
+      logger.warn(
+        `[${requestId}] Rate limited for ${toolId} (${envVarName}), retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`
+      )
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
+  }
+
+  throw lastError
+}
+
+/** Result from cost calculation */
+interface ToolCostResult {
+  cost: number
+  metadata?: Record<string, unknown>
+}
+
+/**
+ * Calculate cost based on pricing model
+ */
+function calculateToolCost(
+  pricing: ToolHostingPricing,
+  params: Record<string, unknown>,
+  response: Record<string, unknown>
+): ToolCostResult {
+  switch (pricing.type) {
+    case 'per_request':
+      return { cost: pricing.cost }
+
+    case 'custom': {
+      const result = pricing.getCost(params, response)
+      if (typeof result === 'number') {
+        return { cost: result }
+      }
+      return result
+    }
+
+    default: {
+      const exhaustiveCheck: never = pricing
+      throw new Error(`Unknown pricing type: ${(exhaustiveCheck as ToolHostingPricing).type}`)
+    }
+  }
+}
+
+interface HostedKeyCostResult {
+  cost: number
+  metadata?: Record<string, unknown>
+}
+
+/**
+ * Calculate and log hosted key cost for a tool execution.
+ * Logs to usageLog for audit trail and returns cost + metadata for output.
+ */
+async function processHostedKeyCost(
+  tool: ToolConfig,
+  params: Record<string, unknown>,
+  response: Record<string, unknown>,
+  executionContext: ExecutionContext | undefined,
+  requestId: string
+): Promise<HostedKeyCostResult> {
+  if (!tool.hosting?.pricing) {
+    return { cost: 0 }
+  }
+
+  const { cost, metadata } = calculateToolCost(tool.hosting.pricing, params, response)
+
+  if (cost <= 0) return { cost: 0 }
+
+  const ctx = params._context as Record<string, unknown> | undefined
+  const userId = executionContext?.userId || (ctx?.userId as string | undefined)
+  const wsId = executionContext?.workspaceId || (ctx?.workspaceId as string | undefined)
+  const wfId = executionContext?.workflowId || (ctx?.workflowId as string | undefined)
+
+  if (!userId) return { cost, metadata }
+
+  const skipLog = !!ctx?.skipFixedUsageLog || !!tool.hosting?.skipFixedUsageLog
+  if (!skipLog) {
+    try {
+      await logFixedUsage({
+        userId,
+        source: 'workflow',
+        description: `tool:${tool.id}`,
+        cost,
+        workspaceId: wsId,
+        workflowId: wfId,
+        executionId: executionContext?.executionId,
+        metadata,
+      })
+      logger.debug(
+        `[${requestId}] Logged hosted key cost for ${tool.id}: $${cost}`,
+        metadata ? { metadata } : {}
+      )
+    } catch (error) {
+      logger.error(`[${requestId}] Failed to log hosted key usage for ${tool.id}:`, error)
+    }
+  } else {
+    logger.debug(
+      `[${requestId}] Skipping fixed usage log for ${tool.id} (cost will be tracked via provider tool loop)`
+    )
+  }
+
+  return { cost, metadata }
+}
+
+/**
+ * Report custom dimension usage after successful hosted-key tool execution.
+ * Only applies to tools with `custom` rate limit mode. Fires and logs;
+ * failures here do not block the response since execution already succeeded.
+ */
+async function reportCustomDimensionUsage(
+  tool: ToolConfig,
+  params: Record<string, unknown>,
+  response: Record<string, unknown>,
+  executionContext: ExecutionContext | undefined,
+  requestId: string
+): Promise<void> {
+  if (tool.hosting?.rateLimit.mode !== 'custom') return
+  const ctx = params._context as Record<string, unknown> | undefined
+  const billingActorId = executionContext?.workspaceId || (ctx?.workspaceId as string | undefined)
+  if (!billingActorId) return
+
+  const rateLimiter = getHostedKeyRateLimiter()
+  const provider = tool.hosting.byokProviderId || tool.id
+
+  try {
+    const result = await rateLimiter.reportUsage(
+      provider,
+      billingActorId,
+      tool.hosting.rateLimit,
+      params,
+      response
+    )
+
+    for (const dim of result.dimensions) {
+      if (!dim.allowed) {
+        logger.warn(`[${requestId}] Dimension ${dim.name} overdrawn after ${tool.id} execution`, {
+          consumed: dim.consumed,
+          tokensRemaining: dim.tokensRemaining,
+        })
+      }
+    }
+  } catch (error) {
+    logger.error(`[${requestId}] Failed to report custom dimension usage for ${tool.id}:`, error)
+  }
+}
+
+/**
+ * Strips internal fields (keys starting with `__`) from tool output before
+ * returning to users. The double-underscore prefix is reserved for transient
+ * data (e.g. `__costDollars`) and will never collide with legitimate API
+ * fields like `_id`.
+ */
+function stripInternalFields(output: Record<string, unknown>): Record<string, unknown> {
+  if (typeof output !== 'object' || output === null || Array.isArray(output)) {
+    return output
+  }
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(output)) {
+    if (!key.startsWith('__')) {
+      result[key] = value
+    }
+  }
+  return result
+}
+
+/**
+ * Apply post-execution hosted-key cost tracking to a successful tool result.
+ * Reports custom dimension usage, calculates cost, and merges it into the output.
+ */
+async function applyHostedKeyCostToResult(
+  finalResult: ToolResponse,
+  tool: ToolConfig,
+  params: Record<string, unknown>,
+  executionContext: ExecutionContext | undefined,
+  requestId: string
+): Promise<void> {
+  await reportCustomDimensionUsage(tool, params, finalResult.output, executionContext, requestId)
+
+  if (tool.hosting?.skipFixedUsageLog) {
+    const ctx = params._context as Record<string, unknown> | undefined
+    if (ctx) {
+      ctx.skipFixedUsageLog = true
+    }
+  }
+
+  const { cost: hostedKeyCost, metadata } = await processHostedKeyCost(
+    tool,
+    params,
+    finalResult.output,
+    executionContext,
+    requestId
+  )
+  if (hostedKeyCost > 0) {
+    finalResult.output = {
+      ...finalResult.output,
+      cost: {
+        ...metadata,
+        total: hostedKeyCost,
+      },
+    }
+  }
+}
+
+/**
+ * Normalizes a tool ID by stripping resource ID suffix (UUID/tableId).
+ * Workflow tools: 'workflow_executor_<uuid>' -> 'workflow_executor'
+ * Knowledge tools: 'knowledge_search_<uuid>' -> 'knowledge_search'
+ * Table tools: 'table_query_rows_<tableId>' -> 'table_query_rows'
+ */
+function normalizeToolId(toolId: string): string {
+  if (toolId.startsWith('workflow_executor_') && toolId.length > 'workflow_executor_'.length) {
+    return 'workflow_executor'
+  }
+
+  const knowledgeOps = ['knowledge_search', 'knowledge_upload_chunk', 'knowledge_create_document']
+  for (const op of knowledgeOps) {
+    if (toolId.startsWith(`${op}_`) && toolId.length > op.length + 1) {
+      return op
+    }
+  }
+
+  const tableOps = [
+    'table_query_rows',
+    'table_insert_row',
+    'table_batch_insert_rows',
+    'table_update_row',
+    'table_update_rows_by_filter',
+    'table_delete_rows_by_filter',
+    'table_upsert_row',
+    'table_get_row',
+    'table_delete_row',
+    'table_get_schema',
+  ]
+  for (const op of tableOps) {
+    if (toolId.startsWith(`${op}_`) && toolId.length > op.length + 1) {
+      return op
+    }
+  }
+
+  return toolId
+}
+
+/**
+ * Maximum request body size in bytes before we warn/error about size limits.
+ * Next.js 16 has a default middleware/proxy body limit of 10MB.
+ */
+const MAX_REQUEST_BODY_SIZE_BYTES = 10 * 1024 * 1024 // 10MB
+
+/**
+ * User-friendly error message for body size limit exceeded
+ */
+const BODY_SIZE_LIMIT_ERROR_MESSAGE =
+  'Request body size limit exceeded (10MB). The workflow data is too large to process. Try reducing the size of variables, inputs, or data being passed between blocks.'
+
+/**
+ * Validates request body size and throws a user-friendly error if exceeded
+ * @param body - The request body string to check
+ * @param requestId - Request ID for logging
+ * @param context - Context string for logging (e.g., toolId)
+ * @throws Error if body size exceeds the limit
+ */
+function validateRequestBodySize(
+  body: string | undefined,
+  requestId: string,
+  context: string
+): void {
+  if (!body) return
+
+  const bodySize = Buffer.byteLength(body, 'utf8')
+  if (bodySize > MAX_REQUEST_BODY_SIZE_BYTES) {
+    const bodySizeMB = (bodySize / (1024 * 1024)).toFixed(2)
+    const maxSizeMB = (MAX_REQUEST_BODY_SIZE_BYTES / (1024 * 1024)).toFixed(0)
+    logger.error(`[${requestId}] Request body size exceeds limit for ${context}:`, {
+      bodySize,
+      bodySizeMB: `${bodySizeMB}MB`,
+      maxSize: MAX_REQUEST_BODY_SIZE_BYTES,
+      maxSizeMB: `${maxSizeMB}MB`,
+    })
+    throw new Error(BODY_SIZE_LIMIT_ERROR_MESSAGE)
+  }
+}
+
+/**
+ * Checks if an error message indicates a body size limit issue
+ * @param errorMessage - The error message to check
+ * @returns true if the error is related to body size limits
+ */
+function isBodySizeLimitError(errorMessage: string): boolean {
+  const lowerMessage = errorMessage.toLowerCase()
+  return (
+    lowerMessage.includes('body size') ||
+    lowerMessage.includes('payload too large') ||
+    lowerMessage.includes('entity too large') ||
+    lowerMessage.includes('request entity too large') ||
+    lowerMessage.includes('body_not_allowed') ||
+    lowerMessage.includes('request body larger than')
+  )
+}
+
+/**
+ * Handles body size limit errors by logging and throwing a user-friendly error
+ * @param error - The original error
+ * @param requestId - Request ID for logging
+ * @param context - Context string for logging (e.g., toolId)
+ * @throws Error with user-friendly message if it's a size limit error
+ * @returns false if not a size limit error (caller should continue handling)
+ */
+function handleBodySizeLimitError(error: unknown, requestId: string, context: string): boolean {
+  const errorMessage = error instanceof Error ? error.message : String(error)
+
+  if (isBodySizeLimitError(errorMessage)) {
+    logger.error(`[${requestId}] Request body size limit exceeded for ${context}:`, {
+      originalError: errorMessage,
+    })
+    throw new Error(BODY_SIZE_LIMIT_ERROR_MESSAGE)
+  }
+
+  return false
+}
+
 /**
  * System parameters that should be filtered out when extracting tool arguments
  * These are internal parameters used by the execution framework, not tool inputs
  */
 const MCP_SYSTEM_PARAMETERS = new Set([
   'serverId',
+  'serverUrl',
   'toolName',
   'serverName',
   '_context',
@@ -29,6 +544,7 @@ const MCP_SYSTEM_PARAMETERS = new Set([
   'workflowVariables',
   'blockData',
   'blockNameMapping',
+  '_toolSchema',
 ])
 
 /**
@@ -91,11 +607,13 @@ async function processFileOutputs(
   }
 }
 
-// Execute a tool by calling either the proxy for external APIs or directly for internal routes
+/**
+ * Execute a tool by making the appropriate HTTP request
+ * All requests go directly - internal routes use regular fetch, external use SSRF-protected fetch
+ */
 export async function executeTool(
   toolId: string,
   params: Record<string, any>,
-  skipProxy = false,
   skipPostProcess = false,
   executionContext?: ExecutionContext
 ): Promise<ToolResponse> {
@@ -107,20 +625,55 @@ export async function executeTool(
   try {
     let tool: ToolConfig | undefined
 
-    // If it's a custom tool, use the async version with workflowId
-    if (toolId.startsWith('custom_')) {
-      const workflowId = params._context?.workflowId
-      tool = await getToolAsync(toolId, workflowId)
-      if (!tool) {
-        logger.error(`[${requestId}] Custom tool not found: ${toolId}`)
+    // Normalize tool ID to strip resource suffixes (e.g., workflow_executor_<uuid> -> workflow_executor)
+    const normalizedToolId = normalizeToolId(toolId)
+
+    // Handle load_skill tool for agent skills progressive disclosure
+    if (normalizedToolId === 'load_skill') {
+      const skillName = params.skill_name
+      const workspaceId = params._context?.workspaceId
+      if (!skillName || !workspaceId) {
+        return {
+          success: false,
+          output: { error: 'Missing skill_name or workspace context' },
+          error: 'Missing skill_name or workspace context',
+        }
       }
-    } else if (toolId.startsWith('mcp-')) {
-      return await executeMcpTool(toolId, params, executionContext, requestId, startTimeISO)
+      const content = await resolveSkillContent(skillName, workspaceId)
+      if (!content) {
+        return {
+          success: false,
+          output: { error: `Skill "${skillName}" not found` },
+          error: `Skill "${skillName}" not found`,
+        }
+      }
+      return {
+        success: true,
+        output: { content },
+      }
+    }
+
+    // If it's a custom tool, use the async version with workflowId
+    if (isCustomTool(normalizedToolId)) {
+      const workflowId = params._context?.workflowId
+      const userId = params._context?.userId
+      tool = await getToolAsync(normalizedToolId, workflowId, userId)
+      if (!tool) {
+        logger.error(`[${requestId}] Custom tool not found: ${normalizedToolId}`)
+      }
+    } else if (isMcpTool(normalizedToolId)) {
+      return await executeMcpTool(
+        normalizedToolId,
+        params,
+        executionContext,
+        requestId,
+        startTimeISO
+      )
     } else {
       // For built-in tools, use the synchronous version
-      tool = getTool(toolId)
+      tool = getTool(normalizedToolId)
       if (!tool) {
-        logger.error(`[${requestId}] Built-in tool not found: ${toolId}`)
+        logger.error(`[${requestId}] Built-in tool not found: ${normalizedToolId}`)
       }
     }
 
@@ -135,41 +688,51 @@ export async function executeTool(
       throw new Error(`Tool not found: ${toolId}`)
     }
 
+    // Inject hosted API key if tool supports it and user didn't provide one
+    const hostedKeyInfo = await injectHostedKeyIfNeeded(
+      tool,
+      contextParams,
+      executionContext,
+      requestId
+    )
+
     // If we have a credential parameter, fetch the access token
+    if (contextParams.oauthCredential) {
+      contextParams.credential = contextParams.oauthCredential
+    }
+
     if (contextParams.credential) {
       logger.info(
         `[${requestId}] Tool ${toolId} needs access token for credential: ${contextParams.credential}`
       )
       try {
-        const baseUrl = getBaseUrl()
+        const baseUrl = getInternalApiBaseUrl()
 
-        // Prepare the token payload
+        const workflowId = contextParams._context?.workflowId
+        const userId = contextParams._context?.userId
+
         const tokenPayload: OAuthTokenPayload = {
-          credentialId: contextParams.credential,
+          credentialId: contextParams.credential as string,
         }
-
-        // Add workflowId if it exists in params, context, or executionContext
-        const workflowId =
-          contextParams.workflowId ||
-          contextParams._context?.workflowId ||
-          executionContext?.workflowId
         if (workflowId) {
           tokenPayload.workflowId = workflowId
         }
 
         logger.info(`[${requestId}] Fetching access token from ${baseUrl}/api/auth/oauth/token`)
 
-        // Build token URL and also include workflowId in query so server auth can read it
         const tokenUrlObj = new URL('/api/auth/oauth/token', baseUrl)
         if (workflowId) {
           tokenUrlObj.searchParams.set('workflowId', workflowId)
+        }
+        if (userId && contextParams._context?.enforceCredentialAccess) {
+          tokenUrlObj.searchParams.set('userId', userId)
         }
 
         // Always send Content-Type; add internal auth on server-side runs
         const tokenHeaders: Record<string, string> = { 'Content-Type': 'application/json' }
         if (typeof window === 'undefined') {
           try {
-            const internalToken = await generateInternalToken()
+            const internalToken = await generateInternalToken(userId)
             tokenHeaders.Authorization = `Bearer ${internalToken}`
           } catch (_e) {
             // Swallow token generation errors; the request will fail and be reported upstream
@@ -188,7 +751,15 @@ export async function executeTool(
             status: response.status,
             error: errorText,
           })
-          throw new Error(`Failed to fetch access token: ${response.status} ${errorText}`)
+          let parsedError = errorText
+          try {
+            const parsed = JSON.parse(errorText)
+            if (parsed.error) parsedError = parsed.error
+          } catch {
+            // Use raw text
+          }
+          const toolLabel = tool?.name || toolId
+          throw new Error(`Failed to obtain credential for ${toolLabel}: ${parsedError}`)
         }
 
         const data = await response.json()
@@ -196,10 +767,11 @@ export async function executeTool(
         if (data.idToken) {
           contextParams.idToken = data.idToken
         }
+        if (data.instanceUrl) {
+          contextParams.instanceUrl = data.instanceUrl
+        }
 
-        logger.info(
-          `[${requestId}] Successfully got access token for ${toolId}, length: ${data.accessToken?.length || 0}`
-        )
+        logger.info(`[${requestId}] Successfully got access token for ${toolId}`)
 
         // Preserve credential for downstream transforms while removing it from request payload
         // so we don't leak it to external services.
@@ -216,21 +788,14 @@ export async function executeTool(
         logger.error(`[${requestId}] Error fetching access token for ${toolId}:`, {
           error: error instanceof Error ? error.message : String(error),
         })
-        // Re-throw the error to fail the tool execution if token fetching fails
-        throw new Error(
-          `Failed to obtain credential for tool ${toolId}: ${error instanceof Error ? error.message : String(error)}`
-        )
+        throw error
       }
     }
 
-    // For internal routes or when skipProxy is true, call the API directly
-    // Internal routes are automatically detected by checking if URL starts with /api/
-    const endpointUrl =
-      typeof tool.request.url === 'function' ? tool.request.url(contextParams) : tool.request.url
-    const isInternalRoute = endpointUrl.startsWith('/api/')
-
-    if (isInternalRoute || skipProxy) {
-      const result = await handleInternalRequest(toolId, tool, contextParams)
+    // Check for direct execution (no HTTP request needed)
+    if (tool.directExecution) {
+      logger.info(`[${requestId}] Using directExecution for ${toolId}`)
+      const result = await tool.directExecution(contextParams)
 
       // Apply post-processing if available and not skipped
       let finalResult = result
@@ -252,8 +817,24 @@ export async function executeTool(
       const endTime = new Date()
       const endTimeISO = endTime.toISOString()
       const duration = endTime.getTime() - startTime.getTime()
+
+      if (hostedKeyInfo.isUsingHostedKey && finalResult.success) {
+        await applyHostedKeyCostToResult(
+          finalResult,
+          tool,
+          contextParams,
+          executionContext,
+          requestId
+        )
+      }
+
+      const strippedOutput = isCustomTool(normalizedToolId)
+        ? finalResult.output
+        : stripInternalFields(finalResult.output ?? {})
+
       return {
         ...finalResult,
+        output: strippedOutput,
         timing: {
           startTime: startTimeISO,
           endTime: endTimeISO,
@@ -262,8 +843,16 @@ export async function executeTool(
       }
     }
 
-    // For external APIs, use the proxy
-    const result = await handleProxyRequest(toolId, contextParams, executionContext)
+    // Execute the tool request directly (internal routes use regular fetch, external use SSRF-protected fetch)
+    // Wrap with retry logic for hosted keys to handle rate limiting due to higher usage
+    const result = hostedKeyInfo.isUsingHostedKey
+      ? await executeWithRetry(() => executeToolRequest(toolId, tool, contextParams), {
+          requestId,
+          toolId,
+          envVarName: hostedKeyInfo.envVarName!,
+          executionContext,
+        })
+      : await executeToolRequest(toolId, tool, contextParams)
 
     // Apply post-processing if available and not skipped
     let finalResult = result
@@ -285,8 +874,24 @@ export async function executeTool(
     const endTime = new Date()
     const endTimeISO = endTime.toISOString()
     const duration = endTime.getTime() - startTime.getTime()
+
+    if (hostedKeyInfo.isUsingHostedKey && finalResult.success) {
+      await applyHostedKeyCostToResult(
+        finalResult,
+        tool,
+        contextParams,
+        executionContext,
+        requestId
+      )
+    }
+
+    const strippedOutput = isCustomTool(normalizedToolId)
+      ? finalResult.output
+      : stripInternalFields(finalResult.output ?? {})
+
     return {
       ...finalResult,
+      output: strippedOutput,
       timing: {
         startTime: startTimeISO,
         endTime: endTimeISO,
@@ -412,6 +1017,25 @@ function isErrorResponse(
 }
 
 /**
+ * Checks whether a fully resolved URL points back to this Sim instance.
+ * Used to propagate cycle-detection headers on API blocks that target
+ * the platform's own workflow execution endpoints via absolute URL.
+ */
+function isSelfOriginUrl(url: string): boolean {
+  try {
+    const targetOrigin = new URL(url).origin
+    const publicOrigin = new URL(getBaseUrl()).origin
+    if (targetOrigin === publicOrigin) return true
+
+    const internalOrigin = new URL(getInternalApiBaseUrl()).origin
+    if (targetOrigin === internalOrigin) return true
+  } catch {
+    return false
+  }
+  return false
+}
+
+/**
  * Add internal authentication token to headers if running on server
  * @param headers - Headers object to modify
  * @param isInternalRoute - Whether the target URL is an internal route
@@ -443,10 +1067,74 @@ async function addInternalAuthIfNeeded(
   }
 }
 
+interface ResolvedRetryConfig {
+  maxRetries: number
+  initialDelayMs: number
+  maxDelayMs: number
+}
+
+function getRetryConfig(
+  retry: ToolRetryConfig | undefined,
+  params: Record<string, any>,
+  method: string
+): ResolvedRetryConfig | null {
+  if (!retry?.enabled) return null
+
+  const isIdempotent = ['GET', 'HEAD', 'PUT', 'DELETE'].includes(method.toUpperCase())
+  if (retry.retryIdempotentOnly && !isIdempotent && !params.retryNonIdempotent) {
+    return null
+  }
+
+  const maxRetries = Math.min(10, Math.max(0, Number(params.retries) || retry.maxRetries || 0))
+  if (maxRetries === 0) return null
+
+  return {
+    maxRetries,
+    initialDelayMs: Number(params.retryDelayMs) || retry.initialDelayMs || 500,
+    maxDelayMs: Number(params.retryMaxDelayMs) || retry.maxDelayMs || 30000,
+  }
+}
+
+function isRetryableFailure(error: unknown, status?: number): boolean {
+  if (status === 429 || (status && status >= 500 && status <= 599)) return true
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ETIMEDOUT' || code === 'ECONNRESET' || code === 'ECONNABORTED') {
+      return true
+    }
+    const msg = error.message.toLowerCase()
+    if (isBodySizeLimitError(msg)) return false
+    return msg.includes('timeout') || msg.includes('timed out')
+  }
+  return false
+}
+
+function calculateBackoff(attempt: number, initialDelayMs: number, maxDelayMs: number): number {
+  const base = Math.min(initialDelayMs * 2 ** attempt, maxDelayMs)
+  return Math.round(base / 2 + Math.random() * (base / 2))
+}
+
+function parseRetryAfterHeader(header: string | null): number {
+  if (!header) return 0
+  const trimmed = header.trim()
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number.parseInt(trimmed, 10)
+    return seconds > 0 ? seconds * 1000 : 0
+  }
+  const date = new Date(trimmed)
+  if (!Number.isNaN(date.getTime())) {
+    const deltaMs = date.getTime() - Date.now()
+    return deltaMs > 0 ? deltaMs : 0
+  }
+  return 0
+}
+
 /**
- * Handle an internal/direct tool request
+ * Execute a tool request directly
+ * Internal routes (/api/...) use regular fetch
+ * External URLs use SSRF-protected fetch with DNS validation and IP pinning
  */
-async function handleInternalRequest(
+async function executeToolRequest(
   toolId: string,
   tool: ToolConfig,
   params: Record<string, any>
@@ -456,27 +1144,43 @@ async function handleInternalRequest(
   const requestParams = formatRequestParams(tool, params)
 
   try {
-    const baseUrl = getBaseUrl()
     const endpointUrl =
       typeof tool.request.url === 'function' ? tool.request.url(params) : tool.request.url
+    const isInternalRoute = endpointUrl.startsWith('/api/')
+    const baseUrl = isInternalRoute ? getInternalApiBaseUrl() : getBaseUrl()
 
     const fullUrlObj = new URL(endpointUrl, baseUrl)
-    const isInternalRoute = endpointUrl.startsWith('/api/')
 
     if (isInternalRoute) {
       const workflowId = params._context?.workflowId
       if (workflowId) {
         fullUrlObj.searchParams.set('workflowId', workflowId)
       }
+      const userId = params._context?.userId
+      if (userId) {
+        fullUrlObj.searchParams.set('userId', userId)
+      }
     }
 
     const fullUrl = fullUrlObj.toString()
 
-    if (toolId.startsWith('custom_') && tool.request.body) {
+    if (isCustomTool(toolId) && tool.request.body) {
       const requestBody = tool.request.body(params)
-      if (requestBody.schema && requestBody.params) {
+      if (
+        typeof requestBody === 'object' &&
+        requestBody !== null &&
+        'schema' in requestBody &&
+        'params' in requestBody
+      ) {
         try {
-          validateClientSideParams(requestBody.params, requestBody.schema)
+          validateClientSideParams(
+            requestBody.params as Record<string, any>,
+            requestBody.schema as {
+              type: string
+              properties: Record<string, any>
+              required?: string[]
+            }
+          )
         } catch (validationError) {
           logger.error(`[${requestId}] Custom tool validation failed for ${toolId}:`, {
             error:
@@ -490,45 +1194,186 @@ async function handleInternalRequest(
     const headers = new Headers(requestParams.headers)
     await addInternalAuthIfNeeded(headers, isInternalRoute, requestId, toolId)
 
-    // Prepare request options
-    const requestOptions = {
-      method: requestParams.method,
-      headers: headers,
-      body: requestParams.body,
+    const shouldPropagateCallChain = isInternalRoute || isSelfOriginUrl(fullUrl)
+    if (shouldPropagateCallChain) {
+      const callChain = params._context?.callChain as string[] | undefined
+      if (callChain && callChain.length > 0) {
+        headers.set(SIM_VIA_HEADER, serializeCallChain(callChain))
+      }
     }
 
-    const response = await fetch(fullUrl, requestOptions)
+    // Check request body size before sending to detect potential size limit issues
+    validateRequestBodySize(requestParams.body, requestId, toolId)
 
-    // For non-OK responses, attempt JSON first; if parsing fails, preserve legacy error expected by tests
+    // Convert Headers to plain object for secureFetchWithPinnedIP
+    const headersRecord: Record<string, string> = {}
+    headers.forEach((value, key) => {
+      headersRecord[key] = value
+    })
+
+    const retryConfig = getRetryConfig(tool.request.retry, params, requestParams.method)
+    const maxAttempts = retryConfig ? 1 + retryConfig.maxRetries : 1
+
+    let response: Response | undefined
+    let lastError: unknown
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const isLastAttempt = attempt === maxAttempts - 1
+
+      try {
+        if (isInternalRoute) {
+          const controller = new AbortController()
+          const timeout = requestParams.timeout || DEFAULT_EXECUTION_TIMEOUT_MS
+          const timeoutId = setTimeout(() => controller.abort(), timeout)
+
+          try {
+            response = await fetch(fullUrl, {
+              method: requestParams.method,
+              headers: headers,
+              body: requestParams.body,
+              signal: controller.signal,
+            })
+          } catch (error) {
+            if (error instanceof Error && error.name === 'AbortError') {
+              throw new Error(`Request timed out after ${timeout}ms`)
+            }
+            throw error
+          } finally {
+            clearTimeout(timeoutId)
+          }
+        } else {
+          const urlValidation = await validateUrlWithDNS(fullUrl, 'toolUrl')
+          if (!urlValidation.isValid) {
+            throw new Error(`Invalid tool URL: ${urlValidation.error}`)
+          }
+
+          const secureResponse = await secureFetchWithPinnedIP(fullUrl, urlValidation.resolvedIP!, {
+            method: requestParams.method,
+            headers: headersRecord,
+            body: requestParams.body ?? undefined,
+            timeout: requestParams.timeout,
+          })
+
+          const responseHeaders = new Headers(secureResponse.headers.toRecord())
+          const nullBodyStatuses = new Set([101, 204, 205, 304])
+
+          if (nullBodyStatuses.has(secureResponse.status)) {
+            response = new Response(null, {
+              status: secureResponse.status,
+              statusText: secureResponse.statusText,
+              headers: responseHeaders,
+            })
+          } else {
+            const bodyBuffer = await secureResponse.arrayBuffer()
+            response = new Response(bodyBuffer, {
+              status: secureResponse.status,
+              statusText: secureResponse.statusText,
+              headers: responseHeaders,
+            })
+          }
+        }
+      } catch (error) {
+        lastError = error
+        if (!retryConfig || isLastAttempt || !isRetryableFailure(error)) {
+          throw error
+        }
+        const delayMs = calculateBackoff(
+          attempt,
+          retryConfig.initialDelayMs,
+          retryConfig.maxDelayMs
+        )
+        logger.warn(
+          `[${requestId}] Retrying ${toolId} after error (attempt ${attempt + 1}/${maxAttempts})`,
+          { delayMs }
+        )
+        await new Promise((r) => setTimeout(r, delayMs))
+        continue
+      }
+
+      if (
+        retryConfig &&
+        !isLastAttempt &&
+        response &&
+        !response.ok &&
+        isRetryableFailure(null, response.status)
+      ) {
+        const retryAfterMs = parseRetryAfterHeader(response.headers.get('retry-after'))
+        if (retryAfterMs > retryConfig.maxDelayMs) {
+          logger.warn(
+            `[${requestId}] Retry-After (${retryAfterMs}ms) exceeds maxDelayMs (${retryConfig.maxDelayMs}ms), skipping retry`
+          )
+          break
+        }
+        try {
+          await response.arrayBuffer()
+        } catch {
+          // Ignore errors when consuming body
+        }
+        const backoffMs = calculateBackoff(
+          attempt,
+          retryConfig.initialDelayMs,
+          retryConfig.maxDelayMs
+        )
+        const delayMs = Math.max(backoffMs, retryAfterMs)
+        logger.warn(
+          `[${requestId}] Retrying ${toolId} after HTTP ${response.status} (attempt ${attempt + 1}/${maxAttempts})`,
+          { delayMs }
+        )
+        await new Promise((r) => setTimeout(r, delayMs))
+        continue
+      }
+
+      break
+    }
+
+    if (!response) {
+      throw lastError ?? new Error(`Request failed for ${toolId}`)
+    }
+
+    // For non-OK responses, attempt JSON first; if parsing fails, fall back to text
     if (!response.ok) {
+      // Check for 413 (Entity Too Large) - body size limit exceeded
+      if (response.status === 413) {
+        logger.error(`[${requestId}] Request body too large for ${toolId} (HTTP 413):`, {
+          status: response.status,
+          statusText: response.statusText,
+        })
+        throw new Error(BODY_SIZE_LIMIT_ERROR_MESSAGE)
+      }
+
       let errorData: any
       try {
         errorData = await response.json()
       } catch (jsonError) {
-        logger.error(`[${requestId}] JSON parse error for ${toolId}:`, {
-          error: jsonError instanceof Error ? jsonError.message : String(jsonError),
-        })
-        throw new Error(`Failed to parse response from ${toolId}: ${jsonError}`)
+        // JSON parsing failed, fall back to reading as text for error extraction
+        logger.warn(`[${requestId}] Response is not JSON for ${toolId}, reading as text`)
+        try {
+          errorData = await response.text()
+        } catch (textError) {
+          logger.error(`[${requestId}] Failed to read response body for ${toolId}`)
+          errorData = null
+        }
       }
 
-      const { isError, errorInfo } = isErrorResponse(response, errorData)
-      if (isError) {
-        const errorToTransform = createTransformedErrorFromErrorInfo(errorInfo, tool.errorExtractor)
-
-        logger.error(`[${requestId}] Internal API error for ${toolId}:`, {
-          status: errorInfo?.status,
-          errorData: errorInfo?.data,
-        })
-
-        throw errorToTransform
+      const errorInfo: ErrorInfo = {
+        status: response.status,
+        statusText: response.statusText,
+        data: errorData,
       }
+
+      const errorToTransform = createTransformedErrorFromErrorInfo(errorInfo, tool.errorExtractor)
+
+      logger.error(`[${requestId}] Internal API error for ${toolId}:`, {
+        status: errorInfo.status,
+        errorData: errorInfo.data,
+      })
+
+      throw errorToTransform
     }
 
-    // Parse response data once with guard for empty 202 bodies
     let responseData
     const status = response.status
-    if (status === 202) {
-      // Many APIs (e.g., Microsoft Graph) return 202 with empty body
+    if (status === 202 || status === 204 || status === 205) {
       responseData = { status }
     } else {
       if (tool.transformResponse) {
@@ -572,6 +1417,8 @@ async function handleInternalRequest(
           url: fullUrl,
           json: () => response.json(),
           text: () => response.text(),
+          arrayBuffer: () => response.arrayBuffer(),
+          blob: () => response.blob(),
         } as Response
 
         const data = await tool.transformResponse(mockResponse, params)
@@ -591,6 +1438,9 @@ async function handleInternalRequest(
       error: undefined,
     }
   } catch (error: any) {
+    // Check if this is a body size limit error and throw user-friendly message
+    handleBodySizeLimitError(error, requestId, toolId)
+
     logger.error(`[${requestId}] Internal request error for ${toolId}:`, {
       error: error instanceof Error ? error.message : String(error),
     })
@@ -618,6 +1468,7 @@ function validateClientSideParams(
   // Internal parameters that should be excluded from validation
   const internalParamSet = new Set([
     '_context',
+    '_toolSchema',
     'workflowId',
     'envVars',
     'workflowVariables',
@@ -667,82 +1518,7 @@ function validateClientSideParams(
 }
 
 /**
- * Handle a request via the proxy
- */
-async function handleProxyRequest(
-  toolId: string,
-  params: Record<string, any>,
-  executionContext?: ExecutionContext
-): Promise<ToolResponse> {
-  const requestId = generateRequestId()
-
-  const baseUrl = getBaseUrl()
-  const proxyUrl = new URL('/api/proxy', baseUrl).toString()
-
-  try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    await addInternalAuthIfNeeded(headers, true, requestId, `proxy:${toolId}`)
-
-    const response = await fetch(proxyUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ toolId, params, executionContext }),
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text()
-      logger.error(`[${requestId}] Proxy request failed for ${toolId}:`, {
-        status: response.status,
-        statusText: response.statusText,
-        error: errorText.substring(0, 200), // Limit error text length
-      })
-
-      let errorMessage = `HTTP error ${response.status}: ${response.statusText}`
-
-      try {
-        const errorJson = JSON.parse(errorText)
-        errorMessage =
-          // Primary error patterns
-          errorJson.errors?.[0]?.message ||
-          errorJson.errors?.[0]?.detail ||
-          errorJson.error?.message ||
-          (typeof errorJson.error === 'string' ? errorJson.error : undefined) ||
-          errorJson.message ||
-          errorJson.error_description ||
-          errorJson.fault?.faultstring ||
-          errorJson.faultstring ||
-          // Fallback
-          (typeof errorJson.error === 'object'
-            ? `API Error: ${response.status} ${response.statusText}`
-            : `HTTP error ${response.status}: ${response.statusText}`)
-      } catch (parseError) {
-        // If not JSON, use the raw text
-        if (errorText) {
-          errorMessage = `${errorMessage}: ${errorText}`
-        }
-      }
-
-      throw new Error(errorMessage)
-    }
-
-    // Parse the successful response
-    const result = await response.json()
-    return result
-  } catch (error: any) {
-    logger.error(`[${requestId}] Proxy request error for ${toolId}:`, {
-      error: error instanceof Error ? error.message : String(error),
-    })
-
-    return {
-      success: false,
-      output: {},
-      error: error.message || 'Proxy request failed',
-    }
-  }
-}
-
-/**
- * Execute an MCP tool via the server-side proxy
+ * Execute an MCP tool via the server-side MCP endpoint
  *
  * @param toolId - MCP tool ID in format "mcp-serverId-toolName"
  * @param params - Tool parameters
@@ -765,7 +1541,7 @@ async function executeMcpTool(
 
     const { serverId, toolName } = parseMcpToolId(toolId)
 
-    const baseUrl = getBaseUrl()
+    const baseUrl = getInternalApiBaseUrl()
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
 
@@ -804,6 +1580,13 @@ async function executeMcpTool(
 
     const workspaceId = params._context?.workspaceId || executionContext?.workspaceId
     const workflowId = params._context?.workflowId || executionContext?.workflowId
+    const userId = params._context?.userId || executionContext?.userId
+    const callChain =
+      (params._context?.callChain as string[] | undefined) || executionContext?.callChain
+
+    if (callChain && callChain.length > 0) {
+      headers[SIM_VIA_HEADER] = serializeCallChain(callChain)
+    }
 
     if (!workspaceId) {
       return {
@@ -818,7 +1601,10 @@ async function executeMcpTool(
       }
     }
 
-    const requestBody = {
+    // Get tool schema if provided (from agent block's cached schema)
+    const toolSchema = params._toolSchema
+
+    const requestBody: Record<string, any> = {
       serverId,
       toolName,
       arguments: toolArguments,
@@ -826,15 +1612,31 @@ async function executeMcpTool(
       workspaceId, // Pass workspace context for scoping
     }
 
+    // Include schema to skip discovery on execution
+    if (toolSchema) {
+      requestBody.toolSchema = toolSchema
+    }
+
+    const body = JSON.stringify(requestBody)
+
+    // Check request body size before sending
+    validateRequestBodySize(body, actualRequestId, `mcp:${toolId}`)
+
     logger.info(`[${actualRequestId}] Making MCP tool request to ${toolName} on ${serverId}`, {
       hasWorkspaceId: !!workspaceId,
       hasWorkflowId: !!workflowId,
+      hasToolSchema: !!toolSchema,
     })
 
-    const response = await fetch(`${baseUrl}/api/mcp/tools/execute`, {
+    const mcpUrl = new URL('/api/mcp/tools/execute', baseUrl)
+    if (userId) {
+      mcpUrl.searchParams.set('userId', userId)
+    }
+
+    const response = await fetch(mcpUrl.toString(), {
       method: 'POST',
       headers,
-      body: JSON.stringify(requestBody),
+      body,
     })
 
     const endTime = new Date()
@@ -842,6 +1644,21 @@ async function executeMcpTool(
     const duration = endTime.getTime() - new Date(actualStartTime).getTime()
 
     if (!response.ok) {
+      // Check for 413 (Entity Too Large) - body size limit exceeded
+      if (response.status === 413) {
+        logger.error(`[${actualRequestId}] Request body too large for mcp:${toolId} (HTTP 413)`)
+        return {
+          success: false,
+          output: {},
+          error: BODY_SIZE_LIMIT_ERROR_MESSAGE,
+          timing: {
+            startTime: actualStartTime,
+            endTime: endTimeISO,
+            duration,
+          },
+        }
+      }
+
       let errorMessage = `MCP tool execution failed: ${response.status} ${response.statusText}`
 
       try {
@@ -895,6 +1712,24 @@ async function executeMcpTool(
     const endTime = new Date()
     const endTimeISO = endTime.toISOString()
     const duration = endTime.getTime() - new Date(actualStartTime).getTime()
+
+    // Check if this is a body size limit error
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    if (isBodySizeLimitError(errorMsg)) {
+      logger.error(`[${actualRequestId}] Request body size limit exceeded for mcp:${toolId}:`, {
+        originalError: errorMsg,
+      })
+      return {
+        success: false,
+        output: {},
+        error: BODY_SIZE_LIMIT_ERROR_MESSAGE,
+        timing: {
+          startTime: actualStartTime,
+          endTime: endTimeISO,
+          duration,
+        },
+      }
+    }
 
     logger.error(`[${actualRequestId}] Error executing MCP tool ${toolId}:`, error)
 

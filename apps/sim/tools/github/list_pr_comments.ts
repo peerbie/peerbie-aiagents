@@ -1,4 +1,5 @@
 import type { CommentsListResponse, ListPRCommentsParams } from '@/tools/github/types'
+import { PR_COMMENT_OUTPUT_PROPERTIES, USER_OUTPUT } from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const listPRCommentsTool: ToolConfig<ListPRCommentsParams, CommentsListResponse> = {
@@ -152,5 +153,40 @@ export const listPRCommentsTool: ToolConfig<ListPRCommentsParams, CommentsListRe
         total_count: { type: 'number', description: 'Total number of review comments' },
       },
     },
+  },
+}
+
+export const listPRCommentsV2Tool: ToolConfig<ListPRCommentsParams, any> = {
+  id: 'github_list_pr_comments_v2',
+  name: listPRCommentsTool.name,
+  description: listPRCommentsTool.description,
+  version: '2.0.0',
+  params: listPRCommentsTool.params,
+  request: listPRCommentsTool.request,
+
+  transformResponse: async (response: Response) => {
+    const comments = await response.json()
+    return {
+      success: true,
+      output: {
+        items: comments ?? [],
+        count: comments?.length ?? 0,
+      },
+    }
+  },
+
+  outputs: {
+    items: {
+      type: 'array',
+      description: 'Array of review comment objects',
+      items: {
+        type: 'object',
+        properties: {
+          ...PR_COMMENT_OUTPUT_PROPERTIES,
+          user: USER_OUTPUT,
+        },
+      },
+    },
+    count: { type: 'number', description: 'Number of comments returned' },
   },
 }

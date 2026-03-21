@@ -26,6 +26,9 @@ bun-debug.log*
 **/standalone/
 sim-standalone.tar.gz
 
+# redis
+dump.rdb
+
 # misc
 .DS_Store
 *.pem
@@ -67,7 +70,14 @@ start-collector.sh
 # VSCode
 .vscode
 
+# IntelliJ
+.idea
+
 ## Helm Chart Tests
 helm/sim/test
 i18n.cache
 k8s/agent-secrets.yml
+
+## Claude Code
+.claude/launch.json
+.claude/worktrees/

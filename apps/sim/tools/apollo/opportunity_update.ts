@@ -24,13 +24,13 @@ export const apolloOpportunityUpdateTool: ToolConfig<
       type: 'string',
       required: true,
       visibility: 'user-or-llm',
-      description: 'ID of the opportunity to update',
+      description: 'ID of the opportunity to update (e.g., "opp_abc123")',
     },
     name: {
       type: 'string',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Name of the opportunity/deal',
+      description: 'Name of the opportunity/deal (e.g., "Enterprise License - Q1")',
     },
     amount: {
       type: 'number',
@@ -96,16 +96,18 @@ export const apolloOpportunityUpdateTool: ToolConfig<
     return {
       success: true,
       output: {
-        opportunity: data.opportunity || {},
-        metadata: {
-          updated: !!data.opportunity,
-        },
+        opportunity: data.opportunity ?? null,
+        updated: !!data.opportunity,
       },
     }
   },
 
   outputs: {
-    opportunity: { type: 'json', description: 'Updated opportunity data from Apollo' },
-    metadata: { type: 'json', description: 'Update metadata including updated status' },
+    opportunity: {
+      type: 'json',
+      description: 'Updated opportunity data from Apollo',
+      optional: true,
+    },
+    updated: { type: 'boolean', description: 'Whether the opportunity was successfully updated' },
   },
 }

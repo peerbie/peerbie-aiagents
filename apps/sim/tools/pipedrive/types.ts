@@ -1,4 +1,255 @@
-import type { ToolResponse } from '@/tools/types'
+import type { OutputProperty, ToolFileData, ToolResponse } from '@/tools/types'
+
+/**
+ * Output property definitions for Pipedrive API responses.
+ * @see https://developers.pipedrive.com/docs/api/v1
+ */
+
+/**
+ * Output definition for lead value objects.
+ * @see https://developers.pipedrive.com/docs/api/v1/Leads
+ */
+export const PIPEDRIVE_LEAD_VALUE_OUTPUT_PROPERTIES = {
+  amount: { type: 'number', description: 'Value amount' },
+  currency: { type: 'string', description: 'Currency code (e.g., USD, EUR)' },
+} as const satisfies Record<string, OutputProperty>
+
+/**
+ * Output definition for lead objects.
+ * @see https://developers.pipedrive.com/docs/api/v1/Leads
+ */
+export const PIPEDRIVE_LEAD_OUTPUT_PROPERTIES = {
+  id: { type: 'string', description: 'Lead ID (UUID)' },
+  title: { type: 'string', description: 'Lead title' },
+  person_id: { type: 'number', description: 'ID of the associated person', optional: true },
+  organization_id: {
+    type: 'number',
+    description: 'ID of the associated organization',
+    optional: true,
+  },
+  owner_id: { type: 'number', description: 'ID of the lead owner' },
+  value: {
+    type: 'object',
+    description: 'Lead value',
+    optional: true,
+    properties: PIPEDRIVE_LEAD_VALUE_OUTPUT_PROPERTIES,
+  },
+  expected_close_date: {
+    type: 'string',
+    description: 'Expected close date (YYYY-MM-DD)',
+    optional: true,
+  },
+  is_archived: { type: 'boolean', description: 'Whether the lead is archived' },
+  was_seen: { type: 'boolean', description: 'Whether the lead was seen' },
+  add_time: { type: 'string', description: 'When the lead was created (ISO 8601)' },
+  update_time: { type: 'string', description: 'When the lead was last updated (ISO 8601)' },
+} as const satisfies Record<string, OutputProperty>
+
+/**
+ * Complete lead output definition
+ */
+export const PIPEDRIVE_LEAD_OUTPUT: OutputProperty = {
+  type: 'object',
+  description: 'Pipedrive lead object',
+  properties: PIPEDRIVE_LEAD_OUTPUT_PROPERTIES,
+}
+
+/**
+ * Output definition for deal objects.
+ * @see https://developers.pipedrive.com/docs/api/v1/Deals
+ */
+export const PIPEDRIVE_DEAL_OUTPUT_PROPERTIES = {
+  id: { type: 'number', description: 'Deal ID' },
+  title: { type: 'string', description: 'Deal title' },
+  value: { type: 'number', description: 'Deal value' },
+  currency: { type: 'string', description: 'Currency code' },
+  status: { type: 'string', description: 'Deal status (open, won, lost, deleted)' },
+  stage_id: { type: 'number', description: 'Pipeline stage ID' },
+  pipeline_id: { type: 'number', description: 'Pipeline ID' },
+  person_id: { type: 'number', description: 'Associated person ID', optional: true },
+  org_id: { type: 'number', description: 'Associated organization ID', optional: true },
+  owner_id: { type: 'number', description: 'Deal owner user ID' },
+  add_time: { type: 'string', description: 'When the deal was created (ISO 8601)' },
+  update_time: { type: 'string', description: 'When the deal was last updated (ISO 8601)' },
+  won_time: { type: 'string', description: 'When the deal was won', optional: true },
+  lost_time: { type: 'string', description: 'When the deal was lost', optional: true },
+  close_time: { type: 'string', description: 'When the deal was closed', optional: true },
+  expected_close_date: { type: 'string', description: 'Expected close date', optional: true },
+} as const satisfies Record<string, OutputProperty>
+
+/**
+ * Complete deal output definition
+ */
+export const PIPEDRIVE_DEAL_OUTPUT: OutputProperty = {
+  type: 'object',
+  description: 'Pipedrive deal object',
+  properties: PIPEDRIVE_DEAL_OUTPUT_PROPERTIES,
+}
+
+/**
+ * Output definition for activity objects.
+ * @see https://developers.pipedrive.com/docs/api/v1/Activities
+ */
+export const PIPEDRIVE_ACTIVITY_OUTPUT_PROPERTIES = {
+  id: { type: 'number', description: 'Activity ID' },
+  subject: { type: 'string', description: 'Activity subject' },
+  type: { type: 'string', description: 'Activity type (call, meeting, task, etc.)' },
+  due_date: { type: 'string', description: 'Due date (YYYY-MM-DD)' },
+  due_time: { type: 'string', description: 'Due time (HH:MM)' },
+  duration: { type: 'string', description: 'Duration (HH:MM)' },
+  deal_id: { type: 'number', description: 'Associated deal ID', optional: true },
+  person_id: { type: 'number', description: 'Associated person ID', optional: true },
+  org_id: { type: 'number', description: 'Associated organization ID', optional: true },
+  done: { type: 'boolean', description: 'Whether the activity is done' },
+  note: { type: 'string', description: 'Activity note' },
+  add_time: { type: 'string', description: 'When the activity was created' },
+  update_time: { type: 'string', description: 'When the activity was last updated' },
+} as const satisfies Record<string, OutputProperty>
+
+/**
+ * Complete activity output definition
+ */
+export const PIPEDRIVE_ACTIVITY_OUTPUT: OutputProperty = {
+  type: 'object',
+  description: 'Pipedrive activity object',
+  properties: PIPEDRIVE_ACTIVITY_OUTPUT_PROPERTIES,
+}
+
+/**
+ * Output definition for file objects.
+ * @see https://developers.pipedrive.com/docs/api/v1/Files
+ */
+export const PIPEDRIVE_FILE_OUTPUT_PROPERTIES = {
+  id: { type: 'number', description: 'File ID' },
+  name: { type: 'string', description: 'File name' },
+  file_type: { type: 'string', description: 'File type/extension' },
+  file_size: { type: 'number', description: 'File size in bytes' },
+  add_time: { type: 'string', description: 'When the file was uploaded' },
+  update_time: { type: 'string', description: 'When the file was last updated' },
+  deal_id: { type: 'number', description: 'Associated deal ID', optional: true },
+  person_id: { type: 'number', description: 'Associated person ID', optional: true },
+  org_id: { type: 'number', description: 'Associated organization ID', optional: true },
+  url: { type: 'string', description: 'File download URL' },
+} as const satisfies Record<string, OutputProperty>
+
+/**
+ * Complete file output definition
+ */
+export const PIPEDRIVE_FILE_OUTPUT: OutputProperty = {
+  type: 'object',
+  description: 'Pipedrive file object',
+  properties: PIPEDRIVE_FILE_OUTPUT_PROPERTIES,
+}
+
+/**
+ * Output definition for pipeline objects.
+ * @see https://developers.pipedrive.com/docs/api/v1/Pipelines
+ */
+export const PIPEDRIVE_PIPELINE_OUTPUT_PROPERTIES = {
+  id: { type: 'number', description: 'Pipeline ID' },
+  name: { type: 'string', description: 'Pipeline name' },
+  url_title: { type: 'string', description: 'URL-friendly title' },
+  order_nr: { type: 'number', description: 'Pipeline order number' },
+  active: { type: 'boolean', description: 'Whether the pipeline is active' },
+  deal_probability: { type: 'boolean', description: 'Whether deal probability is enabled' },
+  add_time: { type: 'string', description: 'When the pipeline was created' },
+  update_time: { type: 'string', description: 'When the pipeline was last updated' },
+} as const satisfies Record<string, OutputProperty>
+
+/**
+ * Complete pipeline output definition
+ */
+export const PIPEDRIVE_PIPELINE_OUTPUT: OutputProperty = {
+  type: 'object',
+  description: 'Pipedrive pipeline object',
+  properties: PIPEDRIVE_PIPELINE_OUTPUT_PROPERTIES,
+}
+
+/**
+ * Output definition for project objects.
+ * @see https://developers.pipedrive.com/docs/api/v1/Projects
+ */
+export const PIPEDRIVE_PROJECT_OUTPUT_PROPERTIES = {
+  id: { type: 'number', description: 'Project ID' },
+  title: { type: 'string', description: 'Project title' },
+  description: { type: 'string', description: 'Project description', optional: true },
+  status: { type: 'string', description: 'Project status' },
+  owner_id: { type: 'number', description: 'Project owner user ID' },
+  start_date: { type: 'string', description: 'Project start date', optional: true },
+  end_date: { type: 'string', description: 'Project end date', optional: true },
+  add_time: { type: 'string', description: 'When the project was created' },
+  update_time: { type: 'string', description: 'When the project was last updated' },
+} as const satisfies Record<string, OutputProperty>
+
+/**
+ * Complete project output definition
+ */
+export const PIPEDRIVE_PROJECT_OUTPUT: OutputProperty = {
+  type: 'object',
+  description: 'Pipedrive project object',
+  properties: PIPEDRIVE_PROJECT_OUTPUT_PROPERTIES,
+}
+
+/**
+ * Output definition for mail message objects.
+ * @see https://developers.pipedrive.com/docs/api/v1/Mailbox
+ */
+export const PIPEDRIVE_MAIL_MESSAGE_OUTPUT_PROPERTIES = {
+  id: { type: 'number', description: 'Message ID' },
+  subject: { type: 'string', description: 'Email subject' },
+  snippet: { type: 'string', description: 'Email snippet/preview' },
+  mail_thread_id: { type: 'number', description: 'Mail thread ID' },
+  from_address: { type: 'string', description: 'Sender email address' },
+  to_addresses: {
+    type: 'array',
+    description: 'Recipient email addresses',
+    items: { type: 'string', description: 'Email address' },
+  },
+  cc_addresses: {
+    type: 'array',
+    description: 'CC email addresses',
+    optional: true,
+    items: { type: 'string', description: 'Email address' },
+  },
+  bcc_addresses: {
+    type: 'array',
+    description: 'BCC email addresses',
+    optional: true,
+    items: { type: 'string', description: 'Email address' },
+  },
+  timestamp: { type: 'string', description: 'Message timestamp' },
+  item_type: { type: 'string', description: 'Item type' },
+  deal_id: { type: 'number', description: 'Associated deal ID', optional: true },
+  person_id: { type: 'number', description: 'Associated person ID', optional: true },
+  org_id: { type: 'number', description: 'Associated organization ID', optional: true },
+} as const satisfies Record<string, OutputProperty>
+
+/**
+ * Complete mail message output definition
+ */
+export const PIPEDRIVE_MAIL_MESSAGE_OUTPUT: OutputProperty = {
+  type: 'object',
+  description: 'Pipedrive mail message object',
+  properties: PIPEDRIVE_MAIL_MESSAGE_OUTPUT_PROPERTIES,
+}
+
+/**
+ * List metadata output properties
+ */
+export const PIPEDRIVE_METADATA_OUTPUT_PROPERTIES = {
+  total_items: { type: 'number', description: 'Total number of items' },
+  has_more: { type: 'boolean', description: 'Whether more items are available', optional: true },
+  next_cursor: {
+    type: 'string',
+    description: 'Cursor for fetching the next page (v2 endpoints)',
+    optional: true,
+  },
+  next_start: {
+    type: 'number',
+    description: 'Offset for fetching the next page (v1 endpoints)',
+    optional: true,
+  },
+} as const satisfies Record<string, OutputProperty>
 
 // Common Pipedrive types
 export interface PipedriveLead {
@@ -114,14 +365,15 @@ export interface PipedriveGetAllDealsParams {
   pipeline_id?: string
   updated_since?: string
   limit?: string
+  cursor?: string
 }
 
 export interface PipedriveGetAllDealsOutput {
   deals: PipedriveDeal[]
   metadata: {
-    operation: 'get_all_deals'
-    totalItems: number
-    hasMore: boolean
+    total_items: number
+    has_more: boolean
+    next_cursor?: string
   }
   success: boolean
 }
@@ -138,9 +390,6 @@ export interface PipedriveGetDealParams {
 
 export interface PipedriveGetDealOutput {
   deal: PipedriveDeal
-  metadata: {
-    operation: 'get_deal'
-  }
   success: boolean
 }
 
@@ -164,9 +413,6 @@ export interface PipedriveCreateDealParams {
 
 export interface PipedriveCreateDealOutput {
   deal: PipedriveDeal
-  metadata: {
-    operation: 'create_deal'
-  }
   success: boolean
 }
 
@@ -187,9 +433,6 @@ export interface PipedriveUpdateDealParams {
 
 export interface PipedriveUpdateDealOutput {
   deal: PipedriveDeal
-  metadata: {
-    operation: 'update_deal'
-  }
   success: boolean
 }
 
@@ -200,18 +443,18 @@ export interface PipedriveUpdateDealResponse extends ToolResponse {
 // GET Files
 export interface PipedriveGetFilesParams {
   accessToken: string
-  deal_id?: string
-  person_id?: string
-  org_id?: string
+  sort?: string
   limit?: string
+  start?: string
+  downloadFiles?: boolean
 }
 
 export interface PipedriveGetFilesOutput {
   files: PipedriveFile[]
-  metadata: {
-    operation: 'get_files'
-    totalItems: number
-  }
+  downloadedFiles?: ToolFileData[]
+  total_items: number
+  has_more?: boolean
+  next_start?: number
   success: boolean
 }
 
@@ -223,14 +466,14 @@ export interface PipedriveGetMailMessagesParams {
   accessToken: string
   folder?: string
   limit?: string
+  start?: string
 }
 
 export interface PipedriveGetMailMessagesOutput {
   messages: PipedriveMailMessage[]
-  metadata: {
-    operation: 'get_mail_messages'
-    totalItems: number
-  }
+  total_items: number
+  has_more?: boolean
+  next_start?: number
   success: boolean
 }
 
@@ -247,9 +490,8 @@ export interface PipedriveGetMailThreadParams {
 export interface PipedriveGetMailThreadOutput {
   messages: PipedriveMailMessage[]
   metadata: {
-    operation: 'get_mail_thread'
-    threadId: string
-    totalItems: number
+    thread_id: string
+    total_items: number
   }
   success: boolean
 }
@@ -264,15 +506,14 @@ export interface PipedriveGetPipelinesParams {
   sort_by?: string
   sort_direction?: string
   limit?: string
-  cursor?: string
+  start?: string
 }
 
 export interface PipedriveGetPipelinesOutput {
   pipelines: PipedrivePipeline[]
-  metadata: {
-    operation: 'get_pipelines'
-    totalItems: number
-  }
+  total_items: number
+  has_more?: boolean
+  next_start?: number
   success: boolean
 }
 
@@ -285,16 +526,17 @@ export interface PipedriveGetPipelineDealsParams {
   accessToken: string
   pipeline_id: string
   stage_id?: string
-  status?: string
   limit?: string
+  start?: string
 }
 
 export interface PipedriveGetPipelineDealsOutput {
   deals: PipedriveDeal[]
   metadata: {
-    operation: 'get_pipeline_deals'
-    pipelineId: string
-    totalItems: number
+    pipeline_id: string
+    total_items: number
+    has_more?: boolean
+    next_start?: number
   }
   success: boolean
 }
@@ -309,15 +551,15 @@ export interface PipedriveGetProjectsParams {
   project_id?: string
   status?: string
   limit?: string
+  cursor?: string
 }
 
 export interface PipedriveGetProjectsOutput {
   projects?: PipedriveProject[]
   project?: PipedriveProject
-  metadata: {
-    operation: 'get_projects'
-    totalItems?: number
-  }
+  total_items?: number
+  has_more?: boolean
+  next_cursor?: string
   success: boolean
 }
 
@@ -336,9 +578,6 @@ export interface PipedriveCreateProjectParams {
 
 export interface PipedriveCreateProjectOutput {
   project: PipedriveProject
-  metadata: {
-    operation: 'create_project'
-  }
   success: boolean
 }
 
@@ -349,20 +588,18 @@ export interface PipedriveCreateProjectResponse extends ToolResponse {
 // GET All Activities
 export interface PipedriveGetActivitiesParams {
   accessToken: string
-  deal_id?: string
-  person_id?: string
-  org_id?: string
+  user_id?: string
   type?: string
   done?: string
   limit?: string
+  start?: string
 }
 
 export interface PipedriveGetActivitiesOutput {
   activities: PipedriveActivity[]
-  metadata: {
-    operation: 'get_activities'
-    totalItems: number
-  }
+  total_items: number
+  has_more?: boolean
+  next_start?: number
   success: boolean
 }
 
@@ -386,9 +623,6 @@ export interface PipedriveCreateActivityParams {
 
 export interface PipedriveCreateActivityOutput {
   activity: PipedriveActivity
-  metadata: {
-    operation: 'create_activity'
-  }
   success: boolean
 }
 
@@ -410,9 +644,6 @@ export interface PipedriveUpdateActivityParams {
 
 export interface PipedriveUpdateActivityOutput {
   activity: PipedriveActivity
-  metadata: {
-    operation: 'update_activity'
-  }
   success: boolean
 }
 
@@ -429,15 +660,15 @@ export interface PipedriveGetLeadsParams {
   person_id?: string
   organization_id?: string
   limit?: string
+  start?: string
 }
 
 export interface PipedriveGetLeadsOutput {
   leads?: PipedriveLead[]
   lead?: PipedriveLead
-  metadata: {
-    operation: 'get_leads'
-    totalItems?: number
-  }
+  total_items?: number
+  has_more?: boolean
+  next_start?: number
   success: boolean
 }
 
@@ -460,9 +691,6 @@ export interface PipedriveCreateLeadParams {
 
 export interface PipedriveCreateLeadOutput {
   lead: PipedriveLead
-  metadata: {
-    operation: 'create_lead'
-  }
   success: boolean
 }
 
@@ -486,9 +714,6 @@ export interface PipedriveUpdateLeadParams {
 
 export interface PipedriveUpdateLeadOutput {
   lead: PipedriveLead
-  metadata: {
-    operation: 'update_lead'
-  }
   success: boolean
 }
 
@@ -504,9 +729,6 @@ export interface PipedriveDeleteLeadParams {
 
 export interface PipedriveDeleteLeadOutput {
   data: any
-  metadata: {
-    operation: 'delete_lead'
-  }
   success: boolean
 }
 

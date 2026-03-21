@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import { getStorageConfig, USE_BLOB_STORAGE, USE_S3_STORAGE } from '@/lib/uploads/config'
 import type { BlobConfig } from '@/lib/uploads/providers/blob/types'
 import type { S3Config } from '@/lib/uploads/providers/s3/types'
@@ -444,7 +444,7 @@ export async function generatePresignedDownloadUrl(
     return getPresignedUrlWithConfig(key, createBlobConfig(config), expirationSeconds)
   }
 
-  const { getBaseUrl } = await import('@/lib/urls/utils')
+  const { getBaseUrl } = await import('@/lib/core/utils/urls')
   const baseUrl = getBaseUrl()
   return `${baseUrl}/api/files/serve/${encodeURIComponent(key)}`
 }
@@ -454,4 +454,28 @@ export async function generatePresignedDownloadUrl(
  */
 export function hasCloudStorage(): boolean {
   return USE_BLOB_STORAGE || USE_S3_STORAGE
+}
+
+/**
+ * Get S3 bucket and key information for a storage key
+ * Useful for services that need direct S3 access (e.g., AWS Textract async)
+ */
+export function getS3InfoForKey(
+  key: string,
+  context: StorageContext
+): { bucket: string; key: string } {
+  if (!USE_S3_STORAGE) {
+    throw new Error('S3 storage is not configured. Cannot retrieve S3 info for key.')
+  }
+
+  const config = getStorageConfig(context)
+
+  if (!config.bucket) {
+    throw new Error(`S3 bucket not configured for context: ${context}`)
+  }
+
+  return {
+    bucket: config.bucket,
+    key,
+  }
 }

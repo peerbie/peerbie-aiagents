@@ -1,4 +1,5 @@
 import { PipedriveIcon } from '@/components/icons'
+import { getScopesForService } from '@/lib/oauth/utils'
 import type { BlockConfig } from '@/blocks/types'
 import { AuthMode } from '@/blocks/types'
 import type { PipedriveResponse } from '@/tools/pipedrive/types'
@@ -45,18 +46,20 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
       id: 'credential',
       title: 'Pipedrive Account',
       type: 'oauth-input',
-      provider: 'pipedrive',
+      canonicalParamId: 'oauthCredential',
+      mode: 'basic',
       serviceId: 'pipedrive',
-      requiredScopes: [
-        'base',
-        'deals:full',
-        'contacts:full',
-        'leads:full',
-        'activities:full',
-        'mail:full',
-        'projects:full',
-      ],
+      requiredScopes: getScopesForService('pipedrive'),
       placeholder: 'Select Pipedrive account',
+      required: true,
+    },
+    {
+      id: 'manualCredential',
+      title: 'Pipedrive Account',
+      type: 'short-input',
+      canonicalParamId: 'oauthCredential',
+      mode: 'advanced',
+      placeholder: 'Enter credential ID',
       required: true,
     },
     {
@@ -87,11 +90,34 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
       condition: { field: 'operation', value: ['get_all_deals'] },
     },
     {
+      id: 'pipelineSelector',
+      title: 'Pipeline',
+      type: 'project-selector',
+      canonicalParamId: 'pipeline_id',
+      serviceId: 'pipedrive',
+      selectorKey: 'pipedrive.pipelines',
+      selectorAllowSearch: false,
+      placeholder: 'Select pipeline',
+      dependsOn: ['credential'],
+      mode: 'basic',
+      condition: {
+        field: 'operation',
+        value: ['get_all_deals', 'create_deal', 'get_pipeline_deals'],
+      },
+      required: { field: 'operation', value: 'get_pipeline_deals' },
+    },
+    {
       id: 'pipeline_id',
       title: 'Pipeline ID',
       type: 'short-input',
-      placeholder: 'Filter by pipeline ID ',
-      condition: { field: 'operation', value: ['get_all_deals'] },
+      canonicalParamId: 'pipeline_id',
+      placeholder: 'Enter pipeline ID',
+      mode: 'advanced',
+      condition: {
+        field: 'operation',
+        value: ['get_all_deals', 'create_deal', 'get_pipeline_deals'],
+      },
+      required: { field: 'operation', value: 'get_pipeline_deals' },
     },
     {
       id: 'updated_since',
@@ -99,6 +125,19 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
       type: 'short-input',
       placeholder: 'Date (2025-01-01T10:20:00Z)',
       condition: { field: 'operation', value: ['get_all_deals'] },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate an ISO 8601 timestamp based on the user's description.
+The timestamp should be in the format: YYYY-MM-DDTHH:MM:SSZ (UTC timezone).
+Examples:
+- "yesterday" -> Calculate yesterday's date at 00:00:00Z
+- "last week" -> Calculate 7 days ago at 00:00:00Z
+- "2 hours ago" -> Calculate the timestamp 2 hours before now
+
+Return ONLY the timestamp string - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the date (e.g., "last week", "yesterday")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'limit',
@@ -152,13 +191,6 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
       condition: { field: 'operation', value: ['create_deal'] },
     },
     {
-      id: 'pipeline_id',
-      title: 'Pipeline ID',
-      type: 'short-input',
-      placeholder: 'Pipeline ID ',
-      condition: { field: 'operation', value: ['create_deal'] },
-    },
-    {
       id: 'stage_id',
       title: 'Stage ID',
       type: 'short-input',
@@ -183,6 +215,18 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
       type: 'short-input',
       placeholder: 'YYYY-MM-DD ',
       condition: { field: 'operation', value: ['create_deal', 'update_deal'] },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date in YYYY-MM-DD format based on the user's description.
+Examples:
+- "next Friday" -> Calculate the next Friday's date
+- "end of month" -> Calculate the last day of the current month
+- "in 2 weeks" -> Calculate the date 14 days from now
+
+Return ONLY the date string in YYYY-MM-DD format - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the date (e.g., "next Friday", "end of month")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'title',
@@ -192,31 +236,21 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
       condition: { field: 'operation', value: ['update_deal'] },
     },
     {
-      id: 'deal_id',
-      title: 'Deal ID',
-      type: 'short-input',
-      placeholder: 'Filter by deal ID ',
-      condition: { field: 'operation', value: ['get_files'] },
-    },
-    {
-      id: 'person_id',
-      title: 'Person ID',
-      type: 'short-input',
-      placeholder: 'Filter by person ID ',
-      condition: { field: 'operation', value: ['get_files'] },
-    },
-    {
-      id: 'org_id',
-      title: 'Organization ID',
-      type: 'short-input',
-      placeholder: 'Filter by organization ID ',
+      id: 'sort',
+      title: 'Sort By',
+      type: 'dropdown',
+      options: [
+        { label: 'ID', id: 'id' },
+        { label: 'Update Time', id: 'update_time' },
+      ],
+      value: () => 'id',
       condition: { field: 'operation', value: ['get_files'] },
     },
     {
       id: 'limit',
       title: 'Limit',
       type: 'short-input',
-      placeholder: 'Number of results (default 100, max 500)',
+      placeholder: 'Number of results (default 100, max 100)',
       condition: { field: 'operation', value: ['get_files'] },
     },
     {
@@ -281,35 +315,34 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
       id: 'cursor',
       title: 'Cursor',
       type: 'short-input',
-      placeholder: 'Pagination cursor (optional)',
-      condition: { field: 'operation', value: ['get_pipelines'] },
+      placeholder: 'Pagination cursor from previous response',
+      condition: {
+        field: 'operation',
+        value: ['get_all_deals', 'get_projects'],
+      },
     },
     {
-      id: 'pipeline_id',
-      title: 'Pipeline ID',
+      id: 'start',
+      title: 'Start (Offset)',
       type: 'short-input',
-      placeholder: 'Enter pipeline ID',
-      required: true,
-      condition: { field: 'operation', value: ['get_pipeline_deals'] },
+      placeholder: 'Pagination offset (e.g., 0, 100, 200)',
+      condition: {
+        field: 'operation',
+        value: [
+          'get_activities',
+          'get_leads',
+          'get_files',
+          'get_pipeline_deals',
+          'get_mail_messages',
+          'get_pipelines',
+        ],
+      },
     },
     {
       id: 'stage_id',
       title: 'Stage ID',
       type: 'short-input',
       placeholder: 'Filter by stage ID ',
-      condition: { field: 'operation', value: ['get_pipeline_deals'] },
-    },
-    {
-      id: 'status',
-      title: 'Status',
-      type: 'dropdown',
-      options: [
-        { label: 'All', id: '' },
-        { label: 'Open', id: 'open' },
-        { label: 'Won', id: 'won' },
-        { label: 'Lost', id: 'lost' },
-      ],
-      value: () => '',
       condition: { field: 'operation', value: ['get_pipeline_deals'] },
     },
     {
@@ -366,6 +399,18 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
       type: 'short-input',
       placeholder: 'YYYY-MM-DD ',
       condition: { field: 'operation', value: ['create_project'] },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date in YYYY-MM-DD format based on the user's description.
+Examples:
+- "today" -> Today's date
+- "next Monday" -> Calculate the next Monday's date
+- "beginning of next month" -> The 1st of next month
+
+Return ONLY the date string in YYYY-MM-DD format - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the date (e.g., "today", "next Monday")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'end_date',
@@ -373,27 +418,46 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
       type: 'short-input',
       placeholder: 'YYYY-MM-DD ',
       condition: { field: 'operation', value: ['create_project'] },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date in YYYY-MM-DD format based on the user's description.
+Examples:
+- "end of month" -> Calculate the last day of the current month
+- "in 3 weeks" -> Calculate the date 21 days from now
+- "December 31st" -> 2024-12-31 (or next occurrence)
+
+Return ONLY the date string in YYYY-MM-DD format - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the date (e.g., "end of month", "in 3 weeks")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'deal_id',
       title: 'Deal ID',
       type: 'short-input',
-      placeholder: 'Filter by deal ID ',
-      condition: { field: 'operation', value: ['get_activities', 'create_activity'] },
+      placeholder: 'Associated deal ID ',
+      condition: { field: 'operation', value: ['create_activity'] },
     },
     {
       id: 'person_id',
       title: 'Person ID',
       type: 'short-input',
-      placeholder: 'Filter by person ID ',
-      condition: { field: 'operation', value: ['get_activities', 'create_activity'] },
+      placeholder: 'Associated person ID ',
+      condition: { field: 'operation', value: ['create_activity'] },
     },
     {
       id: 'org_id',
       title: 'Organization ID',
       type: 'short-input',
-      placeholder: 'Filter by organization ID ',
-      condition: { field: 'operation', value: ['get_activities', 'create_activity'] },
+      placeholder: 'Associated organization ID ',
+      condition: { field: 'operation', value: ['create_activity'] },
+    },
+    {
+      id: 'user_id',
+      title: 'User ID',
+      type: 'short-input',
+      placeholder: 'Filter by user ID',
+      condition: { field: 'operation', value: ['get_activities'] },
     },
     {
       id: 'type',
@@ -461,6 +525,18 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
       placeholder: 'YYYY-MM-DD',
       required: true,
       condition: { field: 'operation', value: ['create_activity', 'update_activity'] },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date in YYYY-MM-DD format based on the user's description.
+Examples:
+- "tomorrow" -> Calculate tomorrow's date
+- "next week" -> Calculate the date 7 days from now
+- "this Friday" -> Calculate the coming Friday's date
+
+Return ONLY the date string in YYYY-MM-DD format - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the date (e.g., "tomorrow", "next week")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'due_time',
@@ -468,6 +544,19 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
       type: 'short-input',
       placeholder: 'HH:MM ',
       condition: { field: 'operation', value: ['create_activity', 'update_activity'] },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a time in HH:MM format (24-hour) based on the user's description.
+Examples:
+- "9am" -> 09:00
+- "2:30 PM" -> 14:30
+- "noon" -> 12:00
+- "end of business day" -> 17:00
+
+Return ONLY the time string in HH:MM format - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the time (e.g., "9am", "2:30 PM")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'duration',
@@ -576,6 +665,18 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
       type: 'short-input',
       placeholder: 'YYYY-MM-DD',
       condition: { field: 'operation', value: ['create_lead', 'update_lead'] },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date in YYYY-MM-DD format based on the user's description.
+Examples:
+- "next quarter" -> Calculate the last day of the next quarter
+- "in 30 days" -> Calculate the date 30 days from now
+- "end of year" -> Calculate December 31st of the current year
+
+Return ONLY the date string in YYYY-MM-DD format - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the date (e.g., "next quarter", "in 30 days")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'is_archived',
@@ -661,10 +762,10 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
         }
       },
       params: (params) => {
-        const { credential, operation, ...rest } = params
+        const { oauthCredential, operation, ...rest } = params
 
         const cleanParams: Record<string, any> = {
-          credential,
+          oauthCredential,
         }
 
         Object.entries(rest).forEach(([key, value]) => {
@@ -679,7 +780,7 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
   },
   inputs: {
     operation: { type: 'string', description: 'Operation to perform' },
-    credential: { type: 'string', description: 'Pipedrive access token' },
+    oauthCredential: { type: 'string', description: 'Pipedrive access token' },
     deal_id: { type: 'string', description: 'Deal ID' },
     title: { type: 'string', description: 'Title' },
     value: { type: 'string', description: 'Monetary value' },
@@ -696,7 +797,8 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
     thread_id: { type: 'string', description: 'Mail thread ID' },
     sort_by: { type: 'string', description: 'Field to sort by' },
     sort_direction: { type: 'string', description: 'Sorting direction' },
-    cursor: { type: 'string', description: 'Pagination cursor' },
+    cursor: { type: 'string', description: 'Pagination cursor (v2 endpoints)' },
+    start: { type: 'string', description: 'Pagination start offset (v1 endpoints)' },
     project_id: { type: 'string', description: 'Project ID' },
     description: { type: 'string', description: 'Description' },
     start_date: { type: 'string', description: 'Start date' },
@@ -708,17 +810,21 @@ export const PipedriveBlock: BlockConfig<PipedriveResponse> = {
     due_time: { type: 'string', description: 'Due time' },
     duration: { type: 'string', description: 'Duration' },
     done: { type: 'string', description: 'Completion status' },
+    user_id: { type: 'string', description: 'User ID' },
     note: { type: 'string', description: 'Notes' },
     lead_id: { type: 'string', description: 'Lead ID' },
     archived: { type: 'string', description: 'Archived status' },
     value_amount: { type: 'string', description: 'Value amount' },
     value_currency: { type: 'string', description: 'Value currency' },
     is_archived: { type: 'string', description: 'Archive status' },
+    organization_id: { type: 'string', description: 'Organization ID' },
+    owner_id: { type: 'string', description: 'Owner user ID' },
   },
   outputs: {
     deals: { type: 'json', description: 'Array of deal objects' },
     deal: { type: 'json', description: 'Single deal object' },
     files: { type: 'json', description: 'Array of file objects' },
+    downloadedFiles: { type: 'file[]', description: 'Downloaded files from Pipedrive' },
     messages: { type: 'json', description: 'Array of mail message objects' },
     pipelines: { type: 'json', description: 'Array of pipeline objects' },
     projects: { type: 'json', description: 'Array of project objects' },

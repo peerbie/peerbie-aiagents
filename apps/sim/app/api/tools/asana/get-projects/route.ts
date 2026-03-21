@@ -1,13 +1,19 @@
-import { NextResponse } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
-import { validateAlphanumericId } from '@/lib/security/input-validation'
+import { createLogger } from '@sim/logger'
+import { type NextRequest, NextResponse } from 'next/server'
+import { checkInternalAuth } from '@/lib/auth/hybrid'
+import { validateAlphanumericId } from '@/lib/core/security/input-validation'
 
 export const dynamic = 'force-dynamic'
 
 const logger = createLogger('AsanaGetProjectsAPI')
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
+    const auth = await checkInternalAuth(request)
+    if (!auth.success || !auth.userId) {
+      return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 })
+    }
+
     const { accessToken, workspace } = await request.json()
 
     if (!accessToken) {
@@ -73,14 +79,12 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      output: {
-        ts: new Date().toISOString(),
-        projects: projects.map((project: any) => ({
-          gid: project.gid,
-          name: project.name,
-          resource_type: project.resource_type,
-        })),
-      },
+      ts: new Date().toISOString(),
+      projects: projects.map((project: any) => ({
+        gid: project.gid,
+        name: project.name,
+        resource_type: project.resource_type,
+      })),
     })
   } catch (error) {
     logger.error('Error processing request:', error)

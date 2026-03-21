@@ -1,13 +1,14 @@
-import { isUserFile } from '@/lib/utils'
+import { isUserFileWithMetadata } from '@/lib/core/utils/user-file'
 import {
   classifyStartBlockType,
   getLegacyStarterMode,
   resolveStartCandidates,
   StartBlockPath,
-} from '@/lib/workflows/triggers'
+} from '@/lib/workflows/triggers/triggers'
 import type { InputFormatField } from '@/lib/workflows/types'
 import type { NormalizedBlockOutput, UserFile } from '@/executor/types'
 import type { SerializedBlock } from '@/serializer/types'
+import { safeAssign } from '@/tools/safe-assign'
 
 type ExecutionKind = 'chat' | 'manual' | 'api'
 
@@ -132,7 +133,7 @@ function extractInputFormat(block: SerializedBlock): InputFormatField[] {
     .map((field) => field)
 }
 
-function coerceValue(type: string | null | undefined, value: unknown): unknown {
+export function coerceValue(type: string | null | undefined, value: unknown): unknown {
   if (value === undefined || value === null) {
     return value
   }
@@ -176,8 +177,7 @@ interface DerivedInputResult {
 
 function deriveInputFromFormat(
   inputFormat: InputFormatField[],
-  workflowInput: unknown,
-  isDeployedExecution: boolean
+  workflowInput: unknown
 ): DerivedInputResult {
   const structuredInput: Record<string, unknown> = {}
 
@@ -205,7 +205,8 @@ function deriveInputFromFormat(
       }
     }
 
-    if ((fieldValue === undefined || fieldValue === null) && !isDeployedExecution) {
+    // Use the default value from inputFormat if the field value wasn't provided at runtime
+    if (fieldValue === undefined || fieldValue === null) {
       fieldValue = field.value
     }
 
@@ -234,7 +235,7 @@ function getFilesFromWorkflowInput(workflowInput: unknown): UserFile[] | undefin
     return undefined
   }
   const files = workflowInput.files
-  if (Array.isArray(files) && files.every(isUserFile)) {
+  if (Array.isArray(files) && files.every(isUserFileWithMetadata)) {
     return files
   }
   return undefined
@@ -255,13 +256,32 @@ function ensureString(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-function buildUnifiedStartOutput(workflowInput: unknown): NormalizedBlockOutput {
+function buildUnifiedStartOutput(
+  workflowInput: unknown,
+  structuredInput: Record<string, unknown>,
+  hasStructured: boolean
+): NormalizedBlockOutput {
   const output: NormalizedBlockOutput = {}
+  const structuredKeys = hasStructured ? new Set(Object.keys(structuredInput)) : null
+
+  if (hasStructured) {
+    for (const [key, value] of Object.entries(structuredInput)) {
+      output[key] = value
+    }
+  }
 
   if (isPlainObject(workflowInput)) {
     for (const [key, value] of Object.entries(workflowInput)) {
       if (key === 'onUploadError') continue
-      output[key] = value
+      // Skip keys already set by schema-coerced structuredInput to
+      // prevent raw workflowInput strings from overwriting typed values.
+      if (structuredKeys?.has(key)) continue
+      // Runtime values override defaults (except undefined/null which mean "not provided")
+      if (value !== undefined && value !== null) {
+        output[key] = value
+      } else if (!Object.hasOwn(output, key)) {
+        output[key] = value
+      }
     }
   }
 
@@ -331,7 +351,7 @@ function buildLegacyStarterOutput(
   const finalObject = isPlainObject(finalInput) ? finalInput : undefined
 
   if (finalObject) {
-    Object.assign(output, finalObject)
+    safeAssign(output, finalObject)
     output.input = { ...finalObject }
   } else {
     output.input = finalInput
@@ -363,21 +383,31 @@ function buildManualTriggerOutput(
 }
 
 function buildIntegrationTriggerOutput(
-  finalInput: unknown,
-  workflowInput: unknown
+  workflowInput: unknown,
+  structuredInput: Record<string, unknown>,
+  hasStructured: boolean
 ): NormalizedBlockOutput {
-  const base: NormalizedBlockOutput = isPlainObject(workflowInput)
-    ? ({ ...(workflowInput as Record<string, unknown>) } as NormalizedBlockOutput)
-    : {}
+  const output: NormalizedBlockOutput = {}
+  const structuredKeys = hasStructured ? new Set(Object.keys(structuredInput)) : null
 
-  if (isPlainObject(finalInput)) {
-    Object.assign(base, finalInput as Record<string, unknown>)
-    base.input = { ...(finalInput as Record<string, unknown>) }
-  } else {
-    base.input = finalInput
+  if (hasStructured) {
+    for (const [key, value] of Object.entries(structuredInput)) {
+      output[key] = value
+    }
   }
 
-  return mergeFilesIntoOutput(base, workflowInput)
+  if (isPlainObject(workflowInput)) {
+    for (const [key, value] of Object.entries(workflowInput)) {
+      if (structuredKeys?.has(key)) continue
+      if (value !== undefined && value !== null) {
+        output[key] = value
+      } else if (!Object.hasOwn(output, key)) {
+        output[key] = value
+      }
+    }
+  }
+
+  return mergeFilesIntoOutput(output, workflowInput)
 }
 
 function extractSubBlocks(block: SerializedBlock): Record<string, unknown> | undefined {
@@ -401,17 +431,19 @@ function extractSubBlocks(block: SerializedBlock): Record<string, unknown> | und
 export interface StartBlockOutputOptions {
   resolution: ExecutorStartResolution
   workflowInput: unknown
-  isDeployedExecution: boolean
 }
 
 export function buildStartBlockOutput(options: StartBlockOutputOptions): NormalizedBlockOutput {
-  const { resolution, workflowInput, isDeployedExecution } = options
+  const { resolution, workflowInput } = options
   const inputFormat = extractInputFormat(resolution.block)
-  const { finalInput } = deriveInputFromFormat(inputFormat, workflowInput, isDeployedExecution)
+  const { finalInput, structuredInput, hasStructured } = deriveInputFromFormat(
+    inputFormat,
+    workflowInput
+  )
 
   switch (resolution.path) {
     case StartBlockPath.UNIFIED:
-      return buildUnifiedStartOutput(workflowInput)
+      return buildUnifiedStartOutput(workflowInput, structuredInput, hasStructured)
 
     case StartBlockPath.SPLIT_API:
     case StartBlockPath.SPLIT_INPUT:
@@ -424,7 +456,7 @@ export function buildStartBlockOutput(options: StartBlockOutputOptions): Normali
       return buildManualTriggerOutput(finalInput, workflowInput)
 
     case StartBlockPath.EXTERNAL_TRIGGER:
-      return buildIntegrationTriggerOutput(finalInput, workflowInput)
+      return buildIntegrationTriggerOutput(workflowInput, structuredInput, hasStructured)
 
     case StartBlockPath.LEGACY_STARTER:
       return buildLegacyStarterOutput(

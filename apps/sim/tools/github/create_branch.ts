@@ -1,4 +1,5 @@
 import type { CreateBranchParams, RefResponse } from '@/tools/github/types'
+import { GIT_REF_OUTPUT_PROPERTIES } from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const createBranchTool: ToolConfig<CreateBranchParams, RefResponse> = {
@@ -90,4 +91,28 @@ URL: ${ref.url}`
       },
     },
   },
+}
+
+export const createBranchV2Tool: ToolConfig<CreateBranchParams, any> = {
+  id: 'github_create_branch_v2',
+  name: createBranchTool.name,
+  description: createBranchTool.description,
+  version: '2.0.0',
+  params: createBranchTool.params,
+  request: createBranchTool.request,
+
+  transformResponse: async (response: Response) => {
+    const ref = await response.json()
+    return {
+      success: true,
+      output: {
+        ref: ref.ref,
+        node_id: ref.node_id,
+        url: ref.url,
+        object: ref.object,
+      },
+    }
+  },
+
+  outputs: GIT_REF_OUTPUT_PROPERTIES,
 }

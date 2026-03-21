@@ -1,248 +1,16 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback } from 'react'
+import { createLogger } from '@sim/logger'
 import { useParams } from 'next/navigation'
-import { Combobox, Input, Label, Textarea } from '@/components/emcn/components'
-import { Slider } from '@/components/ui/slider'
-import { Switch } from '@/components/ui/switch'
-import { createLogger } from '@/lib/logs/console/logger'
-import { cn } from '@/lib/utils'
-import { formatDisplayText } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/components/formatted-text'
-import {
-  checkTagTrigger,
-  TagDropdown,
-} from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/components/tag-dropdown/tag-dropdown'
+import { Combobox, Label, Slider, Switch } from '@/components/emcn/components'
+import { LongInput } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/components/long-input/long-input'
+import { ShortInput } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/components/short-input/short-input'
 import { useSubBlockValue } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/hooks/use-sub-block-value'
-import { useAccessibleReferencePrefixes } from '@/app/workspace/[workspaceId]/w/[workflowId]/hooks/use-accessible-reference-prefixes'
-import { useMcpTools } from '@/hooks/use-mcp-tools'
+import { resolvePreviewContextValue } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/utils'
+import type { SubBlockConfig } from '@/blocks/types'
+import { useMcpTools } from '@/hooks/mcp/use-mcp-tools'
 import { formatParameterLabel } from '@/tools/params'
 
 const logger = createLogger('McpDynamicArgs')
-
-interface McpInputWithTagsProps {
-  value: string
-  onChange: (value: string) => void
-  placeholder?: string
-  disabled?: boolean
-  isPassword?: boolean
-  blockId: string
-  accessiblePrefixes?: Set<string>
-}
-
-function McpInputWithTags({
-  value,
-  onChange,
-  placeholder,
-  disabled,
-  isPassword,
-  blockId,
-  accessiblePrefixes,
-}: McpInputWithTagsProps) {
-  const [showTags, setShowTags] = useState(false)
-  const [cursorPosition, setCursorPosition] = useState(0)
-  const [activeSourceBlockId, setActiveSourceBlockId] = useState<string | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newValue = e.target.value
-    const newCursorPosition = e.target.selectionStart ?? 0
-
-    onChange(newValue)
-    setCursorPosition(newCursorPosition)
-
-    const tagTrigger = checkTagTrigger(newValue, newCursorPosition)
-    setShowTags(tagTrigger.show)
-  }
-
-  const handleDrop = (e: React.DragEvent<HTMLInputElement>) => {
-    e.preventDefault()
-
-    try {
-      const data = JSON.parse(e.dataTransfer.getData('application/json'))
-      if (data.type !== 'connectionBlock') return
-
-      const dropPosition = inputRef.current?.selectionStart ?? value.length ?? 0
-      const currentValue = value ?? ''
-      const newValue = `${currentValue.slice(0, dropPosition)}<${currentValue.slice(dropPosition)}`
-
-      onChange(newValue)
-      setCursorPosition(dropPosition + 1)
-      setShowTags(true)
-
-      if (data.connectionData?.sourceBlockId) {
-        setActiveSourceBlockId(data.connectionData.sourceBlockId)
-      }
-
-      setTimeout(() => {
-        if (inputRef.current) {
-          inputRef.current.selectionStart = dropPosition + 1
-          inputRef.current.selectionEnd = dropPosition + 1
-        }
-      }, 0)
-    } catch (error) {
-      logger.error('Failed to parse drop data:', { error })
-    }
-  }
-
-  const handleDragOver = (e: React.DragEvent<HTMLInputElement>) => {
-    e.preventDefault()
-  }
-
-  const handleTagSelect = (newValue: string) => {
-    onChange(newValue)
-    setShowTags(false)
-    setActiveSourceBlockId(null)
-  }
-
-  return (
-    <div className='relative'>
-      <div className='relative'>
-        <Input
-          ref={inputRef}
-          type={isPassword ? 'password' : 'text'}
-          value={value || ''}
-          onChange={handleChange}
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          placeholder={placeholder}
-          disabled={disabled}
-          autoComplete='off'
-          className={cn(!isPassword && 'text-transparent caret-foreground')}
-        />
-        {!isPassword && (
-          <div className='pointer-events-none absolute inset-0 flex items-center overflow-hidden bg-transparent px-3 text-sm'>
-            <div className='whitespace-pre'>
-              {formatDisplayText(value?.toString() || '', {
-                accessiblePrefixes,
-                highlightAll: !accessiblePrefixes,
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-      <TagDropdown
-        visible={showTags}
-        onSelect={handleTagSelect}
-        blockId={blockId}
-        activeSourceBlockId={activeSourceBlockId}
-        inputValue={value?.toString() ?? ''}
-        cursorPosition={cursorPosition}
-        onClose={() => {
-          setShowTags(false)
-          setActiveSourceBlockId(null)
-        }}
-      />
-    </div>
-  )
-}
-
-interface McpTextareaWithTagsProps {
-  value: string
-  onChange: (value: string) => void
-  placeholder?: string
-  disabled?: boolean
-  blockId: string
-  accessiblePrefixes?: Set<string>
-  rows?: number
-}
-
-function McpTextareaWithTags({
-  value,
-  onChange,
-  placeholder,
-  disabled,
-  blockId,
-  accessiblePrefixes,
-  rows = 4,
-}: McpTextareaWithTagsProps) {
-  const [showTags, setShowTags] = useState(false)
-  const [cursorPosition, setCursorPosition] = useState(0)
-  const [activeSourceBlockId, setActiveSourceBlockId] = useState<string | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-
-  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newValue = e.target.value
-    const newCursorPosition = e.target.selectionStart ?? 0
-
-    onChange(newValue)
-    setCursorPosition(newCursorPosition)
-
-    const tagTrigger = checkTagTrigger(newValue, newCursorPosition)
-    setShowTags(tagTrigger.show)
-  }
-
-  const handleDrop = (e: React.DragEvent<HTMLTextAreaElement>) => {
-    e.preventDefault()
-
-    try {
-      const data = JSON.parse(e.dataTransfer.getData('application/json'))
-      if (data.type !== 'connectionBlock') return
-
-      const dropPosition = textareaRef.current?.selectionStart ?? value.length ?? 0
-      const currentValue = value ?? ''
-      const newValue = `${currentValue.slice(0, dropPosition)}<${currentValue.slice(dropPosition)}`
-
-      onChange(newValue)
-      setCursorPosition(dropPosition + 1)
-      setShowTags(true)
-
-      if (data.connectionData?.sourceBlockId) {
-        setActiveSourceBlockId(data.connectionData.sourceBlockId)
-      }
-
-      setTimeout(() => {
-        if (textareaRef.current) {
-          textareaRef.current.selectionStart = dropPosition + 1
-          textareaRef.current.selectionEnd = dropPosition + 1
-        }
-      }, 0)
-    } catch (error) {
-      logger.error('Failed to parse drop data:', { error })
-    }
-  }
-
-  const handleDragOver = (e: React.DragEvent<HTMLTextAreaElement>) => {
-    e.preventDefault()
-  }
-
-  const handleTagSelect = (newValue: string) => {
-    onChange(newValue)
-    setShowTags(false)
-    setActiveSourceBlockId(null)
-  }
-
-  return (
-    <div className='relative'>
-      <Textarea
-        ref={textareaRef}
-        value={value || ''}
-        onChange={handleChange}
-        onDrop={handleDrop}
-        onDragOver={handleDragOver}
-        placeholder={placeholder}
-        disabled={disabled}
-        rows={rows}
-        className={cn('min-h-[80px] resize-none text-transparent caret-foreground')}
-      />
-      <div className='pointer-events-none absolute inset-0 overflow-auto whitespace-pre-wrap break-words p-3 text-sm'>
-        {formatDisplayText(value || '', {
-          accessiblePrefixes,
-          highlightAll: !accessiblePrefixes,
-        })}
-      </div>
-      <TagDropdown
-        visible={showTags}
-        onSelect={handleTagSelect}
-        blockId={blockId}
-        activeSourceBlockId={activeSourceBlockId}
-        inputValue={value?.toString() ?? ''}
-        cursorPosition={cursorPosition}
-        onClose={() => {
-          setShowTags(false)
-          setActiveSourceBlockId(null)
-        }}
-      />
-    </div>
-  )
-}
 
 interface McpDynamicArgsProps {
   blockId: string
@@ -250,6 +18,28 @@ interface McpDynamicArgsProps {
   disabled?: boolean
   isPreview?: boolean
   previewValue?: any
+  previewContextValues?: Record<string, unknown>
+}
+
+/**
+ * Creates a minimal SubBlockConfig for MCP tool parameters
+ */
+function createParamConfig(
+  paramName: string,
+  paramSchema: any,
+  inputType: 'long-input' | 'short-input'
+): SubBlockConfig {
+  const placeholder =
+    paramSchema.type === 'array'
+      ? `Enter JSON array, e.g. ["item1", "item2"] or comma-separated values`
+      : paramSchema.description || `Enter ${formatParameterLabel(paramName).toLowerCase()}`
+
+  return {
+    id: paramName,
+    type: inputType,
+    title: formatParameterLabel(paramName),
+    placeholder,
+  }
 }
 
 export function McpDynamicArgs({
@@ -258,14 +48,20 @@ export function McpDynamicArgs({
   disabled = false,
   isPreview = false,
   previewValue,
+  previewContextValues,
 }: McpDynamicArgsProps) {
   const params = useParams()
   const workspaceId = params.workspaceId as string
   const { mcpTools, isLoading } = useMcpTools(workspaceId)
-  const [selectedTool] = useSubBlockValue(blockId, 'tool')
-  const [cachedSchema] = useSubBlockValue(blockId, '_toolSchema')
+  const [toolFromStore] = useSubBlockValue(blockId, 'tool')
+  const selectedTool = previewContextValues
+    ? resolvePreviewContextValue(previewContextValues.tool)
+    : toolFromStore
+  const [schemaFromStore] = useSubBlockValue(blockId, '_toolSchema')
+  const cachedSchema = previewContextValues
+    ? resolvePreviewContextValue(previewContextValues._toolSchema)
+    : schemaFromStore
   const [toolArgs, setToolArgs] = useSubBlockValue(blockId, subBlockId)
-  const accessiblePrefixes = useAccessibleReferencePrefixes(blockId)
 
   const selectedToolConfig = mcpTools.find((tool) => tool.id === selectedTool)
   const toolSchema = cachedSchema || selectedToolConfig?.inputSchema
@@ -276,7 +72,7 @@ export function McpDynamicArgs({
         try {
           return JSON.parse(previewValue)
         } catch (error) {
-          console.warn('Failed to parse preview value as JSON:', error)
+          logger.warn('Failed to parse preview value as JSON:', { error })
           return previewValue
         }
       }
@@ -286,7 +82,7 @@ export function McpDynamicArgs({
       try {
         return JSON.parse(toolArgs)
       } catch (error) {
-        console.warn('Failed to parse toolArgs as JSON:', error)
+        logger.warn('Failed to parse toolArgs as JSON:', { error })
         return {}
       }
     }
@@ -298,6 +94,17 @@ export function McpDynamicArgs({
       if (disabled) return
 
       const current = currentArgs()
+
+      if (value === '' && (current[paramName] === undefined || current[paramName] === null)) {
+        return
+      }
+
+      if (value === '') {
+        const { [paramName]: _, ...rest } = current
+        setToolArgs(Object.keys(rest).length > 0 ? rest : {})
+        return
+      }
+
       const updated = { ...current, [paramName]: value }
       setToolArgs(updated)
     },
@@ -339,7 +146,7 @@ export function McpDynamicArgs({
             />
             <Label
               htmlFor={`${paramName}-switch`}
-              className='cursor-pointer font-normal text-sm leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70'
+              className='cursor-pointer font-normal leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70'
             >
               {formatParameterLabel(paramName)}
             </Label>
@@ -347,14 +154,10 @@ export function McpDynamicArgs({
         )
 
       case 'dropdown': {
-        const dropdownOptions = useMemo(
-          () =>
-            (paramSchema.enum || []).map((option: any) => ({
-              label: String(option),
-              value: String(option),
-            })),
-          [paramSchema.enum]
-        )
+        const dropdownOptions = (paramSchema.enum || []).map((option: any) => ({
+          label: String(option),
+          value: String(option),
+        }))
 
         return (
           <div key={`${paramName}-dropdown`}>
@@ -417,24 +220,23 @@ export function McpDynamicArgs({
         )
       }
 
-      case 'long-input':
+      case 'long-input': {
+        const config = createParamConfig(paramName, paramSchema, 'long-input')
         return (
-          <McpTextareaWithTags
+          <LongInput
             key={`${paramName}-long`}
+            blockId={blockId}
+            subBlockId={`_mcp_${paramName}`}
+            config={config}
+            placeholder={config.placeholder}
+            rows={4}
             value={value || ''}
             onChange={(newValue) => updateParameter(paramName, newValue)}
-            placeholder={
-              paramSchema.type === 'array'
-                ? `Enter JSON array, e.g. ["item1", "item2"] or comma-separated values`
-                : paramSchema.description ||
-                  `Enter ${formatParameterLabel(paramName).toLowerCase()}`
-            }
+            isPreview={isPreview}
             disabled={disabled}
-            blockId={blockId}
-            accessiblePrefixes={accessiblePrefixes}
-            rows={4}
           />
         )
+      }
 
       default: {
         const isPassword =
@@ -442,10 +244,16 @@ export function McpDynamicArgs({
           paramName.toLowerCase().includes('password') ||
           paramName.toLowerCase().includes('token')
         const isNumeric = paramSchema.type === 'number' || paramSchema.type === 'integer'
+        const config = createParamConfig(paramName, paramSchema, 'short-input')
 
         return (
-          <McpInputWithTags
+          <ShortInput
             key={`${paramName}-short`}
+            blockId={blockId}
+            subBlockId={`_mcp_${paramName}`}
+            config={config}
+            placeholder={config.placeholder}
+            password={isPassword}
             value={value?.toString() || ''}
             onChange={(newValue) => {
               let processedValue: any = newValue
@@ -463,16 +271,8 @@ export function McpDynamicArgs({
               }
               updateParameter(paramName, processedValue)
             }}
-            placeholder={
-              paramSchema.type === 'array'
-                ? `Enter JSON array, e.g. ["item1", "item2"] or comma-separated values`
-                : paramSchema.description ||
-                  `Enter ${formatParameterLabel(paramName).toLowerCase()}`
-            }
+            isPreview={isPreview}
             disabled={disabled}
-            isPassword={isPassword}
-            blockId={blockId}
-            accessiblePrefixes={accessiblePrefixes}
           />
         )
       }
@@ -481,7 +281,7 @@ export function McpDynamicArgs({
 
   if (!selectedTool) {
     return (
-      <div className='rounded-lg border border-dashed p-8 text-center'>
+      <div className='rounded-lg border p-8 text-center'>
         <p className='text-muted-foreground text-sm'>Select a tool to configure its parameters</p>
       </div>
     )
@@ -494,7 +294,7 @@ export function McpDynamicArgs({
     (isLoading || mcpTools.length === 0)
   ) {
     return (
-      <div className='rounded-lg border border-dashed p-8 text-center'>
+      <div className='rounded-lg border p-8 text-center'>
         <p className='text-muted-foreground text-sm'>Loading tool schema...</p>
       </div>
     )
@@ -502,36 +302,76 @@ export function McpDynamicArgs({
 
   if (!toolSchema?.properties || Object.keys(toolSchema.properties).length === 0) {
     return (
-      <div className='rounded-lg border border-dashed p-8 text-center'>
+      <div className='rounded-lg border p-8 text-center'>
         <p className='text-muted-foreground text-sm'>This tool requires no parameters</p>
       </div>
     )
   }
 
   return (
-    <div className='space-y-4'>
-      {toolSchema.properties &&
-        Object.entries(toolSchema.properties).map(([paramName, paramSchema]) => {
-          const inputType = getInputType(paramSchema as any)
-          const showLabel = inputType !== 'switch'
+    <div className='relative'>
+      {/* Hidden dummy inputs to prevent browser password manager autofill */}
+      <input
+        type='text'
+        name='fakeusernameremembered'
+        autoComplete='username'
+        style={{ position: 'absolute', left: '-9999px', opacity: 0, pointerEvents: 'none' }}
+        tabIndex={-1}
+        readOnly
+      />
+      <input
+        type='password'
+        name='fakepasswordremembered'
+        autoComplete='current-password'
+        style={{ position: 'absolute', left: '-9999px', opacity: 0, pointerEvents: 'none' }}
+        tabIndex={-1}
+        readOnly
+      />
+      <input
+        type='email'
+        name='fakeemailremembered'
+        autoComplete='email'
+        style={{ position: 'absolute', left: '-9999px', opacity: 0, pointerEvents: 'none' }}
+        tabIndex={-1}
+        readOnly
+      />
+      <div>
+        {toolSchema.properties &&
+          Object.entries(toolSchema.properties).map(([paramName, paramSchema], index, entries) => {
+            const inputType = getInputType(paramSchema as any)
+            const showLabel = inputType !== 'switch'
+            const showDivider = index < entries.length - 1
 
-          return (
-            <div key={paramName} className='space-y-2'>
-              {showLabel && (
-                <Label
-                  className={cn(
-                    'font-medium text-sm',
-                    toolSchema.required?.includes(paramName) &&
-                      'after:ml-1 after:text-red-500 after:content-["*"]'
+            return (
+              <div key={paramName} className='subblock-row'>
+                <div className='subblock-content flex flex-col gap-[10px]'>
+                  {showLabel && (
+                    <div className='flex items-center justify-between gap-[6px] pl-[2px]'>
+                      <Label className='flex items-baseline gap-[6px] whitespace-nowrap'>
+                        {formatParameterLabel(paramName)}
+                        {toolSchema.required?.includes(paramName) && (
+                          <span className='ml-0.5'>*</span>
+                        )}
+                      </Label>
+                    </div>
                   )}
-                >
-                  {formatParameterLabel(paramName)}
-                </Label>
-              )}
-              {renderParameterInput(paramName, paramSchema as any)}
-            </div>
-          )
-        })}
+                  {renderParameterInput(paramName, paramSchema as any)}
+                </div>
+                {showDivider && (
+                  <div className='subblock-divider px-[2px] pt-[16px] pb-[13px]'>
+                    <div
+                      className='h-[1.25px]'
+                      style={{
+                        backgroundImage:
+                          'repeating-linear-gradient(to right, var(--border) 0px, var(--border) 6px, transparent 6px, transparent 12px)',
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            )
+          })}
+      </div>
     </div>
   )
 }

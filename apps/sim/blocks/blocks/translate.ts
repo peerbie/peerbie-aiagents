@@ -1,28 +1,13 @@
 import { TranslateIcon } from '@/components/icons'
-import { isHosted } from '@/lib/environment'
 import { AuthMode, type BlockConfig } from '@/blocks/types'
 import {
-  getAllModelProviders,
-  getHostedModels,
-  getProviderIcon,
-  providers,
-} from '@/providers/utils'
-import { useProvidersStore } from '@/stores/providers/store'
+  getModelOptions,
+  getProviderCredentialSubBlocks,
+  PROVIDER_CREDENTIAL_INPUTS,
+} from '@/blocks/utils'
 
-const getCurrentOllamaModels = () => {
-  return useProvidersStore.getState().providers.ollama.models
-}
-
-const getTranslationPrompt = (
-  targetLanguage: string
-) => `You are a highly skilled translator. Your task is to translate the given text into ${targetLanguage || 'English'} while:
-1. Preserving the original meaning and nuance
-2. Maintaining appropriate formality levels
-3. Adapting idioms and cultural references appropriately
-4. Preserving formatting and special characters
-5. Handling technical terms accurately
-
-Only return the translated text without any explanations or notes. The translation should be natural and fluent in ${targetLanguage || 'English'}.`
+const getTranslationPrompt = (targetLanguage: string) =>
+  `Translate the following text into ${targetLanguage || 'English'}. Output ONLY the translated text with no additional commentary, explanations, or notes.`
 
 export const TranslateBlock: BlockConfig = {
   type: 'translate',
@@ -55,63 +40,9 @@ export const TranslateBlock: BlockConfig = {
       type: 'combobox',
       placeholder: 'Type or select a model...',
       required: true,
-      options: () => {
-        const providersState = useProvidersStore.getState()
-        const baseModels = providersState.providers.base.models
-        const ollamaModels = providersState.providers.ollama.models
-        const openrouterModels = providersState.providers.openrouter.models
-        const allModels = Array.from(new Set([...baseModels, ...ollamaModels, ...openrouterModels]))
-
-        return allModels.map((model) => {
-          const icon = getProviderIcon(model)
-          return { label: model, id: model, ...(icon && { icon }) }
-        })
-      },
+      options: getModelOptions,
     },
-    {
-      id: 'apiKey',
-      title: 'API Key',
-      type: 'short-input',
-      placeholder: 'Enter your API key',
-      password: true,
-      connectionDroppable: false,
-      required: true,
-      // Hide API key for hosted models and Ollama models
-      condition: isHosted
-        ? {
-            field: 'model',
-            value: getHostedModels(),
-            not: true, // Show for all models EXCEPT those listed
-          }
-        : () => ({
-            field: 'model',
-            value: getCurrentOllamaModels(),
-            not: true, // Show for all models EXCEPT Ollama models
-          }),
-    },
-    {
-      id: 'azureEndpoint',
-      title: 'Azure OpenAI Endpoint',
-      type: 'short-input',
-      password: true,
-      placeholder: 'https://your-resource.openai.azure.com',
-      connectionDroppable: false,
-      condition: {
-        field: 'model',
-        value: providers['azure-openai'].models,
-      },
-    },
-    {
-      id: 'azureApiVersion',
-      title: 'Azure API Version',
-      type: 'short-input',
-      placeholder: '2024-07-01-preview',
-      connectionDroppable: false,
-      condition: {
-        field: 'model',
-        value: providers['azure-openai'].models,
-      },
-    },
+    ...getProviderCredentialSubBlocks(),
     {
       id: 'systemPrompt',
       title: 'System Prompt',
@@ -123,27 +54,29 @@ export const TranslateBlock: BlockConfig = {
     },
   ],
   tools: {
-    access: ['openai_chat', 'anthropic_chat', 'google_chat'],
+    access: ['llm_chat'],
     config: {
-      tool: (params: Record<string, any>) => {
-        const model = params.model || 'gpt-4o'
-        if (!model) {
-          throw new Error('No model selected')
-        }
-        const tool = getAllModelProviders()[model]
-        if (!tool) {
-          throw new Error(`Invalid model selected: ${model}`)
-        }
-        return tool
-      },
+      tool: () => 'llm_chat',
+      params: (params: Record<string, any>) => ({
+        model: params.model,
+        systemPrompt: getTranslationPrompt(params.targetLanguage || 'English'),
+        context: params.context,
+        apiKey: params.apiKey,
+        azureEndpoint: params.azureEndpoint,
+        azureApiVersion: params.azureApiVersion,
+        vertexProject: params.vertexProject,
+        vertexLocation: params.vertexLocation,
+        vertexCredential: params.vertexCredential,
+        bedrockAccessKeyId: params.bedrockAccessKeyId,
+        bedrockSecretKey: params.bedrockSecretKey,
+        bedrockRegion: params.bedrockRegion,
+      }),
     },
   },
   inputs: {
     context: { type: 'string', description: 'Text to translate' },
     targetLanguage: { type: 'string', description: 'Target language' },
-    apiKey: { type: 'string', description: 'Provider API key' },
-    azureEndpoint: { type: 'string', description: 'Azure OpenAI endpoint URL' },
-    azureApiVersion: { type: 'string', description: 'Azure API version' },
+    ...PROVIDER_CREDENTIAL_INPUTS,
     systemPrompt: { type: 'string', description: 'Translation instructions' },
   },
   outputs: {

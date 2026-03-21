@@ -1,14 +1,15 @@
 'use client'
 
 import { useCallback } from 'react'
-import { Layout, LibraryBig, Search } from 'lucide-react'
+import { createLogger } from '@sim/logger'
+import { Search } from 'lucide-react'
 import Image from 'next/image'
 import { useParams, useRouter } from 'next/navigation'
-import { Button } from '@/components/emcn'
+import { Button, Library } from '@/components/emcn'
 import { AgentIcon } from '@/components/icons'
-import { createLogger } from '@/lib/logs/console/logger'
-import { cn } from '@/lib/utils'
-import { useSearchModalStore } from '@/stores/search-modal/store'
+import { cn } from '@/lib/core/utils/cn'
+import { usePreventZoom } from '@/app/workspace/[workspaceId]/w/[workflowId]/hooks'
+import { useSearchModalStore } from '@/stores/modals/search/store'
 
 const logger = createLogger('WorkflowCommandList')
 
@@ -28,11 +29,11 @@ interface CommandItem {
  * Available commands list
  */
 const commands: CommandItem[] = [
-  {
-    label: 'Templates',
-    icon: Layout,
-    shortcut: 'Y',
-  },
+  // {
+  //   label: 'Templates',
+  //   icon: Layout,
+  //   shortcut: 'Y',
+  // },
   {
     label: 'New Agent',
     icon: AgentIcon,
@@ -40,7 +41,7 @@ const commands: CommandItem[] = [
   },
   {
     label: 'Logs',
-    icon: LibraryBig,
+    icon: Library,
     shortcut: 'L',
   },
   {
@@ -58,6 +59,7 @@ export function CommandList() {
   const params = useParams()
   const router = useRouter()
   const { open: openSearchModal } = useSearchModalStore()
+  const preventZoomRef = usePreventZoom()
 
   const workspaceId = params.workspaceId as string | undefined
 
@@ -76,14 +78,14 @@ export function CommandList() {
     (label: string) => {
       try {
         switch (label) {
-          case 'Templates': {
-            if (!workspaceId) {
-              logger.warn('No workspace ID found, cannot navigate to templates from command list')
-              return
-            }
-            router.push(`/workspace/${workspaceId}/templates`)
-            return
-          }
+          // case 'Templates': {
+          //   if (!workspaceId) {
+          //     logger.warn('No workspace ID found, cannot navigate to templates from command list')
+          //     return
+          //   }
+          //   router.push(`/workspace/${workspaceId}/templates`)
+          //   return
+          // }
           case 'New Agent': {
             const event = new CustomEvent('add-block-from-toolbar', {
               detail: { type: 'agent', enableTriggerMode: false },
@@ -171,6 +173,7 @@ export function CommandList() {
 
   return (
     <div
+      ref={preventZoomRef}
       className={cn(
         'pointer-events-none absolute inset-0 mb-[50px] flex items-center justify-center'
       )}

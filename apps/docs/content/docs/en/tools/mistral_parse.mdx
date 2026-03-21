@@ -6,7 +6,7 @@ description: Extract text from PDF documents
 import { BlockInfoCard } from "@/components/ui/block-info-card"
 
 <BlockInfoCard 
-  type="mistral_parse"
+  type="mistral_parse_v3"
   color="#000000"
 />
 
@@ -35,13 +35,12 @@ Integrate Mistral Parse into the workflow. Can extract text from uploaded PDF do
 
 ### `mistral_parser`
 
-Parse PDF documents using Mistral OCR API
-
 #### Input
 
 | Parameter | Type | Required | Description |
 | --------- | ---- | -------- | ----------- |
-| `filePath` | string | Yes | URL to a PDF document to be processed |
+| `filePath` | string | No | URL to a PDF document to be processed |
+| `file` | file | No | Document file to be processed |
 | `fileUpload` | object | No | File upload data from file-upload component |
 | `resultType` | string | No | Type of parsed result \(markdown, text, or json\). Defaults to markdown. |
 | `includeImageBase64` | boolean | No | Include base64-encoded images in the response |
@@ -54,13 +53,9 @@ Parse PDF documents using Mistral OCR API
 
 | Parameter | Type | Description |
 | --------- | ---- | ----------- |
-| `success` | boolean | Whether the PDF was parsed successfully |
-| `content` | string | Extracted content in the requested format \(markdown, text, or JSON\) |
-| `metadata` | object | Processing metadata including jobId, fileType, pageCount, and usage info |
+| `pages` | array | Array of page objects from Mistral OCR |
+| `model` | string | Mistral OCR model identifier |
+| `usage_info` | json | Usage statistics from the API |
+| `document_annotation` | string | Structured annotation data |
 
 
-
-## Notes
-
-- Category: `tools`
-- Type: `mistral_parse`

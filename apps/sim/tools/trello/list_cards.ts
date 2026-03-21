@@ -1,4 +1,4 @@
-import { env } from '@/lib/env'
+import { env } from '@/lib/core/config/env'
 import type { TrelloListCardsParams, TrelloListCardsResponse } from '@/tools/trello/types'
 import type { ToolConfig } from '@/tools/types'
 
@@ -23,13 +23,13 @@ export const trelloListCardsTool: ToolConfig<TrelloListCardsParams, TrelloListCa
       type: 'string',
       required: true,
       visibility: 'user-or-llm',
-      description: 'ID of the board to list cards from',
+      description: 'Trello board ID (24-character hex string)',
     },
     listId: {
       type: 'string',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Optional: Filter cards by list ID',
+      description: 'Trello list ID to filter cards (24-character hex string)',
     },
   },
 
@@ -77,13 +77,11 @@ export const trelloListCardsTool: ToolConfig<TrelloListCardsParams, TrelloListCa
   },
 
   outputs: {
-    success: { type: 'boolean', description: 'Whether the operation was successful' },
     cards: {
       type: 'array',
       description:
         'Array of card objects with id, name, desc, url, board/list IDs, labels, and due date',
     },
     count: { type: 'number', description: 'Number of cards returned' },
-    error: { type: 'string', description: 'Error message if operation failed' },
   },
 }

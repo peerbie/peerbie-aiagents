@@ -1,4 +1,9 @@
 import type { ListReleasesParams, ListReleasesResponse } from '@/tools/github/types'
+import {
+  RELEASE_ASSET_OUTPUT_PROPERTIES,
+  RELEASE_OUTPUT_PROPERTIES,
+  USER_OUTPUT,
+} from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const listReleasesTool: ToolConfig<ListReleasesParams, ListReleasesResponse> = {
@@ -133,5 +138,55 @@ Summary of tags: ${releases.map((r: any) => r.tag_name).join(', ')}`
         },
       },
     },
+  },
+}
+
+export const listReleasesV2Tool: ToolConfig<ListReleasesParams, any> = {
+  id: 'github_list_releases_v2',
+  name: listReleasesTool.name,
+  description: listReleasesTool.description,
+  version: '2.0.0',
+  params: listReleasesTool.params,
+  request: listReleasesTool.request,
+
+  transformResponse: async (response: Response) => {
+    const releases = await response.json()
+    return {
+      success: true,
+      output: {
+        items: releases.map((release: any) => ({
+          ...release,
+          body: release.body ?? null,
+          published_at: release.published_at ?? null,
+        })),
+        count: releases.length,
+      },
+    }
+  },
+
+  outputs: {
+    items: {
+      type: 'array',
+      description: 'Array of release objects',
+      items: {
+        type: 'object',
+        properties: {
+          ...RELEASE_OUTPUT_PROPERTIES,
+          author: USER_OUTPUT,
+          assets: {
+            type: 'array',
+            description: 'Release assets',
+            items: {
+              type: 'object',
+              properties: {
+                ...RELEASE_ASSET_OUTPUT_PROPERTIES,
+                uploader: USER_OUTPUT,
+              },
+            },
+          },
+        },
+      },
+    },
+    count: { type: 'number', description: 'Number of releases returned' },
   },
 }

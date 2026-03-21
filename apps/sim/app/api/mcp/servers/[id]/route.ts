@@ -1,11 +1,12 @@
 import { db } from '@sim/db'
 import { mcpServers } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq, isNull } from 'drizzle-orm'
 import type { NextRequest } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
+import { AuditAction, AuditResourceType, recordAudit } from '@/lib/audit/log'
+import { McpDomainNotAllowedError, validateMcpDomain } from '@/lib/mcp/domain-check'
 import { getParsedBody, withMcpAuth } from '@/lib/mcp/middleware'
 import { mcpService } from '@/lib/mcp/service'
-import { validateMcpServerUrl } from '@/lib/mcp/url-validator'
 import { createMcpErrorResponse, createMcpSuccessResponse } from '@/lib/mcp/utils'
 
 const logger = createLogger('McpServerAPI')
@@ -15,13 +16,13 @@ export const dynamic = 'force-dynamic'
 /**
  * PATCH - Update an MCP server in the workspace (requires write or admin permission)
  */
-export const PATCH = withMcpAuth('write')(
+export const PATCH = withMcpAuth<{ id: string }>('write')(
   async (
     request: NextRequest,
-    { userId, workspaceId, requestId },
-    { params }: { params: { id: string } }
+    { userId, userName, userEmail, workspaceId, requestId },
+    { params }
   ) => {
-    const serverId = params.id
+    const { id: serverId } = await params
 
     try {
       const body = getParsedBody(request) || (await request.json())
@@ -31,26 +32,32 @@ export const PATCH = withMcpAuth('write')(
         updates: Object.keys(body).filter((k) => k !== 'workspaceId'),
       })
 
-      // Validate URL if being updated
-      if (
-        body.url &&
-        (body.transport === 'http' ||
-          body.transport === 'sse' ||
-          body.transport === 'streamable-http')
-      ) {
-        const urlValidation = validateMcpServerUrl(body.url)
-        if (!urlValidation.isValid) {
-          return createMcpErrorResponse(
-            new Error(`Invalid MCP server URL: ${urlValidation.error}`),
-            'Invalid server URL',
-            400
-          )
-        }
-        body.url = urlValidation.normalizedUrl
-      }
-
       // Remove workspaceId from body to prevent it from being updated
       const { workspaceId: _, ...updateData } = body
+
+      if (updateData.url) {
+        try {
+          validateMcpDomain(updateData.url)
+        } catch (e) {
+          if (e instanceof McpDomainNotAllowedError) {
+            return createMcpErrorResponse(e, e.message, 403)
+          }
+          throw e
+        }
+      }
+
+      // Get the current server to check if URL is changing
+      const [currentServer] = await db
+        .select({ url: mcpServers.url })
+        .from(mcpServers)
+        .where(
+          and(
+            eq(mcpServers.id, serverId),
+            eq(mcpServers.workspaceId, workspaceId),
+            isNull(mcpServers.deletedAt)
+          )
+        )
+        .limit(1)
 
       const [updatedServer] = await db
         .update(mcpServers)
@@ -75,10 +82,33 @@ export const PATCH = withMcpAuth('write')(
         )
       }
 
-      // Clear MCP service cache after update
-      mcpService.clearCache(workspaceId)
+      const shouldClearCache =
+        (body.url !== undefined && currentServer?.url !== body.url) ||
+        body.enabled !== undefined ||
+        body.headers !== undefined ||
+        body.timeout !== undefined ||
+        body.retries !== undefined
+
+      if (shouldClearCache) {
+        await mcpService.clearCache(workspaceId)
+        logger.info(`[${requestId}] Cleared MCP cache after server lifecycle update`)
+      }
 
       logger.info(`[${requestId}] Successfully updated MCP server: ${serverId}`)
+
+      recordAudit({
+        workspaceId,
+        actorId: userId,
+        actorName: userName,
+        actorEmail: userEmail,
+        action: AuditAction.MCP_SERVER_UPDATED,
+        resourceType: AuditResourceType.MCP_SERVER,
+        resourceId: serverId,
+        resourceName: updatedServer.name || serverId,
+        description: `Updated MCP server "${updatedServer.name || serverId}"`,
+        request,
+      })
+
       return createMcpSuccessResponse({ server: updatedServer })
     } catch (error) {
       logger.error(`[${requestId}] Error updating MCP server:`, error)

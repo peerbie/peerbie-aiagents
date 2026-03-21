@@ -1,7 +1,6 @@
-import { v4 as uuidv4 } from 'uuid'
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import { uploadExecutionFile } from '@/lib/uploads/contexts/execution'
-import { TRIGGER_TYPES } from '@/lib/workflows/triggers'
+import { TRIGGER_TYPES } from '@/lib/workflows/triggers/triggers'
 import type { InputFormatField } from '@/lib/workflows/types'
 import type { UserFile } from '@/executor/types'
 import type { SerializedBlock } from '@/serializer/types'
@@ -11,7 +10,7 @@ const logger = createLogger('ExecutionFiles')
 const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
 
 /**
- * Process a single file for workflow execution - handles both base64 ('file' type) and URL pass-through ('url' type)
+ * Process a single file for workflow execution - handles base64 ('file' type) and URL downloads ('url' type)
  */
 export async function processExecutionFile(
   file: { type: string; data: string; name: string; mime?: string },
@@ -45,8 +44,6 @@ export async function processExecutionFile(
       )
     }
 
-    logger.debug(`[${requestId}] Uploading file: ${file.name} (${buffer.length} bytes)`)
-
     const userFile = await uploadExecutionFile(
       executionContext,
       buffer,
@@ -55,19 +52,29 @@ export async function processExecutionFile(
       userId
     )
 
-    logger.debug(`[${requestId}] Successfully uploaded ${file.name}`)
     return userFile
   }
 
   if (file.type === 'url' && file.data) {
-    return {
-      id: uuidv4(),
-      url: file.data,
-      name: file.name,
-      size: 0,
-      type: file.mime || 'application/octet-stream',
-      key: `url/${file.name}`,
+    const { downloadFileFromUrl } = await import('@/lib/uploads/utils/file-utils.server')
+    const buffer = await downloadFileFromUrl(file.data)
+
+    if (buffer.length > MAX_FILE_SIZE) {
+      const fileSizeMB = (buffer.length / (1024 * 1024)).toFixed(2)
+      throw new Error(
+        `File "${file.name}" exceeds the maximum size limit of 20MB (actual size: ${fileSizeMB}MB)`
+      )
     }
+
+    const userFile = await uploadExecutionFile(
+      executionContext,
+      buffer,
+      file.name,
+      file.mime || 'application/octet-stream',
+      userId
+    )
+
+    return userFile
   }
 
   return null
@@ -112,7 +119,10 @@ export async function processExecutionFiles(
 type ValidatedInputFormatField = Required<Pick<InputFormatField, 'name' | 'type'>>
 
 function extractInputFormatFromBlock(block: SerializedBlock): ValidatedInputFormatField[] {
-  const inputFormatValue = block.config?.params?.inputFormat
+  const metadata = block.metadata as { subBlocks?: Record<string, { value?: unknown }> } | undefined
+  const subBlocksValue = metadata?.subBlocks?.inputFormat?.value
+  const legacyValue = block.config?.params?.inputFormat
+  const inputFormatValue = subBlocksValue ?? legacyValue
 
   if (!Array.isArray(inputFormatValue) || inputFormatValue.length === 0) {
     return []
@@ -160,7 +170,7 @@ export async function processInputFileFields(
   }
 
   const inputFormat = extractInputFormatFromBlock(startBlock)
-  const fileFields = inputFormat.filter((field) => field.type === 'files')
+  const fileFields = inputFormat.filter((field) => field.type === 'file[]')
 
   if (fileFields.length === 0) {
     return input

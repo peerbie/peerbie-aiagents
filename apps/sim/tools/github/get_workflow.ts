@@ -1,4 +1,5 @@
 import type { GetWorkflowParams, WorkflowResponse } from '@/tools/github/types'
+import { WORKFLOW_OUTPUT_PROPERTIES } from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const getWorkflowTool: ToolConfig<GetWorkflowParams, WorkflowResponse> = {
@@ -85,5 +86,38 @@ Updated: ${data.updated_at}`
         badge_url: { type: 'string', description: 'Badge URL for workflow' },
       },
     },
+  },
+}
+
+export const getWorkflowV2Tool: ToolConfig<GetWorkflowParams, any> = {
+  id: 'github_get_workflow_v2',
+  name: getWorkflowTool.name,
+  description: getWorkflowTool.description,
+  version: '2.0.0',
+  params: getWorkflowTool.params,
+  request: getWorkflowTool.request,
+
+  transformResponse: async (response: Response) => {
+    const data = await response.json()
+    return {
+      success: true,
+      output: {
+        id: data.id,
+        node_id: data.node_id,
+        name: data.name,
+        path: data.path,
+        state: data.state,
+        html_url: data.html_url,
+        badge_url: data.badge_url,
+        url: data.url,
+        created_at: data.created_at,
+        updated_at: data.updated_at,
+        deleted_at: data.deleted_at ?? null,
+      },
+    }
+  },
+
+  outputs: {
+    ...WORKFLOW_OUTPUT_PROPERTIES,
   },
 }

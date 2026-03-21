@@ -1,186 +1,63 @@
+import { createLogger } from '@sim/logger'
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
-import { getClientTool } from '@/lib/copilot/tools/client/manager'
-import { createLogger } from '@/lib/logs/console/logger'
-import {
-  type DiffAnalysis,
-  stripWorkflowDiffMarkers,
-  type WorkflowDiff,
-  WorkflowDiffEngine,
-} from '@/lib/workflows/diff'
-import { enqueueReplaceWorkflowState } from '@/lib/workflows/socket-operations'
-import { validateWorkflowState } from '@/lib/workflows/validation'
+import { COPILOT_STATS_API_PATH } from '@/lib/copilot/constants'
+import { stripWorkflowDiffMarkers, WorkflowDiffEngine } from '@/lib/workflows/diff'
+import { enqueueReplaceWorkflowState } from '@/lib/workflows/operations/socket-operations'
+import { validateWorkflowState } from '@/lib/workflows/sanitization/validation'
 import { Serializer } from '@/serializer'
 import { useWorkflowRegistry } from '../workflows/registry/store'
-import { useSubBlockStore } from '../workflows/subblock/store'
 import { mergeSubblockState } from '../workflows/utils'
 import { useWorkflowStore } from '../workflows/workflow/store'
-import type { WorkflowState } from '../workflows/workflow/types'
+import type { WorkflowDiffActions, WorkflowDiffState } from './types'
+import {
+  applyWorkflowStateToStores,
+  captureBaselineSnapshot,
+  cloneWorkflowState,
+  createBatchedUpdater,
+  findLatestEditWorkflowToolCallId,
+  getLatestUserMessageId,
+  persistWorkflowStateToServer,
+} from './utils'
 
 const logger = createLogger('WorkflowDiffStore')
 const diffEngine = new WorkflowDiffEngine()
-
-let updateTimer: NodeJS.Timeout | null = null
-const UPDATE_DEBOUNCE_MS = 16
-
-function cloneWorkflowState(state: WorkflowState): WorkflowState {
-  return {
-    ...state,
-    blocks: structuredClone(state.blocks || {}),
-    edges: structuredClone(state.edges || []),
-    loops: structuredClone(state.loops || {}),
-    parallels: structuredClone(state.parallels || {}),
-  }
+const RESET_DIFF_STATE = {
+  hasActiveDiff: false,
+  isShowingDiff: false,
+  isDiffReady: false,
+  baselineWorkflow: null,
+  baselineWorkflowId: null,
+  diffAnalysis: null,
+  diffMetadata: null,
+  diffError: null,
+  _triggerMessageId: null,
 }
 
-function extractSubBlockValues(workflowState: WorkflowState): Record<string, Record<string, any>> {
-  const values: Record<string, Record<string, any>> = {}
-  Object.entries(workflowState.blocks || {}).forEach(([blockId, block]) => {
-    values[blockId] = {}
-    Object.entries(block.subBlocks || {}).forEach(([subBlockId, subBlock]) => {
-      values[blockId][subBlockId] = (subBlock as any)?.value ?? null
-    })
-  })
-  return values
-}
-
-function applyWorkflowStateToStores(
-  workflowId: string,
-  workflowState: WorkflowState,
-  options?: { updateLastSaved?: boolean }
-) {
-  const workflowStore = useWorkflowStore.getState()
-  workflowStore.replaceWorkflowState(cloneWorkflowState(workflowState), options)
-  const subBlockValues = extractSubBlockValues(workflowState)
-  useSubBlockStore.getState().setWorkflowValues(workflowId, subBlockValues)
-}
-
-function captureBaselineSnapshot(workflowId: string): WorkflowState {
-  const workflowStore = useWorkflowStore.getState()
-  const currentState = workflowStore.getWorkflowState()
-  const mergedBlocks = mergeSubblockState(currentState.blocks, workflowId)
-
-  return {
-    ...cloneWorkflowState(currentState),
-    blocks: structuredClone(mergedBlocks),
-  }
-}
-
-async function persistWorkflowStateToServer(
-  workflowId: string,
-  workflowState: WorkflowState
-): Promise<boolean> {
-  try {
-    const cleanState = stripWorkflowDiffMarkers(cloneWorkflowState(workflowState))
-    const response = await fetch(`/api/workflows/${workflowId}/state`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        ...cleanState,
-        lastSaved: Date.now(),
-      }),
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '')
-      throw new Error(errorText || 'Failed to persist workflow state')
-    }
-
-    const activeWorkflowId = useWorkflowRegistry.getState().activeWorkflowId
-    if (activeWorkflowId === workflowId) {
-      useWorkflowStore.setState({ lastSaved: Date.now() })
-    }
-
-    return true
-  } catch (error) {
-    logger.error('Failed to persist workflow state after copilot edit', error)
-    return false
-  }
-}
-
-async function getLatestUserMessageId(): Promise<string | null> {
-  try {
-    const { useCopilotStore } = await import('@/stores/panel/copilot/store')
-    const { messages } = useCopilotStore.getState() as any
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return null
-    }
-
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]
-      if (m?.role === 'user' && m?.id) {
-        return m.id
-      }
-    }
-  } catch (error) {
-    logger.warn('Failed to capture trigger message id', { error })
-  }
-  return null
-}
-
-async function findLatestEditWorkflowToolCallId(): Promise<string | undefined> {
-  try {
-    const { useCopilotStore } = await import('@/stores/panel/copilot/store')
-    const { messages, toolCallsById } = useCopilotStore.getState() as any
-
-    for (let mi = messages.length - 1; mi >= 0; mi--) {
-      const message = messages[mi]
-      if (message.role !== 'assistant' || !message.contentBlocks) continue
-      for (const block of message.contentBlocks as any[]) {
-        if (block?.type === 'tool_call' && block.toolCall?.name === 'edit_workflow') {
-          return block.toolCall?.id
-        }
-      }
-    }
-
-    const fallback = Object.values(toolCallsById).filter(
-      (call: any) => call.name === 'edit_workflow'
-    ) as any[]
-
-    return fallback.length ? fallback[fallback.length - 1].id : undefined
-  } catch (error) {
-    logger.warn('Failed to resolve edit_workflow tool call id', { error })
-    return undefined
-  }
-}
-
-function createBatchedUpdater(set: any) {
-  let pendingUpdates: Partial<WorkflowDiffState> = {}
-  return (updates: Partial<WorkflowDiffState>) => {
-    Object.assign(pendingUpdates, updates)
-    if (updateTimer) {
-      clearTimeout(updateTimer)
-    }
-    updateTimer = setTimeout(() => {
-      set(pendingUpdates)
-      pendingUpdates = {}
-      updateTimer = null
-    }, UPDATE_DEBOUNCE_MS)
-  }
-}
-
-interface WorkflowDiffState {
-  hasActiveDiff: boolean
-  isShowingDiff: boolean
-  isDiffReady: boolean
-  baselineWorkflow: WorkflowState | null
-  baselineWorkflowId: string | null
-  diffAnalysis: DiffAnalysis | null
-  diffMetadata: WorkflowDiff['metadata'] | null
-  diffError?: string | null
-  _triggerMessageId?: string | null
-}
-
-interface WorkflowDiffActions {
-  setProposedChanges: (workflowState: WorkflowState, diffAnalysis?: DiffAnalysis) => Promise<void>
-  clearDiff: (options?: { restoreBaseline?: boolean }) => void
-  toggleDiffView: () => void
-  acceptChanges: () => Promise<void>
-  rejectChanges: () => Promise<void>
-  reapplyDiffMarkers: () => void
-  _batchedStateUpdate: (updates: Partial<WorkflowDiffState>) => void
+/**
+ * Detects when a diff contains no meaningful changes.
+ */
+function isEmptyDiffAnalysis(
+  diffAnalysis?: {
+    new_blocks?: string[]
+    edited_blocks?: string[]
+    deleted_blocks?: string[]
+    field_diffs?: Record<string, { changed_fields: string[] }>
+    edge_diff?: { new_edges?: string[]; deleted_edges?: string[] }
+  } | null
+): boolean {
+  if (!diffAnalysis) return false
+  const hasBlockChanges =
+    (diffAnalysis.new_blocks?.length || 0) > 0 ||
+    (diffAnalysis.edited_blocks?.length || 0) > 0 ||
+    (diffAnalysis.deleted_blocks?.length || 0) > 0
+  const hasEdgeChanges =
+    (diffAnalysis.edge_diff?.new_edges?.length || 0) > 0 ||
+    (diffAnalysis.edge_diff?.deleted_edges?.length || 0) > 0
+  const hasFieldChanges = Object.values(diffAnalysis.field_diffs || {}).some(
+    (diff) => (diff?.changed_fields?.length || 0) > 0
+  )
+  return !hasBlockChanges && !hasEdgeChanges && !hasFieldChanges
 }
 
 export const useWorkflowDiffStore = create<WorkflowDiffState & WorkflowDiffActions>()(
@@ -200,156 +77,148 @@ export const useWorkflowDiffStore = create<WorkflowDiffState & WorkflowDiffActio
         _triggerMessageId: null,
         _batchedStateUpdate: batchedUpdate,
 
-        setProposedChanges: async (proposedState, diffAnalysis) => {
+        setProposedChanges: async (proposedState, diffAnalysis, options) => {
           const activeWorkflowId = useWorkflowRegistry.getState().activeWorkflowId
           if (!activeWorkflowId) {
             logger.error('Cannot apply diff without an active workflow')
             throw new Error('No active workflow found')
           }
 
-          const previousState = cloneWorkflowState(useWorkflowStore.getState().getWorkflowState())
-          batchedUpdate({ isDiffReady: false, diffError: null })
-
+          // Capture baseline if needed (synchronous, fast)
           let baselineWorkflow = get().baselineWorkflow
           let baselineWorkflowId = get().baselineWorkflowId
           let capturedBaseline = false
 
           if (!baselineWorkflow || baselineWorkflowId !== activeWorkflowId) {
-            try {
-              baselineWorkflow = captureBaselineSnapshot(activeWorkflowId)
-              baselineWorkflowId = activeWorkflowId
-              capturedBaseline = true
-              logger.info('Captured baseline snapshot for diff workflow', {
-                workflowId: activeWorkflowId,
-                blockCount: Object.keys(baselineWorkflow.blocks || {}).length,
-              })
-            } catch (error) {
-              const message = 'Failed to capture workflow snapshot before applying diff'
-              logger.error(message, { error })
-              batchedUpdate({ diffError: message, isDiffReady: false })
-              throw error instanceof Error ? error : new Error(message)
-            }
+            baselineWorkflow = captureBaselineSnapshot(activeWorkflowId)
+            baselineWorkflowId = activeWorkflowId
+            capturedBaseline = true
+            logger.info('Captured baseline snapshot for diff workflow', {
+              workflowId: activeWorkflowId,
+              blockCount: Object.keys(baselineWorkflow.blocks || {}).length,
+            })
           }
 
-          try {
-            const diffResult = await diffEngine.createDiffFromWorkflowState(
-              proposedState,
-              diffAnalysis,
-              baselineWorkflow ?? undefined
-            )
+          // Create diff (this is fast, just computes the diff)
+          const diffResult = await diffEngine.createDiffFromWorkflowState(
+            proposedState,
+            diffAnalysis,
+            baselineWorkflow ?? undefined
+          )
 
-            if (!diffResult.success || !diffResult.diff) {
-              const errorMessage = diffResult.errors?.join(', ') || 'Failed to create diff'
-              logger.error(errorMessage)
-              throw new Error(errorMessage)
-            }
+          if (!diffResult.success || !diffResult.diff) {
+            const errorMessage = diffResult.errors?.join(', ') || 'Failed to create diff'
+            logger.error(errorMessage)
+            throw new Error(errorMessage)
+          }
 
-            const candidateState = diffResult.diff.proposedState
+          const diffAnalysisResult = diffResult.diff.diffAnalysis || null
+          if (isEmptyDiffAnalysis(diffAnalysisResult)) {
+            logger.info('No workflow diff detected; skipping diff view')
+            diffEngine.clearDiff()
+            batchedUpdate(RESET_DIFF_STATE)
+            return
+          }
 
-            // Validate proposed workflow using serializer round-trip
-            try {
-              const serializer = new Serializer()
-              const serialized = serializer.serializeWorkflow(
-                candidateState.blocks,
-                candidateState.edges,
-                candidateState.loops,
-                candidateState.parallels,
-                false
+          const candidateState = diffResult.diff.proposedState
+
+          logger.info('[WorkflowDiff] Applying proposed state', {
+            blockCount: Object.keys(candidateState.blocks || {}).length,
+            edgeCount: candidateState.edges?.length ?? 0,
+            hasLoops: !!candidateState.loops,
+            hasParallels: !!candidateState.parallels,
+          })
+
+          // Validate proposed workflow using serializer round-trip
+          const serializer = new Serializer()
+          const serialized = serializer.serializeWorkflow(
+            candidateState.blocks,
+            candidateState.edges,
+            candidateState.loops,
+            candidateState.parallels,
+            false
+          )
+          serializer.deserializeWorkflow(serialized)
+
+          // OPTIMISTIC: Apply state immediately to stores (this is what makes UI update)
+          applyWorkflowStateToStores(activeWorkflowId, candidateState)
+          logger.info('[WorkflowDiff] Applied state to stores')
+
+          // OPTIMISTIC: Update diff state immediately so UI shows the diff
+          const triggerMessageId =
+            capturedBaseline && !get()._triggerMessageId
+              ? await getLatestUserMessageId()
+              : get()._triggerMessageId
+
+          set({
+            hasActiveDiff: true,
+            isShowingDiff: true,
+            isDiffReady: true,
+            baselineWorkflow: baselineWorkflow,
+            baselineWorkflowId,
+            diffAnalysis: diffAnalysisResult,
+            diffMetadata: diffResult.diff.metadata,
+            diffError: null,
+            _triggerMessageId: triggerMessageId ?? null,
+          })
+
+          if (triggerMessageId) {
+            import('@/stores/panel/copilot/store')
+              .then(({ useCopilotStore }) =>
+                useCopilotStore.getState().saveMessageCheckpoint(triggerMessageId)
               )
-              serializer.deserializeWorkflow(serialized)
-            } catch (error) {
-              const message =
-                error instanceof Error ? error.message : 'Invalid workflow in proposed changes'
-              logger.error('[DiffStore] Diff validation failed', { message, error })
-              throw new Error(message)
-            }
+              .catch((error) => {
+                logger.warn('Failed to save checkpoint for diff', { error })
+              })
+          }
 
-            // Log to verify diff markers are present
-            const sampleBlock = Object.values(candidateState.blocks)[0] as any
-            logger.info('Applying candidate state with diff markers', {
-              sampleBlockId: sampleBlock?.id,
-              sampleBlockHasDiff: !!sampleBlock?.is_diff,
-              sampleBlockDiffStatus: sampleBlock?.is_diff,
-              totalBlocks: Object.keys(candidateState.blocks).length,
-              blocksWithDiff: Object.values(candidateState.blocks).filter((b: any) => b.is_diff)
-                .length,
-            })
+          logger.info('Workflow diff applied optimistically', {
+            workflowId: activeWorkflowId,
+            blocks: Object.keys(candidateState.blocks || {}).length,
+            edges: candidateState.edges?.length || 0,
+          })
 
-            // Apply the candidate state WITH markers locally (for visual diff)
-            applyWorkflowStateToStores(activeWorkflowId, candidateState)
-
-            // Broadcast state change to other users (without markers)
+          // When skipPersist is set, the server tool (edit_workflow) already
+          // saved to DB. Both the Socket.IO broadcast and HTTP persist would
+          // race with subsequent edit_workflow calls and overwrite newer state,
+          // causing block IDs to thrash.
+          if (!options?.skipPersist) {
             const cleanState = stripWorkflowDiffMarkers(cloneWorkflowState(candidateState))
-            await enqueueReplaceWorkflowState({
+
+            enqueueReplaceWorkflowState({
               workflowId: activeWorkflowId,
               state: cleanState,
+            }).catch((error) => {
+              logger.warn('Failed to broadcast workflow state (non-blocking)', { error })
             })
 
-            // Persist to database
-            const persisted = await persistWorkflowStateToServer(activeWorkflowId, candidateState)
-
-            if (!persisted) {
-              logger.error('Failed to persist copilot edits, restoring previous workflow state')
-              applyWorkflowStateToStores(activeWorkflowId, previousState)
-              batchedUpdate({
-                hasActiveDiff: Boolean(baselineWorkflow),
-                isShowingDiff: Boolean(baselineWorkflow),
-                isDiffReady: Boolean(baselineWorkflow),
-                diffError: 'Failed to save Copilot changes. Please try again.',
+            persistWorkflowStateToServer(activeWorkflowId, candidateState)
+              .then((persisted) => {
+                if (!persisted) {
+                  logger.warn('Failed to persist copilot edits (state already applied locally)')
+                } else {
+                  logger.info('Workflow diff persisted to database', {
+                    workflowId: activeWorkflowId,
+                  })
+                }
               })
-              throw new Error('Failed to save Copilot changes')
-            }
-
-            const triggerMessageId =
-              capturedBaseline && !get()._triggerMessageId
-                ? await getLatestUserMessageId()
-                : get()._triggerMessageId
-
-            batchedUpdate({
-              hasActiveDiff: true,
-              isShowingDiff: true,
-              isDiffReady: true,
-              baselineWorkflow: baselineWorkflow,
-              baselineWorkflowId,
-              diffAnalysis: diffResult.diff.diffAnalysis || null,
-              diffMetadata: diffResult.diff.metadata,
-              diffError: null,
-              _triggerMessageId: triggerMessageId ?? null,
-            })
-
-            // Emit event for undo/redo recording (unless we're in an undo/redo operation)
-            if (!(window as any).__skipDiffRecording) {
-              window.dispatchEvent(
-                new CustomEvent('record-diff-operation', {
-                  detail: {
-                    type: 'apply-diff',
-                    baselineSnapshot: baselineWorkflow,
-                    proposedState: candidateState,
-                    diffAnalysis: diffResult.diff.diffAnalysis,
-                  },
-                })
-              )
-            }
-
-            logger.info('Workflow diff applied and persisted to main store', {
-              workflowId: activeWorkflowId,
-              blocks: Object.keys(candidateState.blocks || {}).length,
-              edges: candidateState.edges?.length || 0,
-            })
-          } catch (error) {
-            logger.error('Failed to set proposed changes', { error })
-            if (capturedBaseline) {
-              batchedUpdate({
-                baselineWorkflow: null,
-                baselineWorkflowId: null,
-                hasActiveDiff: false,
-                isShowingDiff: false,
+              .catch((error) => {
+                logger.warn('Failed to persist workflow state (non-blocking)', { error })
               })
-            }
-            const message =
-              error instanceof Error ? error.message : 'Failed to create workflow diff'
-            batchedUpdate({ diffError: message, isDiffReady: false })
-            throw error
+          }
+
+          // Emit event for undo/redo recording
+          if (!options?.skipRecording) {
+            window.dispatchEvent(
+              new CustomEvent('record-diff-operation', {
+                detail: {
+                  type: 'apply-diff',
+                  baselineSnapshot: baselineWorkflow,
+                  proposedState: candidateState,
+                  diffAnalysis: diffResult.diff.diffAnalysis,
+                },
+              })
+            )
           }
         },
 
@@ -368,17 +237,7 @@ export const useWorkflowDiffStore = create<WorkflowDiffState & WorkflowDiffActio
 
           diffEngine.clearDiff()
 
-          batchedUpdate({
-            hasActiveDiff: false,
-            isShowingDiff: false,
-            isDiffReady: false,
-            baselineWorkflow: null,
-            baselineWorkflowId: null,
-            diffAnalysis: null,
-            diffMetadata: null,
-            diffError: null,
-            _triggerMessageId: null,
-          })
+          batchedUpdate(RESET_DIFF_STATE)
         },
 
         toggleDiffView: () => {
@@ -394,7 +253,7 @@ export const useWorkflowDiffStore = create<WorkflowDiffState & WorkflowDiffActio
           batchedUpdate({ isShowingDiff: !isShowingDiff })
         },
 
-        acceptChanges: async () => {
+        acceptChanges: async (options) => {
           const activeWorkflowId = useWorkflowRegistry.getState().activeWorkflowId
           if (!activeWorkflowId) {
             logger.error('No active workflow ID found when accepting diff')
@@ -435,17 +294,7 @@ export const useWorkflowDiffStore = create<WorkflowDiffState & WorkflowDiffActio
 
           // Clear diff state FIRST to prevent flash of colors
           // This must happen synchronously before applying the cleaned state
-          set({
-            hasActiveDiff: false,
-            isShowingDiff: false,
-            isDiffReady: false,
-            baselineWorkflow: null,
-            baselineWorkflowId: null,
-            diffAnalysis: null,
-            diffMetadata: null,
-            diffError: null,
-            _triggerMessageId: null,
-          })
+          set(RESET_DIFF_STATE)
 
           // Clear the diff engine
           diffEngine.clearDiff()
@@ -454,7 +303,7 @@ export const useWorkflowDiffStore = create<WorkflowDiffState & WorkflowDiffActio
           applyWorkflowStateToStores(activeWorkflowId, stateToApply)
 
           // Emit event for undo/redo recording (unless we're in an undo/redo operation)
-          if (!(window as any).__skipDiffRecording) {
+          if (!options?.skipRecording) {
             window.dispatchEvent(
               new CustomEvent('record-diff-operation', {
                 detail: {
@@ -468,8 +317,9 @@ export const useWorkflowDiffStore = create<WorkflowDiffState & WorkflowDiffActio
             )
           }
 
+          // Background operations (fire-and-forget) - don't block
           if (triggerMessageId) {
-            fetch('/api/copilot/stats', {
+            fetch(COPILOT_STATS_API_PATH, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -477,20 +327,28 @@ export const useWorkflowDiffStore = create<WorkflowDiffState & WorkflowDiffActio
                 diffCreated: true,
                 diffAccepted: true,
               }),
-            }).catch(() => {})
+            }).catch((error) => {
+              logger.warn('Failed to send diff-accepted stats', {
+                error: error instanceof Error ? error.message : String(error),
+                messageId: triggerMessageId,
+              })
+            })
           }
 
-          const toolCallId = await findLatestEditWorkflowToolCallId()
-          if (toolCallId) {
-            try {
-              await getClientTool(toolCallId)?.handleAccept?.()
-            } catch (error) {
-              logger.warn('Failed to notify tool accept state', { error })
+          findLatestEditWorkflowToolCallId().then((toolCallId) => {
+            if (toolCallId) {
+              import('@/stores/panel/copilot/store')
+                .then(({ useCopilotStore }) => {
+                  useCopilotStore.getState().updatePreviewToolCallState('accepted', toolCallId)
+                })
+                .catch((error) => {
+                  logger.warn('Failed to update tool accept state', { error })
+                })
             }
-          }
+          })
         },
 
-        rejectChanges: async () => {
+        rejectChanges: async (options) => {
           const { baselineWorkflow, baselineWorkflowId, _triggerMessageId, diffAnalysis } = get()
           const activeWorkflowId = useWorkflowRegistry.getState().activeWorkflowId
 
@@ -522,29 +380,17 @@ export const useWorkflowDiffStore = create<WorkflowDiffState & WorkflowDiffActio
           })
           const afterReject = cloneWorkflowState(baselineWorkflow)
 
+          // Clear diff state FIRST for instant UI feedback
+          set(RESET_DIFF_STATE)
+
+          // Clear the diff engine
+          diffEngine.clearDiff()
+
           // Apply baseline state locally
           applyWorkflowStateToStores(baselineWorkflowId, baselineWorkflow)
 
-          // Broadcast to other users
-          logger.info('Broadcasting reject to other users', {
-            workflowId: activeWorkflowId,
-            blockCount: Object.keys(baselineWorkflow.blocks).length,
-          })
-
-          await enqueueReplaceWorkflowState({
-            workflowId: activeWorkflowId,
-            state: baselineWorkflow,
-            immediate: true,
-          })
-
-          // Persist to database
-          const persisted = await persistWorkflowStateToServer(baselineWorkflowId, baselineWorkflow)
-          if (!persisted) {
-            throw new Error('Failed to restore baseline workflow state')
-          }
-
-          // Emit event for undo/redo recording
-          if (!(window as any).__skipDiffRecording) {
+          // Emit event for undo/redo recording synchronously
+          if (!options?.skipRecording) {
             window.dispatchEvent(
               new CustomEvent('record-diff-operation', {
                 detail: {
@@ -558,8 +404,27 @@ export const useWorkflowDiffStore = create<WorkflowDiffState & WorkflowDiffActio
             )
           }
 
+          // Background operations (fire-and-forget) - don't block UI
+          // Broadcast to other users
+          logger.info('Broadcasting reject to other users', {
+            workflowId: activeWorkflowId,
+            blockCount: Object.keys(baselineWorkflow.blocks).length,
+          })
+
+          enqueueReplaceWorkflowState({
+            workflowId: activeWorkflowId,
+            state: baselineWorkflow,
+          }).catch((error) => {
+            logger.error('Failed to broadcast reject to other users:', error)
+          })
+
+          // Persist to database in background
+          persistWorkflowStateToServer(baselineWorkflowId, baselineWorkflow).catch((error) => {
+            logger.error('Failed to persist baseline workflow state:', error)
+          })
+
           if (_triggerMessageId) {
-            fetch('/api/copilot/stats', {
+            fetch(COPILOT_STATS_API_PATH, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -567,19 +432,25 @@ export const useWorkflowDiffStore = create<WorkflowDiffState & WorkflowDiffActio
                 diffCreated: true,
                 diffAccepted: false,
               }),
-            }).catch(() => {})
+            }).catch((error) => {
+              logger.warn('Failed to send diff-rejected stats', {
+                error: error instanceof Error ? error.message : String(error),
+                messageId: _triggerMessageId,
+              })
+            })
           }
 
-          const toolCallId = await findLatestEditWorkflowToolCallId()
-          if (toolCallId) {
-            try {
-              await getClientTool(toolCallId)?.handleReject?.()
-            } catch (error) {
-              logger.warn('Failed to notify tool reject state', { error })
+          findLatestEditWorkflowToolCallId().then((toolCallId) => {
+            if (toolCallId) {
+              import('@/stores/panel/copilot/store')
+                .then(({ useCopilotStore }) => {
+                  useCopilotStore.getState().updatePreviewToolCallState('rejected', toolCallId)
+                })
+                .catch((error) => {
+                  logger.warn('Failed to update tool reject state', { error })
+                })
             }
-          }
-
-          get().clearDiff({ restoreBaseline: false })
+          })
         },
 
         reapplyDiffMarkers: () => {
@@ -595,11 +466,13 @@ export const useWorkflowDiffStore = create<WorkflowDiffState & WorkflowDiffActio
           const needsUpdate =
             diffAnalysis.new_blocks?.some((blockId) => {
               const block = currentBlocks[blockId]
-              return block && (block as any).is_diff !== 'new'
+              const blockDiffState = (block as { is_diff?: string } | undefined)?.is_diff
+              return block && blockDiffState !== 'new'
             }) ||
             diffAnalysis.edited_blocks?.some((blockId) => {
               const block = currentBlocks[blockId]
-              return block && (block as any).is_diff !== 'edited'
+              const blockDiffState = (block as { is_diff?: string } | undefined)?.is_diff
+              return block && blockDiffState !== 'edited'
             })
 
           if (!needsUpdate) {
@@ -613,11 +486,12 @@ export const useWorkflowDiffStore = create<WorkflowDiffState & WorkflowDiffActio
           Object.entries(currentBlocks).forEach(([blockId, block]) => {
             const isNewBlock = diffAnalysis.new_blocks?.includes(blockId)
             const isEditedBlock = diffAnalysis.edited_blocks?.includes(blockId)
+            const blockDiffState = (block as { is_diff?: string } | undefined)?.is_diff
 
-            if (isNewBlock && (block as any).is_diff !== 'new') {
+            if (isNewBlock && blockDiffState !== 'new') {
               updatedBlocks[blockId] = { ...block, is_diff: 'new' }
               hasChanges = true
-            } else if (isEditedBlock && (block as any).is_diff !== 'edited') {
+            } else if (isEditedBlock && blockDiffState !== 'edited') {
               updatedBlocks[blockId] = { ...block, is_diff: 'edited' }
 
               // Re-apply field_diffs if available

@@ -1,5 +1,6 @@
 import type { ToolConfig } from '@/tools/types'
 import type { WikipediaSearchParams, WikipediaSearchResponse } from '@/tools/wikipedia/types'
+import { WIKIPEDIA_SEARCH_RESULT_OUTPUT_PROPERTIES } from '@/tools/wikipedia/types'
 
 export const searchTool: ToolConfig<WikipediaSearchParams, WikipediaSearchResponse> = {
   id: 'wikipedia_search',
@@ -41,7 +42,11 @@ export const searchTool: ToolConfig<WikipediaSearchParams, WikipediaSearchRespon
     },
     method: 'GET',
     headers: () => ({
+<<<<<<< HEAD
       'User-Agent': 'SimStudio/1.0 (https://peerbie.com)',
+=======
+      'User-Agent': 'Sim/1.0 (https://sim.ai)',
+>>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b
       Accept: 'application/json',
     }),
   },
@@ -77,11 +82,7 @@ export const searchTool: ToolConfig<WikipediaSearchParams, WikipediaSearchRespon
       description: 'Array of matching Wikipedia pages',
       items: {
         type: 'object',
-        properties: {
-          title: { type: 'string' },
-          excerpt: { type: 'string' },
-          url: { type: 'string' },
-        },
+        properties: WIKIPEDIA_SEARCH_RESULT_OUTPUT_PROPERTIES,
       },
     },
     totalHits: {

@@ -1,4 +1,4 @@
-import { env } from '@/lib/env'
+import { env } from '@/lib/core/config/env'
 import type { TrelloCreateCardParams, TrelloCreateCardResponse } from '@/tools/trello/types'
 import type { ToolConfig } from '@/tools/types'
 
@@ -24,13 +24,13 @@ export const trelloCreateCardTool: ToolConfig<TrelloCreateCardParams, TrelloCrea
       type: 'string',
       required: true,
       visibility: 'user-or-llm',
-      description: 'ID of the board to create the card on',
+      description: 'Trello board ID (24-character hex string)',
     },
     listId: {
       type: 'string',
       required: true,
       visibility: 'user-or-llm',
-      description: 'ID of the list to create the card in',
+      description: 'Trello list ID (24-character hex string)',
     },
     name: {
       type: 'string',
@@ -60,7 +60,7 @@ export const trelloCreateCardTool: ToolConfig<TrelloCreateCardParams, TrelloCrea
       type: 'string',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Comma-separated list of label IDs',
+      description: 'Comma-separated list of label IDs (24-character hex strings)',
     },
   },
 
@@ -119,11 +119,9 @@ export const trelloCreateCardTool: ToolConfig<TrelloCreateCardParams, TrelloCrea
   },
 
   outputs: {
-    success: { type: 'boolean', description: 'Whether the card was created successfully' },
     card: {
       type: 'object',
       description: 'The created card object with id, name, desc, url, and other properties',
     },
-    error: { type: 'string', description: 'Error message if operation failed' },
   },
 }

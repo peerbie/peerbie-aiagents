@@ -1,13 +1,19 @@
 import { db } from '@sim/db'
 import { templates, workflow, workflowDeploymentVersion } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { eq, sql } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 import { getSession } from '@/lib/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { getBaseUrl } from '@/lib/urls/utils'
-import { generateRequestId } from '@/lib/utils'
-import { regenerateWorkflowStateIds } from '@/lib/workflows/db-helpers'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { getInternalApiBaseUrl } from '@/lib/core/utils/urls'
+import { canAccessTemplate, verifyTemplateOwnership } from '@/lib/templates/permissions'
+import {
+  type RegenerateStateInput,
+  regenerateWorkflowStateIds,
+} from '@/lib/workflows/persistence/utils'
+import { deduplicateWorkflowName } from '@/lib/workflows/utils'
+import { getUserEntityPermissions, getWorkspaceById } from '@/lib/workspaces/permissions/utils'
 
 const logger = createLogger('TemplateUseAPI')
 
@@ -41,11 +47,37 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json({ error: 'Workspace ID is required' }, { status: 400 })
     }
 
+    const workspace = await getWorkspaceById(workspaceId)
+    if (!workspace) {
+      return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
+    }
+
+    const permission = await getUserEntityPermissions(session.user.id, 'workspace', workspaceId)
+    if (permission !== 'admin' && permission !== 'write') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
     logger.debug(
       `[${requestId}] Using template: ${id}, user: ${session.user.id}, workspace: ${workspaceId}, connect: ${connectToTemplate}`
     )
 
     // Get the template
+    const templateAccess = await canAccessTemplate(id, session.user.id)
+    if (!templateAccess.allowed) {
+      logger.warn(`[${requestId}] Template not found: ${id}`)
+      return NextResponse.json({ error: 'Template not found' }, { status: 404 })
+    }
+
+    if (connectToTemplate) {
+      const ownership = await verifyTemplateOwnership(id, session.user.id, 'admin')
+      if (!ownership.authorized) {
+        return NextResponse.json(
+          { error: ownership.error || 'Access denied' },
+          { status: ownership.status || 403 }
+        )
+      }
+    }
+
     const template = await db
       .select({
         id: templates.id,
@@ -57,11 +89,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       .from(templates)
       .where(eq(templates.id, id))
       .limit(1)
-
-    if (template.length === 0) {
-      logger.warn(`[${requestId}] Template not found: ${id}`)
-      return NextResponse.json({ error: 'Template not found' }, { status: 404 })
-    }
 
     const templateData = template[0]
 
@@ -83,14 +110,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return mapped
     })()
 
-    // Step 1: Create the workflow record (like imports do)
+    const rawName =
+      connectToTemplate && !templateData.workflowId
+        ? templateData.name
+        : `${templateData.name} (copy)`
+    const dedupedName = await deduplicateWorkflowName(rawName, workspaceId, null)
+
     await db.insert(workflow).values({
       id: newWorkflowId,
       workspaceId: workspaceId,
-      name:
-        connectToTemplate && !templateData.workflowId
-          ? templateData.name
-          : `${templateData.name} (copy)`,
+      name: dedupedName,
       description: (templateData.details as TemplateDetails | null)?.tagline || null,
       userId: session.user.id,
       variables: remappedVariables, // Remap variable IDs and workflowId for the new workflow
@@ -104,22 +133,26 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // Step 2: Regenerate IDs when creating a copy (not when connecting/editing template)
     // When connecting to template (edit mode), keep original IDs
     // When using template (copy mode), regenerate all IDs to avoid conflicts
+    const templateState = templateData.state as RegenerateStateInput
     const workflowState = connectToTemplate
-      ? templateData.state
-      : regenerateWorkflowStateIds(templateData.state)
+      ? templateState
+      : regenerateWorkflowStateIds(templateState)
 
     // Step 3: Save the workflow state using the existing state endpoint (like imports do)
     // Ensure variables in state are remapped for the new workflow as well
     const workflowStateWithVariables = { ...workflowState, variables: remappedVariables }
-    const stateResponse = await fetch(`${getBaseUrl()}/api/workflows/${newWorkflowId}/state`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        // Forward the session cookie for authentication
-        cookie: request.headers.get('cookie') || '',
-      },
-      body: JSON.stringify(workflowStateWithVariables),
-    })
+    const stateResponse = await fetch(
+      `${getInternalApiBaseUrl()}/api/workflows/${newWorkflowId}/state`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          // Forward the session cookie for authentication
+          cookie: request.headers.get('cookie') || '',
+        },
+        body: JSON.stringify(workflowStateWithVariables),
+      }
+    )
 
     if (!stateResponse.ok) {
       logger.error(`[${requestId}] Failed to save workflow state for template use`)
@@ -136,7 +169,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       // Prepare template update data
       const updateData: any = {
         views: sql`${templates.views} + 1`,
-        updatedAt: now,
       }
 
       // If connecting to template for editing, also update the workflowId
@@ -169,18 +201,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       `[${requestId}] Successfully used template: ${id}, created workflow: ${newWorkflowId}`
     )
 
-    // Track template usage
     try {
-      const { trackPlatformEvent } = await import('@/lib/telemetry/tracer')
+      const { PlatformEvents } = await import('@/lib/core/telemetry')
       const templateState = templateData.state as any
-      trackPlatformEvent('platform.template.used', {
-        'template.id': id,
-        'template.name': templateData.name,
-        'workflow.created_id': newWorkflowId,
-        'workflow.blocks_count': templateState?.blocks
-          ? Object.keys(templateState.blocks).length
-          : 0,
-        'workspace.id': workspaceId,
+      PlatformEvents.templateUsed({
+        templateId: id,
+        templateName: templateData.name,
+        newWorkflowId,
+        blocksCount: templateState?.blocks ? Object.keys(templateState.blocks).length : 0,
+        workspaceId,
       })
     } catch (_e) {
       // Silently fail

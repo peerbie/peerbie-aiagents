@@ -1,4 +1,5 @@
 import type { BranchResponse, GetBranchParams } from '@/tools/github/types'
+import { BRANCH_OUTPUT_PROPERTIES } from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const getBranchTool: ToolConfig<GetBranchParams, BranchResponse> = {
@@ -88,5 +89,34 @@ Protected: ${branch.protected ? 'Yes' : 'No'}`
         protected: { type: 'boolean', description: 'Whether branch is protected' },
       },
     },
+  },
+}
+
+export const getBranchV2Tool: ToolConfig<GetBranchParams, any> = {
+  id: 'github_get_branch_v2',
+  name: getBranchTool.name,
+  description: getBranchTool.description,
+  version: '2.0.0',
+  params: getBranchTool.params,
+  request: getBranchTool.request,
+
+  transformResponse: async (response: Response) => {
+    const branch = await response.json()
+    return {
+      success: true,
+      output: {
+        name: branch.name,
+        commit: branch.commit,
+        protected: branch.protected,
+        protection: branch.protection,
+        protection_url: branch.protection_url,
+      },
+    }
+  },
+
+  outputs: {
+    ...BRANCH_OUTPUT_PROPERTIES,
+    protection: { type: 'json', description: 'Protection settings object' },
+    protection_url: { type: 'string', description: 'URL to protection settings' },
   },
 }

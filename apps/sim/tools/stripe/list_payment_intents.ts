@@ -1,4 +1,5 @@
 import type { ListPaymentIntentsParams, PaymentIntentListResponse } from '@/tools/stripe/types'
+import { LIST_METADATA_OUTPUT_PROPERTIES, PAYMENT_INTENT_OUTPUT } from '@/tools/stripe/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const stripeListPaymentIntentsTool: ToolConfig<
@@ -72,12 +73,14 @@ export const stripeListPaymentIntentsTool: ToolConfig<
 
   outputs: {
     payment_intents: {
-      type: 'json',
+      type: 'array',
       description: 'Array of Payment Intent objects',
+      items: PAYMENT_INTENT_OUTPUT,
     },
     metadata: {
       type: 'json',
       description: 'List metadata including count and has_more',
+      properties: LIST_METADATA_OUTPUT_PROPERTIES,
     },
   },
 }

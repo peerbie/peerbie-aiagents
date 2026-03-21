@@ -1,19 +1,11 @@
-'use client'
-
-import { useEffect } from 'react'
 import Link from 'next/link'
-import { getEnv } from '@/lib/env'
-import { LegalLayout } from '@/app/(landing)/components'
+import { getEnv } from '@/lib/core/config/env'
+import { ExternalRedirect, LegalLayout } from '@/app/(landing)/components'
 
 export default function PrivacyPolicy() {
-  useEffect(() => {
-    const privacyUrl = getEnv('NEXT_PUBLIC_PRIVACY_URL')
-    if (privacyUrl?.startsWith('http')) {
-      window.location.href = privacyUrl
-    }
-  }, [])
   return (
     <LegalLayout title='Privacy Policy'>
+      <ExternalRedirect url={getEnv('NEXT_PUBLIC_PRIVACY_URL') ?? ''} />
       <section>
         <p className='mb-4'>Last Updated: October 11, 2025</p>
         <p>
@@ -582,7 +574,7 @@ export default function PrivacyPolicy() {
           Please note that we may ask you to verify your identity before responding to such
           requests.
         </p>
-        <p className='mb-4 border-[var(--brand-primary-hex)] border-l-4 bg-[var(--brand-primary-hex)]/10 p-3'>
+        <p className='mb-4 border-[#3d3d3d] border-l-4 bg-[#2A2A2A] p-3 text-[#ECECEC]'>
           You have the right to complain to a Data Protection Authority about our collection and use
           of your Personal Information. For more information, please contact your local data
           protection authority in the European Economic Area (EEA).
@@ -767,7 +759,7 @@ export default function PrivacyPolicy() {
               privacy@peerbie.com
             </Link>
           </li>
-          <li>Mailing Address: Sim, 80 Langton St, San Francisco, CA 94133, USA</li>
+          <li>Mailing Address: Sim, 80 Langton St, San Francisco, CA 94103, USA</li>
         </ul>
         <p>We will respond to your request within a reasonable timeframe.</p>
       </section>

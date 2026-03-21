@@ -1,12 +1,13 @@
 import { GithubIcon } from '@/components/icons'
 import type { BlockConfig } from '@/blocks/types'
 import { AuthMode } from '@/blocks/types'
+import { createVersionedToolSelector } from '@/blocks/utils'
 import type { GitHubResponse } from '@/tools/github/types'
 import { getTrigger } from '@/triggers'
 
 export const GitHubBlock: BlockConfig<GitHubResponse> = {
   type: 'github',
-  name: 'GitHub',
+  name: 'GitHub (Legacy)',
   description: 'Interact with GitHub or trigger workflows from GitHub events',
   authMode: AuthMode.ApiKey,
   longDescription:
@@ -16,6 +17,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
   bgColor: '#181C1E',
   icon: GithubIcon,
   triggerAllowed: true,
+  hideFromToolbar: true,
   subBlocks: [
     {
       id: 'operation',
@@ -82,6 +84,44 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'Create project', id: 'github_create_project' },
         { label: 'Update project', id: 'github_update_project' },
         { label: 'Delete project', id: 'github_delete_project' },
+        // Search Operations
+        { label: 'Search code', id: 'github_search_code' },
+        { label: 'Search commits', id: 'github_search_commits' },
+        { label: 'Search issues', id: 'github_search_issues' },
+        { label: 'Search repositories', id: 'github_search_repos' },
+        { label: 'Search users', id: 'github_search_users' },
+        // Commit Operations
+        { label: 'List commits', id: 'github_list_commits' },
+        { label: 'Get commit', id: 'github_get_commit' },
+        { label: 'Compare commits', id: 'github_compare_commits' },
+        // Gist Operations
+        { label: 'Create gist', id: 'github_create_gist' },
+        { label: 'Get gist', id: 'github_get_gist' },
+        { label: 'List gists', id: 'github_list_gists' },
+        { label: 'Update gist', id: 'github_update_gist' },
+        { label: 'Delete gist', id: 'github_delete_gist' },
+        { label: 'Fork gist', id: 'github_fork_gist' },
+        { label: 'Star gist', id: 'github_star_gist' },
+        { label: 'Unstar gist', id: 'github_unstar_gist' },
+        // Fork Operations
+        { label: 'Fork repository', id: 'github_fork_repo' },
+        { label: 'List forks', id: 'github_list_forks' },
+        // Milestone Operations
+        { label: 'Create milestone', id: 'github_create_milestone' },
+        { label: 'Get milestone', id: 'github_get_milestone' },
+        { label: 'List milestones', id: 'github_list_milestones' },
+        { label: 'Update milestone', id: 'github_update_milestone' },
+        { label: 'Delete milestone', id: 'github_delete_milestone' },
+        // Reaction Operations
+        { label: 'Add issue reaction', id: 'github_create_issue_reaction' },
+        { label: 'Remove issue reaction', id: 'github_delete_issue_reaction' },
+        { label: 'Add comment reaction', id: 'github_create_comment_reaction' },
+        { label: 'Remove comment reaction', id: 'github_delete_comment_reaction' },
+        // Star Operations
+        { label: 'Star repository', id: 'github_star_repo' },
+        { label: 'Unstar repository', id: 'github_unstar_repo' },
+        { label: 'Check if starred', id: 'github_check_star' },
+        { label: 'List stargazers', id: 'github_list_stargazers' },
       ],
       value: () => 'github_pr',
     },
@@ -129,6 +169,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., main (leave empty for default)',
       condition: { field: 'operation', value: 'github_latest_commit' },
+      mode: 'advanced',
     },
     // Comment operations parameters
     {
@@ -161,6 +202,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., 30 (default: 30, max: 100)',
       condition: { field: 'operation', value: 'github_list_issue_comments' },
+      mode: 'advanced',
     },
     {
       id: 'comment_id',
@@ -200,6 +242,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., 30 (default: 30, max: 100)',
       condition: { field: 'operation', value: 'github_list_pr_comments' },
+      mode: 'advanced',
     },
     // Pull request operations parameters
     {
@@ -232,6 +275,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'long-input',
       placeholder: 'Enter pull request description (optional)',
       condition: { field: 'operation', value: 'github_create_pr' },
+      mode: 'advanced',
     },
     {
       id: 'draft',
@@ -242,6 +286,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'Yes', id: 'true' },
       ],
       condition: { field: 'operation', value: 'github_create_pr' },
+      mode: 'advanced',
     },
     {
       id: 'pullNumber',
@@ -257,6 +302,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'Enter new title (optional)',
       condition: { field: 'operation', value: 'github_update_pr' },
+      mode: 'advanced',
     },
     {
       id: 'body',
@@ -264,6 +310,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'long-input',
       placeholder: 'Enter new description (optional)',
       condition: { field: 'operation', value: 'github_update_pr' },
+      mode: 'advanced',
     },
     {
       id: 'state',
@@ -274,6 +321,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'Closed', id: 'closed' },
       ],
       condition: { field: 'operation', value: 'github_update_pr' },
+      mode: 'advanced',
     },
     {
       id: 'pullNumber',
@@ -293,6 +341,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'Rebase', id: 'rebase' },
       ],
       condition: { field: 'operation', value: 'github_merge_pr' },
+      mode: 'advanced',
     },
     {
       id: 'commit_title',
@@ -300,6 +349,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'Enter commit title (optional)',
       condition: { field: 'operation', value: 'github_merge_pr' },
+      mode: 'advanced',
     },
     {
       id: 'state',
@@ -311,6 +361,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'All', id: 'all' },
       ],
       condition: { field: 'operation', value: 'github_list_prs' },
+      mode: 'advanced',
     },
     {
       id: 'per_page',
@@ -318,6 +369,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., 30 (default: 30, max: 100)',
       condition: { field: 'operation', value: 'github_list_prs' },
+      mode: 'advanced',
     },
     {
       id: 'pullNumber',
@@ -349,6 +401,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'Comma-separated: user1,user2',
       condition: { field: 'operation', value: 'github_request_reviewers' },
+      mode: 'advanced',
     },
     {
       id: 'team_reviewers',
@@ -356,6 +409,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'Comma-separated: team1,team2',
       condition: { field: 'operation', value: 'github_request_reviewers' },
+      mode: 'advanced',
     },
     // File operations parameters
     {
@@ -372,6 +426,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., main (optional)',
       condition: { field: 'operation', value: 'github_get_file_content' },
+      mode: 'advanced',
     },
     {
       id: 'path',
@@ -403,6 +458,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., main (optional)',
       condition: { field: 'operation', value: 'github_create_file' },
+      mode: 'advanced',
     },
     {
       id: 'path',
@@ -442,6 +498,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., main (optional)',
       condition: { field: 'operation', value: 'github_update_file' },
+      mode: 'advanced',
     },
     {
       id: 'path',
@@ -473,6 +530,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., main (optional)',
       condition: { field: 'operation', value: 'github_delete_file' },
+      mode: 'advanced',
     },
     {
       id: 'path',
@@ -480,6 +538,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., src (leave empty for root)',
       condition: { field: 'operation', value: 'github_get_tree' },
+      mode: 'advanced',
     },
     {
       id: 'ref',
@@ -487,6 +546,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., main (optional)',
       condition: { field: 'operation', value: 'github_get_tree' },
+      mode: 'advanced',
     },
     // Branch operations parameters
     {
@@ -499,6 +559,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'Unprotected', id: 'false' },
       ],
       condition: { field: 'operation', value: 'github_list_branches' },
+      mode: 'advanced',
     },
     {
       id: 'branch',
@@ -554,6 +615,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'JSON: {"strict":true,"contexts":["ci/test"]}',
       condition: { field: 'operation', value: 'github_update_branch_protection' },
+      mode: 'advanced',
     },
     {
       id: 'enforce_admins',
@@ -564,6 +626,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'Yes', id: 'true' },
       ],
       condition: { field: 'operation', value: 'github_update_branch_protection' },
+      mode: 'advanced',
     },
     {
       id: 'required_pull_request_reviews',
@@ -571,6 +634,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'JSON: {"required_approving_review_count":1}',
       condition: { field: 'operation', value: 'github_update_branch_protection' },
+      mode: 'advanced',
     },
     // Issue operations parameters
     {
@@ -587,6 +651,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'long-input',
       placeholder: 'Enter issue description (optional)',
       condition: { field: 'operation', value: 'github_create_issue' },
+      mode: 'advanced',
     },
     {
       id: 'labels',
@@ -594,6 +659,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'Comma-separated: bug,enhancement',
       condition: { field: 'operation', value: 'github_create_issue' },
+      mode: 'advanced',
     },
     {
       id: 'assignees',
@@ -601,6 +667,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'Comma-separated: user1,user2',
       condition: { field: 'operation', value: 'github_create_issue' },
+      mode: 'advanced',
     },
     {
       id: 'issue_number',
@@ -616,6 +683,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'Enter new title (optional)',
       condition: { field: 'operation', value: 'github_update_issue' },
+      mode: 'advanced',
     },
     {
       id: 'body',
@@ -623,6 +691,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'long-input',
       placeholder: 'Enter new description (optional)',
       condition: { field: 'operation', value: 'github_update_issue' },
+      mode: 'advanced',
     },
     {
       id: 'state',
@@ -633,6 +702,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'Closed', id: 'closed' },
       ],
       condition: { field: 'operation', value: 'github_update_issue' },
+      mode: 'advanced',
     },
     {
       id: 'state',
@@ -644,6 +714,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'All', id: 'all' },
       ],
       condition: { field: 'operation', value: 'github_list_issues' },
+      mode: 'advanced',
     },
     {
       id: 'per_page',
@@ -651,6 +722,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., 30 (default: 30, max: 100)',
       condition: { field: 'operation', value: 'github_list_issues' },
+      mode: 'advanced',
     },
     {
       id: 'issue_number',
@@ -731,6 +803,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., Version 1.0.0',
       condition: { field: 'operation', value: 'github_create_release' },
+      mode: 'advanced',
     },
     {
       id: 'body',
@@ -738,6 +811,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'long-input',
       placeholder: 'Enter release notes (optional)',
       condition: { field: 'operation', value: 'github_create_release' },
+      mode: 'advanced',
     },
     {
       id: 'draft',
@@ -748,6 +822,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'Yes', id: 'true' },
       ],
       condition: { field: 'operation', value: 'github_create_release' },
+      mode: 'advanced',
     },
     {
       id: 'prerelease',
@@ -758,6 +833,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'Yes', id: 'true' },
       ],
       condition: { field: 'operation', value: 'github_create_release' },
+      mode: 'advanced',
     },
     {
       id: 'release_id',
@@ -773,6 +849,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., v1.0.1 (optional)',
       condition: { field: 'operation', value: 'github_update_release' },
+      mode: 'advanced',
     },
     {
       id: 'name',
@@ -780,6 +857,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'Enter new name (optional)',
       condition: { field: 'operation', value: 'github_update_release' },
+      mode: 'advanced',
     },
     {
       id: 'body',
@@ -787,6 +865,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'long-input',
       placeholder: 'Enter updated notes (optional)',
       condition: { field: 'operation', value: 'github_update_release' },
+      mode: 'advanced',
     },
     {
       id: 'per_page',
@@ -794,6 +873,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., 30 (default: 30, max: 100)',
       condition: { field: 'operation', value: 'github_list_releases' },
+      mode: 'advanced',
     },
     {
       id: 'release_id',
@@ -818,6 +898,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., 30 (default: 30, max: 100)',
       condition: { field: 'operation', value: 'github_list_workflows' },
+      mode: 'advanced',
     },
     {
       id: 'workflow_id',
@@ -849,6 +930,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'long-input',
       placeholder: 'JSON: {"key":"value"}',
       condition: { field: 'operation', value: 'github_trigger_workflow' },
+      mode: 'advanced',
     },
     {
       id: 'workflow_id',
@@ -856,6 +938,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., 123456 or ci.yml (optional)',
       condition: { field: 'operation', value: 'github_list_workflow_runs' },
+      mode: 'advanced',
     },
     {
       id: 'status',
@@ -868,6 +951,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'Completed', id: 'completed' },
       ],
       condition: { field: 'operation', value: 'github_list_workflow_runs' },
+      mode: 'advanced',
     },
     {
       id: 'per_page',
@@ -875,6 +959,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'e.g., 30 (default: 30, max: 100)',
       condition: { field: 'operation', value: 'github_list_workflow_runs' },
+      mode: 'advanced',
     },
     {
       id: 'run_id',
@@ -977,6 +1062,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       type: 'short-input',
       placeholder: 'Enter new title (optional)',
       condition: { field: 'operation', value: 'github_update_project' },
+      mode: 'advanced',
     },
     {
       id: 'project_public',
@@ -987,6 +1073,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'Public', id: 'true' },
       ],
       condition: { field: 'operation', value: 'github_update_project' },
+      mode: 'advanced',
     },
     {
       id: 'project_id',
@@ -995,6 +1082,459 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       placeholder: 'Project node ID',
       required: true,
       condition: { field: 'operation', value: 'github_delete_project' },
+    },
+    // Search operations parameters
+    {
+      id: 'q',
+      title: 'Search Query',
+      type: 'short-input',
+      placeholder: 'e.g., react language:typescript',
+      required: true,
+      condition: {
+        field: 'operation',
+        value: [
+          'github_search_code',
+          'github_search_commits',
+          'github_search_issues',
+          'github_search_repos',
+          'github_search_users',
+        ],
+      },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a GitHub search query based on the user's description.
+GitHub search supports these qualifiers:
+- For repos: language:python, stars:>1000, forks:>100, topic:react, user:owner, org:name, created:>2023-01-01
+- For code: repo:owner/name, path:src, extension:ts, language:javascript
+- For issues/PRs: is:issue, is:pr, is:open, is:closed, label:bug, author:user, assignee:user
+- For commits: repo:owner/name, author:user, committer:user, author-date:>2023-01-01
+- For users: type:user, type:org, followers:>100, repos:>10, location:city
+
+Examples:
+- "Python repos with more than 1000 stars" -> language:python stars:>1000
+- "Open bugs in facebook/react" -> repo:facebook/react is:issue is:open label:bug
+- "TypeScript files in src folder" -> language:typescript path:src
+
+Return ONLY the search query - no explanations.`,
+        placeholder: 'Describe what you want to search for...',
+      },
+    },
+    {
+      id: 'sort',
+      title: 'Sort By',
+      type: 'dropdown',
+      options: [
+        { label: 'Best match', id: '' },
+        { label: 'Stars', id: 'stars' },
+        { label: 'Forks', id: 'forks' },
+        { label: 'Updated', id: 'updated' },
+      ],
+      condition: { field: 'operation', value: 'github_search_repos' },
+      mode: 'advanced',
+    },
+    {
+      id: 'order',
+      title: 'Order',
+      type: 'dropdown',
+      options: [
+        { label: 'Descending', id: 'desc' },
+        { label: 'Ascending', id: 'asc' },
+      ],
+      condition: {
+        field: 'operation',
+        value: [
+          'github_search_code',
+          'github_search_commits',
+          'github_search_issues',
+          'github_search_repos',
+          'github_search_users',
+        ],
+      },
+      mode: 'advanced',
+    },
+    // Commit operations parameters
+    {
+      id: 'sha',
+      title: 'SHA or Branch',
+      type: 'short-input',
+      placeholder: 'e.g., main or abc123',
+      condition: { field: 'operation', value: 'github_list_commits' },
+      mode: 'advanced',
+    },
+    {
+      id: 'author',
+      title: 'Author Filter',
+      type: 'short-input',
+      placeholder: 'GitHub username or email',
+      condition: { field: 'operation', value: 'github_list_commits' },
+      mode: 'advanced',
+    },
+    {
+      id: 'since',
+      title: 'Since Date',
+      type: 'short-input',
+      placeholder: 'ISO 8601: 2024-01-01T00:00:00Z',
+      condition: { field: 'operation', value: ['github_list_commits', 'github_list_gists'] },
+      mode: 'advanced',
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate an ISO 8601 timestamp based on the user's description.
+The timestamp should be in the format: YYYY-MM-DDTHH:MM:SSZ (UTC timezone).
+Examples:
+- "last week" -> Calculate 7 days ago at 00:00:00Z
+- "yesterday" -> Calculate yesterday's date at 00:00:00Z
+- "beginning of this month" -> First day of current month at 00:00:00Z
+- "30 days ago" -> Calculate 30 days before current time
+- "January 1st 2024" -> 2024-01-01T00:00:00Z
+
+Return ONLY the timestamp string - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the start date (e.g., "last week", "beginning of month")...',
+        generationType: 'timestamp',
+      },
+    },
+    {
+      id: 'until',
+      title: 'Until Date',
+      type: 'short-input',
+      placeholder: 'ISO 8601: 2024-12-31T23:59:59Z',
+      condition: { field: 'operation', value: 'github_list_commits' },
+      mode: 'advanced',
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate an ISO 8601 timestamp based on the user's description.
+The timestamp should be in the format: YYYY-MM-DDTHH:MM:SSZ (UTC timezone).
+Examples:
+- "now" -> Current timestamp
+- "end of today" -> Today's date at 23:59:59Z
+- "end of last week" -> Calculate end of last week
+- "yesterday" -> Yesterday's date at 23:59:59Z
+
+Return ONLY the timestamp string - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the end date (e.g., "now", "end of yesterday")...',
+        generationType: 'timestamp',
+      },
+    },
+    {
+      id: 'ref',
+      title: 'Commit Reference',
+      type: 'short-input',
+      placeholder: 'SHA, branch, or tag',
+      required: true,
+      condition: { field: 'operation', value: 'github_get_commit' },
+    },
+    {
+      id: 'base',
+      title: 'Base Reference',
+      type: 'short-input',
+      placeholder: 'Base branch/tag/SHA',
+      required: true,
+      condition: { field: 'operation', value: 'github_compare_commits' },
+    },
+    {
+      id: 'head',
+      title: 'Head Reference',
+      type: 'short-input',
+      placeholder: 'Head branch/tag/SHA',
+      required: true,
+      condition: { field: 'operation', value: 'github_compare_commits' },
+    },
+    // Gist operations parameters
+    {
+      id: 'gist_id',
+      title: 'Gist ID',
+      type: 'short-input',
+      placeholder: 'e.g., aa5a315d61ae9438b18d',
+      required: true,
+      condition: {
+        field: 'operation',
+        value: [
+          'github_get_gist',
+          'github_update_gist',
+          'github_delete_gist',
+          'github_fork_gist',
+          'github_star_gist',
+          'github_unstar_gist',
+        ],
+      },
+    },
+    {
+      id: 'description',
+      title: 'Description',
+      type: 'short-input',
+      placeholder: 'Gist description',
+      condition: { field: 'operation', value: ['github_create_gist', 'github_update_gist'] },
+      mode: 'advanced',
+    },
+    {
+      id: 'files',
+      title: 'Files (JSON)',
+      type: 'long-input',
+      placeholder: '{"file.txt": {"content": "Hello"}}',
+      required: true,
+      condition: { field: 'operation', value: 'github_create_gist' },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a JSON object for GitHub Gist files based on the user's description.
+The format is: {"filename.ext": {"content": "file contents"}}
+
+Examples:
+- "A Python hello world file" -> {"hello.py": {"content": "print('Hello, World!')"}}
+- "A README with project title" -> {"README.md": {"content": "# My Project\\n\\nDescription here"}}
+- "JavaScript function to add numbers" -> {"add.js": {"content": "function add(a, b) {\\n  return a + b;\\n}"}}
+- "Two files: index.html and style.css" -> {"index.html": {"content": "<!DOCTYPE html>..."}, "style.css": {"content": "body { margin: 0; }"}}
+
+Return ONLY valid JSON - no explanations, no markdown formatting.`,
+        placeholder: 'Describe the files you want to create...',
+        generationType: 'json-object',
+      },
+    },
+    {
+      id: 'files',
+      title: 'Files (JSON)',
+      type: 'long-input',
+      placeholder: '{"file.txt": {"content": "Updated"}}',
+      condition: { field: 'operation', value: 'github_update_gist' },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a JSON object for updating GitHub Gist files based on the user's description.
+The format is: {"filename.ext": {"content": "new contents"}}
+To delete a file, set its value to null: {"old-file.txt": null}
+To rename a file, set the new filename: {"old-name.txt": {"filename": "new-name.txt", "content": "..."}}
+
+Examples:
+- "Update hello.py to print goodbye" -> {"hello.py": {"content": "print('Goodbye!')"}}
+- "Delete the old readme" -> {"README.md": null}
+- "Rename script.js to main.js" -> {"script.js": {"filename": "main.js"}}
+
+Return ONLY valid JSON - no explanations, no markdown formatting.`,
+        placeholder: 'Describe the file changes...',
+        generationType: 'json-object',
+      },
+    },
+    {
+      id: 'gist_public',
+      title: 'Public',
+      type: 'dropdown',
+      options: [
+        { label: 'Secret', id: 'false' },
+        { label: 'Public', id: 'true' },
+      ],
+      condition: { field: 'operation', value: 'github_create_gist' },
+      mode: 'advanced',
+    },
+    {
+      id: 'username',
+      title: 'Username',
+      type: 'short-input',
+      placeholder: 'GitHub username (optional)',
+      condition: { field: 'operation', value: 'github_list_gists' },
+      mode: 'advanced',
+    },
+    // Fork operations parameters
+    {
+      id: 'organization',
+      title: 'Organization',
+      type: 'short-input',
+      placeholder: 'Fork to org (optional)',
+      condition: { field: 'operation', value: 'github_fork_repo' },
+      mode: 'advanced',
+    },
+    {
+      id: 'fork_name',
+      title: 'Fork Name',
+      type: 'short-input',
+      placeholder: 'Custom name (optional)',
+      condition: { field: 'operation', value: 'github_fork_repo' },
+      mode: 'advanced',
+    },
+    {
+      id: 'default_branch_only',
+      title: 'Default Branch Only',
+      type: 'dropdown',
+      options: [
+        { label: 'No', id: 'false' },
+        { label: 'Yes', id: 'true' },
+      ],
+      condition: { field: 'operation', value: 'github_fork_repo' },
+      mode: 'advanced',
+    },
+    {
+      id: 'fork_sort',
+      title: 'Sort By',
+      type: 'dropdown',
+      options: [
+        { label: 'Newest', id: 'newest' },
+        { label: 'Oldest', id: 'oldest' },
+        { label: 'Stargazers', id: 'stargazers' },
+        { label: 'Watchers', id: 'watchers' },
+      ],
+      condition: { field: 'operation', value: 'github_list_forks' },
+      mode: 'advanced',
+    },
+    // Milestone operations parameters
+    {
+      id: 'milestone_title',
+      title: 'Milestone Title',
+      type: 'short-input',
+      placeholder: 'e.g., v1.0 Release',
+      required: true,
+      condition: { field: 'operation', value: 'github_create_milestone' },
+    },
+    {
+      id: 'milestone_title',
+      title: 'New Title',
+      type: 'short-input',
+      placeholder: 'Updated title (optional)',
+      condition: { field: 'operation', value: 'github_update_milestone' },
+      mode: 'advanced',
+    },
+    {
+      id: 'milestone_description',
+      title: 'Description',
+      type: 'long-input',
+      placeholder: 'Milestone description',
+      condition: {
+        field: 'operation',
+        value: ['github_create_milestone', 'github_update_milestone'],
+      },
+      mode: 'advanced',
+    },
+    {
+      id: 'due_on',
+      title: 'Due Date',
+      type: 'short-input',
+      placeholder: 'ISO 8601: 2024-12-31T23:59:59Z',
+      condition: {
+        field: 'operation',
+        value: ['github_create_milestone', 'github_update_milestone'],
+      },
+      mode: 'advanced',
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate an ISO 8601 timestamp for a milestone due date based on the user's description.
+The timestamp should be in the format: YYYY-MM-DDTHH:MM:SSZ (UTC timezone).
+Examples:
+- "end of this month" -> Last day of current month at 23:59:59Z
+- "next Friday" -> Calculate next Friday's date at 23:59:59Z
+- "in 2 weeks" -> Calculate 14 days from now at 23:59:59Z
+- "December 31st" -> 2024-12-31T23:59:59Z (current year)
+- "Q1 2025" -> 2025-03-31T23:59:59Z (end of Q1)
+
+Return ONLY the timestamp string - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the due date (e.g., "end of month", "next Friday")...',
+        generationType: 'timestamp',
+      },
+    },
+    {
+      id: 'milestone_number',
+      title: 'Milestone Number',
+      type: 'short-input',
+      placeholder: 'e.g., 1',
+      required: true,
+      condition: {
+        field: 'operation',
+        value: ['github_get_milestone', 'github_update_milestone', 'github_delete_milestone'],
+      },
+    },
+    {
+      id: 'milestone_state',
+      title: 'State Filter',
+      type: 'dropdown',
+      options: [
+        { label: 'Open', id: 'open' },
+        { label: 'Closed', id: 'closed' },
+        { label: 'All', id: 'all' },
+      ],
+      condition: { field: 'operation', value: 'github_list_milestones' },
+      mode: 'advanced',
+    },
+    {
+      id: 'milestone_sort',
+      title: 'Sort By',
+      type: 'dropdown',
+      options: [
+        { label: 'Due Date', id: 'due_on' },
+        { label: 'Completeness', id: 'completeness' },
+      ],
+      condition: { field: 'operation', value: 'github_list_milestones' },
+      mode: 'advanced',
+    },
+    // Reaction operations parameters
+    {
+      id: 'reaction_content',
+      title: 'Reaction',
+      type: 'dropdown',
+      options: [
+        { label: '👍 +1', id: '+1' },
+        { label: '👎 -1', id: '-1' },
+        { label: '😄 Laugh', id: 'laugh' },
+        { label: '😕 Confused', id: 'confused' },
+        { label: '❤️ Heart', id: 'heart' },
+        { label: '🎉 Hooray', id: 'hooray' },
+        { label: '🚀 Rocket', id: 'rocket' },
+        { label: '👀 Eyes', id: 'eyes' },
+      ],
+      required: true,
+      condition: {
+        field: 'operation',
+        value: ['github_create_issue_reaction', 'github_create_comment_reaction'],
+      },
+    },
+    {
+      id: 'issue_number',
+      title: 'Issue Number',
+      type: 'short-input',
+      placeholder: 'e.g., 123',
+      required: true,
+      condition: {
+        field: 'operation',
+        value: ['github_create_issue_reaction', 'github_delete_issue_reaction'],
+      },
+    },
+    {
+      id: 'reaction_id',
+      title: 'Reaction ID',
+      type: 'short-input',
+      placeholder: 'e.g., 12345678',
+      required: true,
+      condition: {
+        field: 'operation',
+        value: ['github_delete_issue_reaction', 'github_delete_comment_reaction'],
+      },
+    },
+    {
+      id: 'comment_id',
+      title: 'Comment ID',
+      type: 'short-input',
+      placeholder: 'e.g., 987654321',
+      required: true,
+      condition: {
+        field: 'operation',
+        value: ['github_create_comment_reaction', 'github_delete_comment_reaction'],
+      },
+    },
+    // Star operations parameters - owner/repo already covered by existing subBlocks
+    {
+      id: 'per_page',
+      title: 'Results Per Page',
+      type: 'short-input',
+      placeholder: 'e.g., 30 (default: 30, max: 100)',
+      condition: {
+        field: 'operation',
+        value: [
+          'github_search_code',
+          'github_search_commits',
+          'github_search_issues',
+          'github_search_repos',
+          'github_search_users',
+          'github_list_commits',
+          'github_list_gists',
+          'github_list_forks',
+          'github_list_milestones',
+          'github_list_stargazers',
+        ],
+      },
+      mode: 'advanced',
     },
     {
       id: 'apiKey',
@@ -1024,6 +1564,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
         { label: 'File-specific Comment', id: 'file_comment' },
       ],
       condition: { field: 'operation', value: 'github_comment' },
+      mode: 'advanced',
     },
     {
       id: 'path',
@@ -1038,6 +1579,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
           value: 'file_comment',
         },
       },
+      mode: 'advanced',
     },
     {
       id: 'line',
@@ -1052,6 +1594,7 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
           value: 'file_comment',
         },
       },
+      mode: 'advanced',
     },
   ],
   tools: {
@@ -1116,6 +1659,44 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       'github_create_project',
       'github_update_project',
       'github_delete_project',
+      // Search tools
+      'github_search_code',
+      'github_search_commits',
+      'github_search_issues',
+      'github_search_repos',
+      'github_search_users',
+      // Commit tools
+      'github_list_commits',
+      'github_get_commit',
+      'github_compare_commits',
+      // Gist tools
+      'github_create_gist',
+      'github_get_gist',
+      'github_list_gists',
+      'github_update_gist',
+      'github_delete_gist',
+      'github_fork_gist',
+      'github_star_gist',
+      'github_unstar_gist',
+      // Fork tools
+      'github_fork_repo',
+      'github_list_forks',
+      // Milestone tools
+      'github_create_milestone',
+      'github_get_milestone',
+      'github_list_milestones',
+      'github_update_milestone',
+      'github_delete_milestone',
+      // Reaction tools
+      'github_create_issue_reaction',
+      'github_delete_issue_reaction',
+      'github_create_comment_reaction',
+      'github_delete_comment_reaction',
+      // Star tools
+      'github_star_repo',
+      'github_unstar_repo',
+      'github_check_star',
+      'github_list_stargazers',
     ],
     config: {
       tool: (params) => {
@@ -1232,6 +1813,75 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
             return 'github_update_project'
           case 'github_delete_project':
             return 'github_delete_project'
+          // Search operations
+          case 'github_search_code':
+            return 'github_search_code'
+          case 'github_search_commits':
+            return 'github_search_commits'
+          case 'github_search_issues':
+            return 'github_search_issues'
+          case 'github_search_repos':
+            return 'github_search_repos'
+          case 'github_search_users':
+            return 'github_search_users'
+          // Commit operations
+          case 'github_list_commits':
+            return 'github_list_commits'
+          case 'github_get_commit':
+            return 'github_get_commit'
+          case 'github_compare_commits':
+            return 'github_compare_commits'
+          // Gist operations
+          case 'github_create_gist':
+            return 'github_create_gist'
+          case 'github_get_gist':
+            return 'github_get_gist'
+          case 'github_list_gists':
+            return 'github_list_gists'
+          case 'github_update_gist':
+            return 'github_update_gist'
+          case 'github_delete_gist':
+            return 'github_delete_gist'
+          case 'github_fork_gist':
+            return 'github_fork_gist'
+          case 'github_star_gist':
+            return 'github_star_gist'
+          case 'github_unstar_gist':
+            return 'github_unstar_gist'
+          // Fork operations
+          case 'github_fork_repo':
+            return 'github_fork_repo'
+          case 'github_list_forks':
+            return 'github_list_forks'
+          // Milestone operations
+          case 'github_create_milestone':
+            return 'github_create_milestone'
+          case 'github_get_milestone':
+            return 'github_get_milestone'
+          case 'github_list_milestones':
+            return 'github_list_milestones'
+          case 'github_update_milestone':
+            return 'github_update_milestone'
+          case 'github_delete_milestone':
+            return 'github_delete_milestone'
+          // Reaction operations
+          case 'github_create_issue_reaction':
+            return 'github_create_issue_reaction'
+          case 'github_delete_issue_reaction':
+            return 'github_delete_issue_reaction'
+          case 'github_create_comment_reaction':
+            return 'github_create_comment_reaction'
+          case 'github_delete_comment_reaction':
+            return 'github_delete_comment_reaction'
+          // Star operations
+          case 'github_star_repo':
+            return 'github_star_repo'
+          case 'github_unstar_repo':
+            return 'github_unstar_repo'
+          case 'github_check_star':
+            return 'github_check_star'
+          case 'github_list_stargazers':
+            return 'github_list_stargazers'
           default:
             return 'github_repo_info'
         }
@@ -1295,6 +1945,38 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
     project_number: { type: 'number', description: 'Project number' },
     project_id: { type: 'string', description: 'Project node ID' },
     project_public: { type: 'boolean', description: 'Project public status' },
+    // Search parameters
+    q: { type: 'string', description: 'Search query with qualifiers' },
+    sort: { type: 'string', description: 'Sort field' },
+    order: { type: 'string', description: 'Sort order (asc or desc)' },
+    // Commit parameters
+    author: { type: 'string', description: 'Author filter' },
+    committer: { type: 'string', description: 'Committer filter' },
+    since: { type: 'string', description: 'Date filter (since)' },
+    until: { type: 'string', description: 'Date filter (until)' },
+    // Gist parameters
+    gist_id: { type: 'string', description: 'Gist ID' },
+    description: { type: 'string', description: 'Description' },
+    files: { type: 'string', description: 'Files JSON object' },
+    gist_public: { type: 'boolean', description: 'Public gist status' },
+    username: { type: 'string', description: 'GitHub username' },
+    // Fork parameters
+    organization: { type: 'string', description: 'Target organization for fork' },
+    fork_name: { type: 'string', description: 'Custom name for fork' },
+    default_branch_only: { type: 'boolean', description: 'Fork only default branch' },
+    fork_sort: { type: 'string', description: 'Fork list sort field' },
+    // Milestone parameters
+    milestone_title: { type: 'string', description: 'Milestone title' },
+    milestone_description: { type: 'string', description: 'Milestone description' },
+    due_on: { type: 'string', description: 'Milestone due date' },
+    milestone_number: { type: 'number', description: 'Milestone number' },
+    milestone_state: { type: 'string', description: 'Milestone state filter' },
+    milestone_sort: { type: 'string', description: 'Milestone sort field' },
+    // Reaction parameters
+    reaction_content: { type: 'string', description: 'Reaction type' },
+    reaction_id: { type: 'number', description: 'Reaction ID' },
+    // Pagination parameters
+    page: { type: 'number', description: 'Page number for pagination' },
   },
   outputs: {
     content: { type: 'string', description: 'Response content' },
@@ -1333,5 +2015,47 @@ export const GitHubBlock: BlockConfig<GitHubResponse> = {
       'github_release_published',
       'github_workflow_run',
     ],
+  },
+}
+
+export const GitHubV2Block: BlockConfig<GitHubResponse> = {
+  ...GitHubBlock,
+  type: 'github_v2',
+  name: 'GitHub',
+  hideFromToolbar: false,
+  tools: {
+    ...GitHubBlock.tools,
+    access: (GitHubBlock.tools?.access || []).map((toolId) => `${toolId}_v2`),
+    config: {
+      ...GitHubBlock.tools?.config,
+      tool: createVersionedToolSelector({
+        baseToolSelector: (params) => (GitHubBlock.tools?.config as any)?.tool(params),
+        suffix: '_v2',
+        fallbackToolId: 'github_create_issue_v2',
+      }),
+      params: (GitHubBlock.tools?.config as any)?.params,
+    },
+  },
+  outputs: {
+    data: { type: 'json', description: 'Operation result data (API-aligned)' },
+
+    // Trigger outputs (unchanged)
+    action: { type: 'string', description: 'The action that was performed' },
+    event_type: { type: 'string', description: 'Type of GitHub event' },
+    repository: { type: 'string', description: 'Repository full name' },
+    repository_name: { type: 'string', description: 'Repository name only' },
+    repository_owner: { type: 'string', description: 'Repository owner username' },
+    sender: { type: 'string', description: 'Username of the user who triggered the event' },
+    sender_id: { type: 'string', description: 'User ID of the sender' },
+    ref: { type: 'string', description: 'Git reference (for push events)' },
+    before: { type: 'string', description: 'SHA of the commit before the push' },
+    after: { type: 'string', description: 'SHA of the commit after the push' },
+    commits: { type: 'string', description: 'Array of commit objects (for push events)' },
+    pull_request: { type: 'string', description: 'Pull request object (for pull_request events)' },
+    issue: { type: 'string', description: 'Issue object (for issues events)' },
+    comment: { type: 'string', description: 'Comment object (for comment events)' },
+    branch: { type: 'string', description: 'Branch name extracted from ref' },
+    commit_message: { type: 'string', description: 'Latest commit message' },
+    commit_author: { type: 'string', description: 'Author of the latest commit' },
   },
 }

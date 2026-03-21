@@ -1,9 +1,10 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   MicrosoftTeamsReadResponse,
   MicrosoftTeamsToolParams,
 } from '@/tools/microsoft_teams/types'
 import {
+  downloadAllReferenceAttachments,
   extractMessageAttachments,
   fetchHostedContentsForChannelMessage,
 } from '@/tools/microsoft_teams/utils'
@@ -33,14 +34,16 @@ export const readChannelTool: ToolConfig<MicrosoftTeamsToolParams, MicrosoftTeam
     teamId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the team to read from',
+      visibility: 'user-or-llm',
+      description:
+        'The ID of the team to read from (e.g., "12345678-abcd-1234-efgh-123456789012" - a GUID from team listings)',
     },
     channelId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the channel to read from',
+      visibility: 'user-or-llm',
+      description:
+        'The ID of the channel to read from (e.g., "19:abc123def456@thread.tacv2" - from channel listings)',
     },
     includeAttachments: {
       type: 'boolean',
@@ -62,18 +65,15 @@ export const readChannelTool: ToolConfig<MicrosoftTeamsToolParams, MicrosoftTeam
         throw new Error('Channel ID is required')
       }
 
-      // URL encode the IDs to handle special characters
       const encodedTeamId = encodeURIComponent(teamId)
       const encodedChannelId = encodeURIComponent(channelId)
 
-      // Fetch the most recent messages from the channel
       const url = `https://graph.microsoft.com/v1.0/teams/${encodedTeamId}/channels/${encodedChannelId}/messages`
 
       return url
     },
     method: 'GET',
     headers: (params) => {
-      // Validate access token
       if (!params.accessToken) {
         throw new Error('Access token is required')
       }
@@ -87,7 +87,6 @@ export const readChannelTool: ToolConfig<MicrosoftTeamsToolParams, MicrosoftTeam
   transformResponse: async (response: Response, params?: MicrosoftTeamsToolParams) => {
     const data = await response.json()
 
-    // Microsoft Graph API returns messages in a 'value' array
     const messages = data.value || []
 
     if (messages.length === 0) {
@@ -107,7 +106,6 @@ export const readChannelTool: ToolConfig<MicrosoftTeamsToolParams, MicrosoftTeam
       }
     }
 
-    // Process messages with attachments
     const processedMessages = await Promise.all(
       messages.map(async (message: any, index: number) => {
         try {
@@ -123,7 +121,6 @@ export const readChannelTool: ToolConfig<MicrosoftTeamsToolParams, MicrosoftTeam
             sender = 'System'
           }
 
-          // Optionally fetch and upload hosted contents
           let uploaded: any[] = []
           if (
             params?.includeAttachments &&
@@ -133,12 +130,19 @@ export const readChannelTool: ToolConfig<MicrosoftTeamsToolParams, MicrosoftTeam
             messageId
           ) {
             try {
-              uploaded = await fetchHostedContentsForChannelMessage({
+              const hostedContents = await fetchHostedContentsForChannelMessage({
                 accessToken: params.accessToken,
                 teamId: params.teamId,
                 channelId: params.channelId,
                 messageId,
               })
+              uploaded.push(...hostedContents)
+
+              const referenceFiles = await downloadAllReferenceAttachments({
+                accessToken: params.accessToken,
+                attachments,
+              })
+              uploaded.push(...referenceFiles)
             } catch (_e) {
               uploaded = []
             }
@@ -167,7 +171,6 @@ export const readChannelTool: ToolConfig<MicrosoftTeamsToolParams, MicrosoftTeam
       })
     )
 
-    // Format the messages into a readable text (no attachment info in content)
     const formattedMessages = processedMessages
       .map((message: any) => {
         const sender = message.sender
@@ -179,7 +182,6 @@ export const readChannelTool: ToolConfig<MicrosoftTeamsToolParams, MicrosoftTeam
       })
       .join('\n\n')
 
-    // Calculate attachment statistics
     const allAttachments = processedMessages.flatMap((msg: any) => msg.attachments || [])
     const attachmentTypes: string[] = []
     const seenTypes = new Set<string>()
@@ -195,7 +197,6 @@ export const readChannelTool: ToolConfig<MicrosoftTeamsToolParams, MicrosoftTeam
       }
     })
 
-    // Create document metadata
     const metadata = {
       teamId: messages[0]?.channelIdentity?.teamId || params?.teamId || '',
       channelId: messages[0]?.channelIdentity?.channelId || params?.channelId || '',
@@ -205,7 +206,6 @@ export const readChannelTool: ToolConfig<MicrosoftTeamsToolParams, MicrosoftTeam
       messages: processedMessages,
     }
 
-    // Flatten uploaded files across all messages for convenience
     const flattenedUploads = processedMessages.flatMap((m: any) => m.uploadedFiles || [])
 
     return {

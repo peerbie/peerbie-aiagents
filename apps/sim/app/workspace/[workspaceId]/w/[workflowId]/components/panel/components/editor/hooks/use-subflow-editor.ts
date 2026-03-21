@@ -1,15 +1,18 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import { useParams } from 'next/navigation'
 import { highlight, languages } from '@/components/emcn'
 import {
   isLikelyReferenceSegment,
   SYSTEM_REFERENCE_PREFIXES,
   splitReferenceSegment,
-} from '@/lib/workflows/references'
+} from '@/lib/workflows/sanitization/references'
 import { checkTagTrigger } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/components/tag-dropdown/tag-dropdown'
+import { restoreCursorAfterInsertion } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/utils'
 import { useAccessibleReferencePrefixes } from '@/app/workspace/[workspaceId]/w/[workflowId]/hooks/use-accessible-reference-prefixes'
+import { normalizeName, REFERENCE } from '@/executor/constants'
 import { createEnvVarPattern, createReferencePattern } from '@/executor/utils/reference-validation'
+import { createShouldHighlightEnvVar, useAvailableEnvVarKeys } from '@/hooks/use-available-env-vars'
 import { useCollaborativeWorkflow } from '@/hooks/use-collaborative-workflow'
-import { normalizeBlockName } from '@/stores/workflows/utils'
 import { useWorkflowStore } from '@/stores/workflows/workflow/store'
 import type { BlockState } from '@/stores/workflows/workflow/types'
 
@@ -26,7 +29,7 @@ const SUBFLOW_CONFIG = {
     },
     typeKey: 'loopType' as const,
     storeKey: 'loops' as const,
-    maxIterations: 100,
+    maxIterations: 1000,
     configKeys: {
       iterations: 'iterations' as const,
       items: 'forEachItems' as const,
@@ -53,28 +56,42 @@ const SUBFLOW_CONFIG = {
  * @returns Subflow editor state and handlers
  */
 export function useSubflowEditor(currentBlock: BlockState | null, currentBlockId: string | null) {
-  const workflowStore = useWorkflowStore()
+  const params = useParams()
+  const workspaceId = params.workspaceId as string
+
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const editorContainerRef = useRef<HTMLDivElement>(null)
-
-  // State
   const [tempInputValue, setTempInputValue] = useState<string | null>(null)
   const [showTagDropdown, setShowTagDropdown] = useState(false)
   const [cursorPosition, setCursorPosition] = useState(0)
 
-  // Check if current block is a subflow
   const isSubflow =
     currentBlock && (currentBlock.type === 'loop' || currentBlock.type === 'parallel')
 
-  // Get subflow configuration
   const subflowConfig = isSubflow ? SUBFLOW_CONFIG[currentBlock.type as 'loop' | 'parallel'] : null
-  const nodeConfig = isSubflow ? workflowStore[subflowConfig!.storeKey][currentBlockId!] : null
+
+  const nodeConfig = useWorkflowStore(
+    useCallback(
+      (state) => {
+        if (!isSubflow || !subflowConfig || !currentBlockId) return null
+        return state[subflowConfig.storeKey][currentBlockId] ?? null
+      },
+      [isSubflow, subflowConfig, currentBlockId]
+    )
+  )
 
   // Get block data for fallback values
   const blockData = isSubflow ? currentBlock?.data : null
 
   // Get accessible prefixes for tag dropdown
   const accessiblePrefixes = useAccessibleReferencePrefixes(currentBlockId || '')
+
+  // Get available env vars for highlighting validation
+  const availableEnvVars = useAvailableEnvVarKeys(workspaceId)
+  const shouldHighlightEnvVar = useMemo(
+    () => createShouldHighlightEnvVar(availableEnvVars),
+    [availableEnvVars]
+  )
 
   // Collaborative actions
   const {
@@ -89,7 +106,7 @@ export function useSubflowEditor(currentBlock: BlockState | null, currentBlockId
    */
   const shouldHighlightReference = useCallback(
     (part: string): boolean => {
-      if (!part.startsWith('<') || !part.endsWith('>')) {
+      if (!part.startsWith(REFERENCE.START) || !part.endsWith(REFERENCE.END)) {
         return false
       }
 
@@ -108,9 +125,9 @@ export function useSubflowEditor(currentBlock: BlockState | null, currentBlockId
         return true
       }
 
-      const inner = reference.slice(1, -1)
-      const [prefix] = inner.split('.')
-      const normalizedPrefix = normalizeBlockName(prefix)
+      const inner = reference.slice(REFERENCE.START.length, -REFERENCE.END.length)
+      const [prefix] = inner.split(REFERENCE.PATH_DELIMITER)
+      const normalizedPrefix = normalizeName(prefix)
 
       if (SYSTEM_REFERENCE_PREFIXES.has(normalizedPrefix)) {
         return true
@@ -135,9 +152,13 @@ export function useSubflowEditor(currentBlock: BlockState | null, currentBlockId
       let processedCode = code
 
       processedCode = processedCode.replace(createEnvVarPattern(), (match) => {
-        const placeholder = `__ENV_VAR_${placeholders.length}__`
-        placeholders.push({ placeholder, original: match, type: 'env' })
-        return placeholder
+        const varName = match.slice(2, -2).trim()
+        if (shouldHighlightEnvVar(varName)) {
+          const placeholder = `__ENV_VAR_${placeholders.length}__`
+          placeholders.push({ placeholder, original: match, type: 'env' })
+          return placeholder
+        }
+        return match
       })
 
       // Use [^<>]+ to prevent matching across nested brackets (e.g., "<3 <real.ref>" should match separately)
@@ -156,20 +177,20 @@ export function useSubflowEditor(currentBlock: BlockState | null, currentBlockId
         if (type === 'env') {
           highlightedCode = highlightedCode.replace(
             placeholder,
-            `<span class="text-blue-500">${original}</span>`
+            `<span style="color: var(--brand-secondary);">${original}</span>`
           )
         } else {
           const escaped = original.replace(/</g, '&lt;').replace(/>/g, '&gt;')
           highlightedCode = highlightedCode.replace(
             placeholder,
-            `<span class="text-blue-500">${escaped}</span>`
+            `<span style="color: var(--brand-secondary);">${escaped}</span>`
           )
         }
       })
 
       return highlightedCode
     },
-    [shouldHighlightReference]
+    [shouldHighlightReference, shouldHighlightEnvVar]
   )
 
   /**
@@ -268,8 +289,9 @@ export function useSubflowEditor(currentBlock: BlockState | null, currentBlockId
    * Handle tag selection from dropdown
    */
   const handleSubflowTagSelect = useCallback(
-    (newValue: string) => {
+    (newValue: string, newCursorPosition: number) => {
       if (!currentBlockId || !isSubflow || !currentBlock) return
+
       collaborativeUpdateIterationCollection(
         currentBlockId,
         currentBlock.type as 'loop' | 'parallel',
@@ -277,12 +299,7 @@ export function useSubflowEditor(currentBlock: BlockState | null, currentBlockId
       )
       setShowTagDropdown(false)
 
-      setTimeout(() => {
-        const textarea = textareaRef.current
-        if (textarea) {
-          textarea.focus()
-        }
-      }, 0)
+      restoreCursorAfterInsertion(textareaRef.current, newCursorPosition)
     },
     [currentBlockId, isSubflow, currentBlock, collaborativeUpdateIterationCollection]
   )

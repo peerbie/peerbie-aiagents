@@ -17,26 +17,26 @@ export const listFormsTool: ToolConfig<TypeformListFormsParams, TypeformListForm
     search: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Search query to filter forms by title',
+      visibility: 'user-or-llm',
+      description: 'Search query to filter forms by title (e.g., "Customer Feedback")',
     },
     page: {
       type: 'number',
       required: false,
-      visibility: 'user-only',
-      description: 'Page number (default: 1)',
+      visibility: 'user-or-llm',
+      description: 'Page number for pagination (e.g., 1, 2, 3)',
     },
     pageSize: {
       type: 'number',
       required: false,
-      visibility: 'user-only',
-      description: 'Number of forms per page (default: 10, max: 200)',
+      visibility: 'user-or-llm',
+      description: 'Number of forms per page (e.g., 10, 25, 50, max: 200)',
     },
     workspaceId: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Filter forms by workspace ID',
+      visibility: 'user-or-llm',
+      description: 'Filter forms by workspace ID (e.g., "ws_abc123")',
     },
   },
 
@@ -89,35 +89,8 @@ export const listFormsTool: ToolConfig<TypeformListFormsParams, TypeformListForm
     },
     items: {
       type: 'array',
-      description: 'Array of form objects',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', description: 'Form unique identifier' },
-          title: { type: 'string', description: 'Form title' },
-          created_at: { type: 'string', description: 'ISO timestamp of form creation' },
-          last_updated_at: { type: 'string', description: 'ISO timestamp of last update' },
-          settings: {
-            type: 'object',
-            properties: {
-              is_public: { type: 'boolean', description: 'Whether form is publicly accessible' },
-            },
-          },
-          theme: {
-            type: 'object',
-            properties: {
-              href: { type: 'string', description: 'Theme API URL reference' },
-            },
-          },
-          _links: {
-            type: 'object',
-            properties: {
-              display: { type: 'string', description: 'Public form URL' },
-              responses: { type: 'string', description: 'Responses API endpoint' },
-            },
-          },
-        },
-      },
+      description:
+        'Array of form objects with id, title, created_at, last_updated_at, settings, theme, and _links',
     },
   },
 }

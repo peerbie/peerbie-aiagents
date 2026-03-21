@@ -1,6 +1,6 @@
 'use client'
 
-import { Code } from '@/components/emcn/components/code/code'
+import { Code } from '@/components/emcn'
 
 interface CodeBlockProps {
   code: string
@@ -8,5 +8,14 @@ interface CodeBlockProps {
 }
 
 export function CodeBlock({ code, language }: CodeBlockProps) {
-  return <Code.Viewer code={code} showGutter={true} language={language} />
+  return (
+    <div className='dark w-full overflow-hidden rounded-md border border-[#2a2a2a] bg-[#1F1F1F] text-sm'>
+      <Code.Viewer
+        code={code}
+        showGutter
+        language={language}
+        className='[&_pre]:!pb-0 m-0 rounded-none border-0 bg-transparent'
+      />
+    </div>
+  )
 }

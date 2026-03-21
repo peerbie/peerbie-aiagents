@@ -1,4 +1,5 @@
 import type { CommentsListResponse, ListIssueCommentsParams } from '@/tools/github/types'
+import { COMMENT_OUTPUT_PROPERTIES, USER_OUTPUT } from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const listIssueCommentsTool: ToolConfig<ListIssueCommentsParams, CommentsListResponse> = {
@@ -136,5 +137,40 @@ export const listIssueCommentsTool: ToolConfig<ListIssueCommentsParams, Comments
         total_count: { type: 'number', description: 'Total number of comments' },
       },
     },
+  },
+}
+
+export const listIssueCommentsV2Tool: ToolConfig<ListIssueCommentsParams, any> = {
+  id: 'github_list_issue_comments_v2',
+  name: listIssueCommentsTool.name,
+  description: listIssueCommentsTool.description,
+  version: '2.0.0',
+  params: listIssueCommentsTool.params,
+  request: listIssueCommentsTool.request,
+
+  transformResponse: async (response: Response) => {
+    const comments = await response.json()
+    return {
+      success: true,
+      output: {
+        items: comments ?? [],
+        count: comments?.length ?? 0,
+      },
+    }
+  },
+
+  outputs: {
+    items: {
+      type: 'array',
+      description: 'Array of comment objects',
+      items: {
+        type: 'object',
+        properties: {
+          ...COMMENT_OUTPUT_PROPERTIES,
+          user: USER_OUTPUT,
+        },
+      },
+    },
+    count: { type: 'number', description: 'Number of comments returned' },
   },
 }

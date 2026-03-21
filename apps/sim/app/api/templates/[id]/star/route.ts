@@ -1,11 +1,11 @@
 import { db } from '@sim/db'
 import { templateStars, templates } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq, sql } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 import { getSession } from '@/lib/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
+import { generateRequestId } from '@/lib/core/utils/request'
 
 const logger = createLogger('TemplateStarAPI')
 
@@ -58,8 +58,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    logger.debug(`[${requestId}] Adding star for template: ${id}, user: ${session.user.id}`)
-
     // Verify the template exists
     const templateExists = await db
       .select({ id: templates.id })
@@ -100,7 +98,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         .update(templates)
         .set({
           stars: sql`${templates.stars} + 1`,
-          updatedAt: new Date(),
         })
         .where(eq(templates.id, id))
     })
@@ -134,8 +131,6 @@ export async function DELETE(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    logger.debug(`[${requestId}] Removing star for template: ${id}, user: ${session.user.id}`)
-
     // Check if the star exists
     const existingStar = await db
       .select({ id: templateStars.id })
@@ -160,7 +155,6 @@ export async function DELETE(
         .update(templates)
         .set({
           stars: sql`GREATEST(${templates.stars} - 1, 0)`,
-          updatedAt: new Date(),
         })
         .where(eq(templates.id, id))
     })

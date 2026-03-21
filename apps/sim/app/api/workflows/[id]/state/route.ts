@@ -1,25 +1,22 @@
 import { db } from '@sim/db'
-import { webhook, workflow, workflowSchedule } from '@sim/db/schema'
+import { workflow } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { eq } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { getSession } from '@/lib/auth'
-import { env } from '@/lib/env'
-import { createLogger } from '@/lib/logs/console/logger'
+import { checkSessionOrInternalAuth } from '@/lib/auth/hybrid'
+import { env } from '@/lib/core/config/env'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { extractAndPersistCustomTools } from '@/lib/workflows/persistence/custom-tools-persistence'
 import {
-  calculateNextRunTime,
-  generateCronExpression,
-  getScheduleTimeValues,
-  validateCronExpression,
-} from '@/lib/schedules/utils'
-import { generateRequestId } from '@/lib/utils'
-import { extractAndPersistCustomTools } from '@/lib/workflows/custom-tools-persistence'
-import { saveWorkflowToNormalizedTables } from '@/lib/workflows/db-helpers'
-import { getWorkflowAccessContext } from '@/lib/workflows/utils'
-import { sanitizeAgentToolsInBlocks } from '@/lib/workflows/validation'
-import type { BlockState } from '@/stores/workflows/workflow/types'
+  loadWorkflowFromNormalizedTables,
+  saveWorkflowToNormalizedTables,
+} from '@/lib/workflows/persistence/utils'
+import { sanitizeAgentToolsInBlocks } from '@/lib/workflows/sanitization/validation'
+import { authorizeWorkflowByWorkspacePermission } from '@/lib/workflows/utils'
+import { validateEdges } from '@/stores/workflows/workflow/edge-validation'
+import type { BlockState, WorkflowState } from '@/stores/workflows/workflow/types'
 import { generateLoopBlocks, generateParallelBlocks } from '@/stores/workflows/workflow/utils'
-import { getTrigger } from '@/triggers'
 
 const logger = createLogger('WorkflowStateAPI')
 
@@ -40,6 +37,7 @@ const BlockDataSchema = z.object({
   doWhileCondition: z.string().optional(),
   parallelType: z.enum(['collection', 'count']).optional(),
   type: z.string().optional(),
+  canonicalModes: z.record(z.enum(['basic', 'advanced'])).optional(),
 })
 
 const SubBlockStateSchema = z.object({
@@ -115,6 +113,49 @@ const WorkflowStateSchema = z.object({
 })
 
 /**
+ * GET /api/workflows/[id]/state
+ * Fetch the current workflow state from normalized tables.
+ * Used by the client after server-side edits (edit_workflow) to stay in sync.
+ */
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id: workflowId } = await params
+
+  try {
+    const auth = await checkSessionOrInternalAuth(request, { requireWorkflowId: false })
+    if (!auth.success || !auth.userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const authorization = await authorizeWorkflowByWorkspacePermission({
+      workflowId,
+      userId: auth.userId,
+      action: 'read',
+    })
+    if (!authorization.allowed) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
+    const normalized = await loadWorkflowFromNormalizedTables(workflowId)
+    if (!normalized) {
+      return NextResponse.json({ error: 'Workflow state not found' }, { status: 404 })
+    }
+
+    return NextResponse.json({
+      blocks: normalized.blocks,
+      edges: normalized.edges,
+      loops: normalized.loops || {},
+      parallels: normalized.parallels || {},
+    })
+  } catch (error) {
+    logger.error('Failed to fetch workflow state', {
+      workflowId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
+
+/**
  * PUT /api/workflows/[id]/state
  * Save complete workflow state to normalized database tables
  */
@@ -124,50 +165,50 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
   const { id: workflowId } = await params
 
   try {
-    // Get the session
-    const session = await getSession()
-    if (!session?.user?.id) {
+    const auth = await checkSessionOrInternalAuth(request, { requireWorkflowId: false })
+    if (!auth.success || !auth.userId) {
       logger.warn(`[${requestId}] Unauthorized state update attempt for workflow ${workflowId}`)
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
-
-    const userId = session.user.id
+    const userId = auth.userId
 
     const body = await request.json()
     const state = WorkflowStateSchema.parse(body)
 
-    // Fetch the workflow to check ownership/access
-    const accessContext = await getWorkflowAccessContext(workflowId, userId)
-    const workflowData = accessContext?.workflow
+    const authorization = await authorizeWorkflowByWorkspacePermission({
+      workflowId,
+      userId,
+      action: 'write',
+    })
+    const workflowData = authorization.workflow
 
     if (!workflowData) {
       logger.warn(`[${requestId}] Workflow ${workflowId} not found for state update`)
       return NextResponse.json({ error: 'Workflow not found' }, { status: 404 })
     }
 
-    // Check if user has permission to update this workflow
-    const canUpdate =
-      accessContext?.isOwner ||
-      (workflowData.workspaceId
-        ? accessContext?.workspacePermission === 'write' ||
-          accessContext?.workspacePermission === 'admin'
-        : false)
+    const canUpdate = authorization.allowed
 
     if (!canUpdate) {
       logger.warn(
         `[${requestId}] User ${userId} denied permission to update workflow state ${workflowId}`
       )
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+      return NextResponse.json(
+        { error: authorization.message || 'Access denied' },
+        { status: authorization.status || 403 }
+      )
     }
 
     // Sanitize custom tools in agent blocks before saving
-    const { blocks: sanitizedBlocks, warnings } = sanitizeAgentToolsInBlocks(state.blocks as any)
+    const { blocks: sanitizedBlocks, warnings } = sanitizeAgentToolsInBlocks(
+      state.blocks as Record<string, BlockState>
+    )
 
     // Save to normalized tables
     // Ensure all required fields are present for WorkflowState type
     // Filter out blocks without type or name before saving
     const filteredBlocks = Object.entries(sanitizedBlocks).reduce(
-      (acc, [blockId, block]: [string, any]) => {
+      (acc, [blockId, block]: [string, BlockState]) => {
         if (block.type && block.name) {
           // Ensure all required fields are present
           acc[blockId] = {
@@ -186,12 +227,16 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     )
 
     const typedBlocks = filteredBlocks as Record<string, BlockState>
+    const validatedEdges = validateEdges(state.edges as WorkflowState['edges'], typedBlocks)
+    const validationWarnings = validatedEdges.dropped.map(
+      ({ edge, reason }) => `Dropped edge "${edge.id}": ${reason}`
+    )
     const canonicalLoops = generateLoopBlocks(typedBlocks)
     const canonicalParallels = generateParallelBlocks(typedBlocks)
 
     const workflowState = {
       blocks: filteredBlocks,
-      edges: state.edges,
+      edges: validatedEdges.valid,
       loops: canonicalLoops,
       parallels: canonicalParallels,
       lastSaved: state.lastSaved || Date.now(),
@@ -199,7 +244,10 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       deployedAt: state.deployedAt,
     }
 
-    const saveResult = await saveWorkflowToNormalizedTables(workflowId, workflowState as any)
+    const saveResult = await saveWorkflowToNormalizedTables(
+      workflowId,
+      workflowState as WorkflowState
+    )
 
     if (!saveResult.success) {
       logger.error(`[${requestId}] Failed to save workflow ${workflowId} state:`, saveResult.error)
@@ -208,9 +256,6 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
         { status: 500 }
       )
     }
-
-    await syncWorkflowWebhooks(workflowId, workflowState.blocks)
-    await syncWorkflowSchedules(workflowId, workflowState.blocks)
 
     // Extract and persist custom tools to database
     try {
@@ -263,7 +308,10 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       const socketUrl = env.SOCKET_SERVER_URL || 'http://localhost:3002'
       const notifyResponse = await fetch(`${socketUrl}/api/workflow-updated`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': env.INTERNAL_API_SECRET,
+        },
         body: JSON.stringify({ workflowId }),
       })
 
@@ -279,7 +327,10 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       )
     }
 
-    return NextResponse.json({ success: true, warnings }, { status: 200 })
+    return NextResponse.json(
+      { success: true, warnings: [...warnings, ...validationWarnings] },
+      { status: 200 }
+    )
   } catch (error: any) {
     const elapsed = Date.now() - startTime
     logger.error(
@@ -295,305 +346,5 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     }
 
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
-  }
-}
-
-function getSubBlockValue<T = unknown>(block: BlockState, subBlockId: string): T | undefined {
-  const value = block.subBlocks?.[subBlockId]?.value
-  if (value === undefined || value === null) {
-    return undefined
-  }
-  return value as T
-}
-
-async function syncWorkflowWebhooks(
-  workflowId: string,
-  blocks: Record<string, any>
-): Promise<void> {
-  await syncBlockResources(workflowId, blocks, {
-    resourceName: 'webhook',
-    subBlockId: 'webhookId',
-    buildMetadata: buildWebhookMetadata,
-    applyMetadata: upsertWebhookRecord,
-  })
-}
-
-type ScheduleBlockInput = Parameters<typeof getScheduleTimeValues>[0]
-
-async function syncWorkflowSchedules(
-  workflowId: string,
-  blocks: Record<string, any>
-): Promise<void> {
-  await syncBlockResources(workflowId, blocks, {
-    resourceName: 'schedule',
-    subBlockId: 'scheduleId',
-    buildMetadata: buildScheduleMetadata,
-    applyMetadata: upsertScheduleRecord,
-  })
-}
-
-interface ScheduleMetadata {
-  cronExpression: string | null
-  nextRunAt: Date | null
-  timezone: string
-}
-
-function buildScheduleMetadata(block: BlockState): ScheduleMetadata | null {
-  const scheduleType = getSubBlockValue<string>(block, 'scheduleType') || 'daily'
-  const scheduleBlock = convertToScheduleBlock(block)
-
-  const scheduleValues = getScheduleTimeValues(scheduleBlock)
-  const sanitizedValues =
-    scheduleType !== 'custom' ? { ...scheduleValues, cronExpression: null } : scheduleValues
-
-  try {
-    const cronExpression = generateCronExpression(scheduleType, sanitizedValues)
-    const timezone = scheduleValues.timezone || 'UTC'
-
-    if (cronExpression) {
-      const validation = validateCronExpression(cronExpression, timezone)
-      if (!validation.isValid) {
-        logger.warn('Invalid cron expression while syncing schedule', {
-          blockId: block.id,
-          cronExpression,
-          error: validation.error,
-        })
-        return null
-      }
-    }
-
-    const nextRunAt = calculateNextRunTime(scheduleType, sanitizedValues)
-
-    return {
-      cronExpression,
-      timezone,
-      nextRunAt,
-    }
-  } catch (error) {
-    logger.error('Failed to build schedule metadata during sync', {
-      blockId: block.id,
-      error,
-    })
-    return null
-  }
-}
-
-function convertToScheduleBlock(block: BlockState): ScheduleBlockInput {
-  const subBlocks: ScheduleBlockInput['subBlocks'] = {}
-
-  Object.entries(block.subBlocks || {}).forEach(([id, subBlock]) => {
-    subBlocks[id] = { value: stringifySubBlockValue(subBlock?.value) }
-  })
-
-  return {
-    type: block.type,
-    subBlocks,
-  }
-}
-
-interface WebhookMetadata {
-  triggerPath: string
-  provider: string | null
-  providerConfig: Record<string, any>
-}
-
-function buildWebhookMetadata(block: BlockState): WebhookMetadata | null {
-  const triggerId =
-    getSubBlockValue<string>(block, 'triggerId') ||
-    getSubBlockValue<string>(block, 'selectedTriggerId')
-  const triggerConfig = getSubBlockValue<Record<string, any>>(block, 'triggerConfig') || {}
-  const triggerCredentials = getSubBlockValue<string>(block, 'triggerCredentials')
-  const triggerPath = getSubBlockValue<string>(block, 'triggerPath') || block.id
-
-  const triggerDef = triggerId ? getTrigger(triggerId) : undefined
-  const provider = triggerDef?.provider || null
-
-  const providerConfig = {
-    ...(typeof triggerConfig === 'object' ? triggerConfig : {}),
-    ...(triggerCredentials ? { credentialId: triggerCredentials } : {}),
-    ...(triggerId ? { triggerId } : {}),
-  }
-
-  return {
-    triggerPath,
-    provider,
-    providerConfig,
-  }
-}
-
-async function upsertWebhookRecord(
-  workflowId: string,
-  block: BlockState,
-  webhookId: string,
-  metadata: WebhookMetadata
-): Promise<void> {
-  const [existing] = await db.select().from(webhook).where(eq(webhook.id, webhookId)).limit(1)
-
-  if (existing) {
-    const needsUpdate =
-      existing.blockId !== block.id ||
-      existing.workflowId !== workflowId ||
-      existing.path !== metadata.triggerPath
-
-    if (needsUpdate) {
-      await db
-        .update(webhook)
-        .set({
-          workflowId,
-          blockId: block.id,
-          path: metadata.triggerPath,
-          provider: metadata.provider || existing.provider,
-          providerConfig: Object.keys(metadata.providerConfig).length
-            ? metadata.providerConfig
-            : existing.providerConfig,
-          isActive: true,
-          updatedAt: new Date(),
-        })
-        .where(eq(webhook.id, webhookId))
-    }
-    return
-  }
-
-  await db.insert(webhook).values({
-    id: webhookId,
-    workflowId,
-    blockId: block.id,
-    path: metadata.triggerPath,
-    provider: metadata.provider,
-    providerConfig: metadata.providerConfig,
-    isActive: true,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  })
-
-  logger.info('Recreated missing webhook after workflow save', {
-    workflowId,
-    blockId: block.id,
-    webhookId,
-  })
-}
-
-async function upsertScheduleRecord(
-  workflowId: string,
-  block: BlockState,
-  scheduleId: string,
-  metadata: ScheduleMetadata
-): Promise<void> {
-  const now = new Date()
-  const [existing] = await db
-    .select({
-      id: workflowSchedule.id,
-      nextRunAt: workflowSchedule.nextRunAt,
-    })
-    .from(workflowSchedule)
-    .where(eq(workflowSchedule.id, scheduleId))
-    .limit(1)
-
-  if (existing) {
-    await db
-      .update(workflowSchedule)
-      .set({
-        workflowId,
-        blockId: block.id,
-        cronExpression: metadata.cronExpression,
-        nextRunAt: metadata.nextRunAt ?? existing.nextRunAt,
-        timezone: metadata.timezone,
-        updatedAt: now,
-      })
-      .where(eq(workflowSchedule.id, scheduleId))
-    return
-  }
-
-  await db.insert(workflowSchedule).values({
-    id: scheduleId,
-    workflowId,
-    blockId: block.id,
-    cronExpression: metadata.cronExpression,
-    nextRunAt: metadata.nextRunAt ?? null,
-    triggerType: 'schedule',
-    timezone: metadata.timezone,
-    status: 'active',
-    failedCount: 0,
-    createdAt: now,
-    updatedAt: now,
-  })
-
-  logger.info('Recreated missing schedule after workflow save', {
-    workflowId,
-    blockId: block.id,
-    scheduleId,
-  })
-}
-
-interface BlockResourceSyncConfig<T> {
-  resourceName: string
-  subBlockId: string
-  buildMetadata: (block: BlockState, resourceId: string) => T | null
-  applyMetadata: (
-    workflowId: string,
-    block: BlockState,
-    resourceId: string,
-    metadata: T
-  ) => Promise<void>
-}
-
-async function syncBlockResources<T>(
-  workflowId: string,
-  blocks: Record<string, any>,
-  config: BlockResourceSyncConfig<T>
-): Promise<void> {
-  const blockEntries = Object.values(blocks || {}).filter(Boolean) as BlockState[]
-  if (blockEntries.length === 0) return
-
-  for (const block of blockEntries) {
-    const resourceId = getSubBlockValue<string>(block, config.subBlockId)
-    if (!resourceId) continue
-
-    const metadata = config.buildMetadata(block, resourceId)
-    if (!metadata) {
-      logger.warn(`Skipping ${config.resourceName} sync due to invalid configuration`, {
-        workflowId,
-        blockId: block.id,
-        resourceId,
-        resourceName: config.resourceName,
-      })
-      continue
-    }
-
-    try {
-      await config.applyMetadata(workflowId, block, resourceId, metadata)
-    } catch (error) {
-      logger.error(`Failed to sync ${config.resourceName}`, {
-        workflowId,
-        blockId: block.id,
-        resourceId,
-        resourceName: config.resourceName,
-        error,
-      })
-    }
-  }
-}
-
-function stringifySubBlockValue(value: unknown): string {
-  if (value === undefined || value === null) {
-    return ''
-  }
-
-  if (typeof value === 'string') {
-    return value
-  }
-
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value)
-  }
-
-  if (value instanceof Date) {
-    return value.toISOString()
-  }
-
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
   }
 }

@@ -1,9 +1,26 @@
-import { db } from '@sim/db'
-import { account, webhook } from '@sim/db/schema'
-import { and, eq } from 'drizzle-orm'
+import crypto from 'crypto'
+import { db, workflowDeploymentVersion } from '@sim/db'
+import { account, webhook, workflow } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
+import { and, eq, isNull, or } from 'drizzle-orm'
+import { nanoid } from 'nanoid'
 import { type NextRequest, NextResponse } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
-import { refreshAccessTokenIfNeeded } from '@/app/api/auth/oauth/utils'
+import { safeCompare } from '@/lib/core/security/encryption'
+import {
+  type SecureFetchResponse,
+  secureFetchWithPinnedIP,
+  validateUrlWithDNS,
+} from '@/lib/core/security/input-validation.server'
+import { sanitizeUrlForLog } from '@/lib/core/utils/logging'
+import type { DbOrTx } from '@/lib/db/types'
+import { getProviderIdFromServiceId } from '@/lib/oauth'
+import { cleanupExternalWebhook } from '@/lib/webhooks/provider-subscriptions'
+import {
+  getCredentialsForCredentialSet,
+  refreshAccessTokenIfNeeded,
+  resolveOAuthAccountId,
+} from '@/app/api/auth/oauth/utils'
+import { isPollingWebhookProvider } from '@/triggers/constants'
 
 const logger = createLogger('WebhookUtils')
 
@@ -18,7 +35,6 @@ export async function handleWhatsAppVerification(
   challenge: string | null
 ): Promise<NextResponse | null> {
   if (mode && token && challenge) {
-    // This is a WhatsApp verification request
     logger.info(`[${requestId}] WhatsApp verification request received for path: ${path}`)
 
     if (mode !== 'subscribe') {
@@ -26,25 +42,38 @@ export async function handleWhatsAppVerification(
       return new NextResponse('Invalid mode', { status: 400 })
     }
 
-    // Find all active WhatsApp webhooks
     const webhooks = await db
-      .select()
+      .select({ webhook })
       .from(webhook)
-      .where(and(eq(webhook.provider, 'whatsapp'), eq(webhook.isActive, true)))
+      .leftJoin(
+        workflowDeploymentVersion,
+        and(
+          eq(workflowDeploymentVersion.workflowId, webhook.workflowId),
+          eq(workflowDeploymentVersion.isActive, true)
+        )
+      )
+      .where(
+        and(
+          eq(webhook.provider, 'whatsapp'),
+          eq(webhook.isActive, true),
+          or(
+            eq(webhook.deploymentVersionId, workflowDeploymentVersion.id),
+            and(isNull(workflowDeploymentVersion.id), isNull(webhook.deploymentVersionId))
+          )
+        )
+      )
 
-    // Check if any webhook has a matching verification token
-    for (const wh of webhooks) {
+    for (const row of webhooks) {
+      const wh = row.webhook
       const providerConfig = (wh.providerConfig as Record<string, any>) || {}
       const verificationToken = providerConfig.verificationToken
 
       if (!verificationToken) {
-        logger.debug(`[${requestId}] Webhook ${wh.id} has no verification token, skipping`)
         continue
       }
 
       if (token === verificationToken) {
         logger.info(`[${requestId}] WhatsApp verification successful for webhook ${wh.id}`)
-        // Return ONLY the challenge as plain text (exactly as WhatsApp expects)
         return new NextResponse(challenge, {
           status: 200,
           headers: {
@@ -73,6 +102,47 @@ export function handleSlackChallenge(body: any): NextResponse | null {
 }
 
 /**
+ * Fetches a URL with DNS pinning to prevent DNS rebinding attacks
+ * @param url - The URL to fetch
+ * @param accessToken - Authorization token (optional for pre-signed URLs)
+ * @param requestId - Request ID for logging
+ * @returns The fetch Response or null if validation fails
+ */
+async function fetchWithDNSPinning(
+  url: string,
+  accessToken: string,
+  requestId: string
+): Promise<SecureFetchResponse | null> {
+  try {
+    const urlValidation = await validateUrlWithDNS(url, 'contentUrl')
+    if (!urlValidation.isValid) {
+      logger.warn(`[${requestId}] Invalid content URL: ${urlValidation.error}`, {
+        url,
+      })
+      return null
+    }
+
+    const headers: Record<string, string> = {}
+
+    if (accessToken) {
+      headers.Authorization = `Bearer ${accessToken}`
+    }
+
+    const response = await secureFetchWithPinnedIP(url, urlValidation.resolvedIP!, {
+      headers,
+    })
+
+    return response
+  } catch (error) {
+    logger.error(`[${requestId}] Error fetching URL with DNS pinning`, {
+      error: error instanceof Error ? error.message : String(error),
+      url: sanitizeUrlForLog(url),
+    })
+    return null
+  }
+}
+
+/**
  * Format Microsoft Teams Graph change notification
  */
 async function formatTeamsGraphNotification(
@@ -81,12 +151,15 @@ async function formatTeamsGraphNotification(
   foundWorkflow: any,
   request: NextRequest
 ): Promise<any> {
-  const notification = body.value[0]
+  const notification = body.value?.[0]
+  if (!notification) {
+    logger.warn('Received empty Teams notification body')
+    return null
+  }
   const changeType = notification.changeType || 'created'
   const resource = notification.resource || ''
   const subscriptionId = notification.subscriptionId || ''
 
-  // Extract chatId and messageId from resource path
   let chatId: string | null = null
   let messageId: string | null = null
 
@@ -130,18 +203,10 @@ async function formatTeamsGraphNotification(
       keys: Object.keys(body || {}),
     })
     return {
-      input: 'Teams notification received',
-      webhook: {
-        data: {
-          provider: 'microsoft-teams',
-          path: foundWebhook?.path || '',
-          providerConfig: foundWebhook?.providerConfig || {},
-          payload: body,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
+      from: null,
+      message: { raw: body },
+      activity: body,
+      conversation: null,
     }
   }
   const resolvedChatId = chatId as string
@@ -155,7 +220,6 @@ async function formatTeamsGraphNotification(
     []
   let accessToken: string | null = null
 
-  // Teams chat subscriptions require credentials
   if (!credentialId) {
     logger.error('Missing credentialId for Teams chat subscription', {
       chatId: resolvedChatId,
@@ -166,18 +230,25 @@ async function formatTeamsGraphNotification(
     })
   } else {
     try {
-      // Get userId from credential
-      const rows = await db.select().from(account).where(eq(account.id, credentialId)).limit(1)
-      if (rows.length === 0) {
-        logger.error('Teams credential not found', { credentialId, chatId: resolvedChatId })
-        // Continue without message data
+      const resolved = await resolveOAuthAccountId(credentialId)
+      if (!resolved) {
+        logger.error('Teams credential could not be resolved', { credentialId })
       } else {
-        const effectiveUserId = rows[0].userId
-        accessToken = await refreshAccessTokenIfNeeded(
-          credentialId,
-          effectiveUserId,
-          'teams-graph-notification'
-        )
+        const rows = await db
+          .select()
+          .from(account)
+          .where(eq(account.id, resolved.accountId))
+          .limit(1)
+        if (rows.length === 0) {
+          logger.error('Teams credential not found', { credentialId, chatId: resolvedChatId })
+        } else {
+          const effectiveUserId = rows[0].userId
+          accessToken = await refreshAccessTokenIfNeeded(
+            resolved.accountId,
+            effectiveUserId,
+            'teams-graph-notification'
+          )
+        }
       }
 
       if (accessToken) {
@@ -203,19 +274,20 @@ async function formatTeamsGraphNotification(
 
                 if (contentUrl.includes('sharepoint.com') || contentUrl.includes('onedrive')) {
                   try {
-                    const directRes = await fetch(contentUrl, {
-                      headers: { Authorization: `Bearer ${accessToken}` },
-                      redirect: 'follow',
-                    })
+                    const directRes = await fetchWithDNSPinning(
+                      contentUrl,
+                      accessToken,
+                      'teams-attachment'
+                    )
 
-                    if (directRes.ok) {
+                    if (directRes?.ok) {
                       const arrayBuffer = await directRes.arrayBuffer()
                       buffer = Buffer.from(arrayBuffer)
                       mimeType =
                         directRes.headers.get('content-type') ||
                         contentTypeHint ||
                         'application/octet-stream'
-                    } else {
+                    } else if (directRes) {
                       const encodedUrl = Buffer.from(contentUrl)
                         .toString('base64')
                         .replace(/\+/g, '-')
@@ -306,9 +378,13 @@ async function formatTeamsGraphNotification(
                       const downloadUrl = metadata['@microsoft.graph.downloadUrl']
 
                       if (downloadUrl) {
-                        const downloadRes = await fetch(downloadUrl)
+                        const downloadRes = await fetchWithDNSPinning(
+                          downloadUrl,
+                          '', // downloadUrl is a pre-signed URL, no auth needed
+                          'teams-onedrive-download'
+                        )
 
-                        if (downloadRes.ok) {
+                        if (downloadRes?.ok) {
                           const arrayBuffer = await downloadRes.arrayBuffer()
                           buffer = Buffer.from(arrayBuffer)
                           mimeType =
@@ -332,10 +408,12 @@ async function formatTeamsGraphNotification(
                   }
                 } else {
                   try {
-                    const ares = await fetch(contentUrl, {
-                      headers: { Authorization: `Bearer ${accessToken}` },
-                    })
-                    if (ares.ok) {
+                    const ares = await fetchWithDNSPinning(
+                      contentUrl,
+                      accessToken,
+                      'teams-attachment-generic'
+                    )
+                    if (ares?.ok) {
                       const arrayBuffer = await ares.arrayBuffer()
                       buffer = Buffer.from(arrayBuffer)
                       mimeType =
@@ -373,7 +451,6 @@ async function formatTeamsGraphNotification(
     }
   }
 
-  // If no message was fetched, return minimal data
   if (!message) {
     logger.warn('No message data available for Teams notification', {
       chatId: resolvedChatId,
@@ -381,80 +458,26 @@ async function formatTeamsGraphNotification(
       hasCredential: !!credentialId,
     })
     return {
-      input: '',
-      message_id: messageId,
-      chat_id: chatId,
-      from_name: 'Unknown',
+      message_id: resolvedMessageId,
+      chat_id: resolvedChatId,
+      from_name: '',
       text: '',
-      created_at: notification.resourceData?.createdDateTime || '',
-      change_type: changeType,
-      subscription_id: subscriptionId,
+      created_at: '',
       attachments: [],
-      microsoftteams: {
-        message: { id: messageId, text: '', timestamp: '', chatId, raw: null },
-        from: { id: '', name: 'Unknown', aadObjectId: '' },
-        notification: { changeType, subscriptionId, resource },
-      },
-      webhook: {
-        data: {
-          provider: 'microsoft-teams',
-          path: foundWebhook?.path || '',
-          providerConfig: foundWebhook?.providerConfig || {},
-          payload: body,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
     }
   }
 
-  // Extract data from message - we know it exists now
-  // body.content is the HTML/text content, summary is a plain text preview (max 280 chars)
   const messageText = message.body?.content || ''
   const from = message.from?.user || {}
   const createdAt = message.createdDateTime || ''
 
   return {
-    input: messageText,
-    message_id: messageId,
-    chat_id: chatId,
-    from_name: from.displayName || 'Unknown',
+    message_id: resolvedMessageId,
+    chat_id: resolvedChatId,
+    from_name: from.displayName || '',
     text: messageText,
     created_at: createdAt,
-    change_type: changeType,
-    subscription_id: subscriptionId,
     attachments: rawAttachments,
-    microsoftteams: {
-      message: {
-        id: messageId,
-        text: messageText,
-        timestamp: createdAt,
-        chatId,
-        raw: message,
-      },
-      from: {
-        id: from.id,
-        name: from.displayName,
-        aadObjectId: from.aadObjectId,
-      },
-      notification: {
-        changeType,
-        subscriptionId,
-        resource,
-      },
-    },
-    webhook: {
-      data: {
-        provider: 'microsoft-teams',
-        path: foundWebhook?.path || '',
-        providerConfig: foundWebhook?.providerConfig || {},
-        payload: body,
-        headers: Object.fromEntries(request.headers.entries()),
-        method: request.method,
-      },
-    },
-    workflowId: foundWorkflow.id,
   }
 }
 
@@ -508,19 +531,211 @@ export async function validateTwilioSignature(
       match: signatureBase64 === signature,
     })
 
-    if (signatureBase64.length !== signature.length) {
-      return false
-    }
-
-    let result = 0
-    for (let i = 0; i < signatureBase64.length; i++) {
-      result |= signatureBase64.charCodeAt(i) ^ signature.charCodeAt(i)
-    }
-
-    return result === 0
+    return safeCompare(signatureBase64, signature)
   } catch (error) {
     logger.error('Error validating Twilio signature:', error)
     return false
+  }
+}
+
+const SLACK_MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB
+const SLACK_MAX_FILES = 15
+
+/**
+ * Resolves the full file object from the Slack API when the event payload
+ * only contains a partial file (e.g. missing url_private due to file_access restrictions).
+ * @see https://docs.slack.dev/reference/methods/files.info
+ */
+async function resolveSlackFileInfo(
+  fileId: string,
+  botToken: string
+): Promise<{ url_private?: string; name?: string; mimetype?: string; size?: number } | null> {
+  try {
+    const response = await fetch(
+      `https://slack.com/api/files.info?file=${encodeURIComponent(fileId)}`,
+      {
+        headers: { Authorization: `Bearer ${botToken}` },
+      }
+    )
+
+    const data = (await response.json()) as {
+      ok: boolean
+      error?: string
+      file?: Record<string, any>
+    }
+
+    if (!data.ok || !data.file) {
+      logger.warn('Slack files.info failed', { fileId, error: data.error })
+      return null
+    }
+
+    return {
+      url_private: data.file.url_private,
+      name: data.file.name,
+      mimetype: data.file.mimetype,
+      size: data.file.size,
+    }
+  } catch (error) {
+    logger.error('Error calling Slack files.info', {
+      fileId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return null
+  }
+}
+
+/**
+ * Downloads file attachments from Slack using the bot token.
+ * Returns files in the format expected by WebhookAttachmentProcessor:
+ * { name, data (base64 string), mimeType, size }
+ *
+ * When the event payload contains partial file objects (missing url_private),
+ * falls back to the Slack files.info API to resolve the full file metadata.
+ *
+ * Security:
+ * - Uses validateUrlWithDNS + secureFetchWithPinnedIP to prevent SSRF
+ * - Enforces per-file size limit and max file count
+ */
+async function downloadSlackFiles(
+  rawFiles: any[],
+  botToken: string
+): Promise<Array<{ name: string; data: string; mimeType: string; size: number }>> {
+  const filesToProcess = rawFiles.slice(0, SLACK_MAX_FILES)
+  const downloaded: Array<{ name: string; data: string; mimeType: string; size: number }> = []
+
+  for (const file of filesToProcess) {
+    let urlPrivate = file.url_private as string | undefined
+    let fileName = file.name as string | undefined
+    let fileMimeType = file.mimetype as string | undefined
+    let fileSize = file.size as number | undefined
+
+    // If url_private is missing, resolve via files.info API
+    if (!urlPrivate && file.id) {
+      const resolved = await resolveSlackFileInfo(file.id, botToken)
+      if (resolved?.url_private) {
+        urlPrivate = resolved.url_private
+        fileName = fileName || resolved.name
+        fileMimeType = fileMimeType || resolved.mimetype
+        fileSize = fileSize ?? resolved.size
+      }
+    }
+
+    if (!urlPrivate) {
+      logger.warn('Slack file has no url_private and could not be resolved, skipping', {
+        fileId: file.id,
+      })
+      continue
+    }
+
+    // Skip files that exceed the size limit
+    const reportedSize = Number(fileSize) || 0
+    if (reportedSize > SLACK_MAX_FILE_SIZE) {
+      logger.warn('Slack file exceeds size limit, skipping', {
+        fileId: file.id,
+        size: reportedSize,
+        limit: SLACK_MAX_FILE_SIZE,
+      })
+      continue
+    }
+
+    try {
+      const urlValidation = await validateUrlWithDNS(urlPrivate, 'url_private')
+      if (!urlValidation.isValid) {
+        logger.warn('Slack file url_private failed DNS validation, skipping', {
+          fileId: file.id,
+          error: urlValidation.error,
+        })
+        continue
+      }
+
+      const response = await secureFetchWithPinnedIP(urlPrivate, urlValidation.resolvedIP!, {
+        headers: { Authorization: `Bearer ${botToken}` },
+      })
+
+      if (!response.ok) {
+        logger.warn('Failed to download Slack file, skipping', {
+          fileId: file.id,
+          status: response.status,
+        })
+        continue
+      }
+
+      const arrayBuffer = await response.arrayBuffer()
+      const buffer = Buffer.from(arrayBuffer)
+
+      // Verify the actual downloaded size doesn't exceed our limit
+      if (buffer.length > SLACK_MAX_FILE_SIZE) {
+        logger.warn('Downloaded Slack file exceeds size limit, skipping', {
+          fileId: file.id,
+          actualSize: buffer.length,
+          limit: SLACK_MAX_FILE_SIZE,
+        })
+        continue
+      }
+
+      downloaded.push({
+        name: fileName || 'download',
+        data: buffer.toString('base64'),
+        mimeType: fileMimeType || 'application/octet-stream',
+        size: buffer.length,
+      })
+    } catch (error) {
+      logger.error('Error downloading Slack file, skipping', {
+        fileId: file.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  return downloaded
+}
+
+const SLACK_REACTION_EVENTS = new Set(['reaction_added', 'reaction_removed'])
+
+/**
+ * Fetches the text of a reacted-to message from Slack using the reactions.get API.
+ * Unlike conversations.history, reactions.get works for both top-level messages and
+ * thread replies, since it looks up the item directly by channel + timestamp.
+ * Requires the bot token to have the reactions:read scope.
+ */
+async function fetchSlackMessageText(
+  channel: string,
+  messageTs: string,
+  botToken: string
+): Promise<string> {
+  try {
+    const params = new URLSearchParams({
+      channel,
+      timestamp: messageTs,
+    })
+    const response = await fetch(`https://slack.com/api/reactions.get?${params}`, {
+      headers: { Authorization: `Bearer ${botToken}` },
+    })
+
+    const data = (await response.json()) as {
+      ok: boolean
+      error?: string
+      type?: string
+      message?: { text?: string }
+    }
+
+    if (!data.ok) {
+      logger.warn('Slack reactions.get failed — message text unavailable', {
+        channel,
+        messageTs,
+        error: data.error,
+      })
+      return ''
+    }
+
+    return data.message?.text ?? ''
+  } catch (error) {
+    logger.warn('Error fetching Slack message text', {
+      channel,
+      messageTs,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return ''
   }
 }
 
@@ -539,199 +754,89 @@ export async function formatWebhookInput(
 
     if (messages.length > 0) {
       const message = messages[0]
-      const phoneNumberId = data.metadata?.phone_number_id
-      const from = message.from
-      const messageId = message.id
-      const timestamp = message.timestamp
-      const text = message.text?.body
-
       return {
-        whatsapp: {
-          data: {
-            messageId,
-            from,
-            phoneNumberId,
-            text,
-            timestamp,
-            raw: message,
-          },
-        },
-        webhook: {
-          data: {
-            provider: 'whatsapp',
-            path: foundWebhook.path,
-            providerConfig: foundWebhook.providerConfig,
-            payload: body,
-            headers: Object.fromEntries(request.headers.entries()),
-            method: request.method,
-          },
-        },
-        workflowId: foundWorkflow.id,
+        messageId: message.id,
+        from: message.from,
+        phoneNumberId: data.metadata?.phone_number_id,
+        text: message.text?.body,
+        timestamp: message.timestamp,
+        raw: JSON.stringify(message),
       }
     }
     return null
   }
 
   if (foundWebhook.provider === 'telegram') {
-    const message =
+    const rawMessage =
       body?.message || body?.edited_message || body?.channel_post || body?.edited_channel_post
 
-    if (message) {
-      let input = ''
+    const updateType = body.message
+      ? 'message'
+      : body.edited_message
+        ? 'edited_message'
+        : body.channel_post
+          ? 'channel_post'
+          : body.edited_channel_post
+            ? 'edited_channel_post'
+            : 'unknown'
 
-      if (message.text) {
-        input = message.text
-      } else if (message.caption) {
-        input = message.caption
-      } else if (message.photo) {
-        input = 'Photo message'
-      } else if (message.document) {
-        input = `Document: ${message.document.file_name || 'file'}`
-      } else if (message.audio) {
-        input = `Audio: ${message.audio.title || 'audio file'}`
-      } else if (message.video) {
-        input = 'Video message'
-      } else if (message.voice) {
-        input = 'Voice message'
-      } else if (message.sticker) {
-        input = `Sticker: ${message.sticker.emoji || '🎭'}`
-      } else if (message.location) {
-        input = 'Location shared'
-      } else if (message.contact) {
-        input = `Contact: ${message.contact.first_name || 'contact'}`
-      } else if (message.poll) {
-        input = `Poll: ${message.poll.question}`
-      } else {
-        input = 'Message received'
-      }
-
-      const messageObj = {
-        id: message.message_id,
-        text: message.text,
-        caption: message.caption,
-        date: message.date,
-        messageType: message.photo
-          ? 'photo'
-          : message.document
-            ? 'document'
-            : message.audio
-              ? 'audio'
-              : message.video
-                ? 'video'
-                : message.voice
-                  ? 'voice'
-                  : message.sticker
-                    ? 'sticker'
-                    : message.location
-                      ? 'location'
-                      : message.contact
-                        ? 'contact'
-                        : message.poll
-                          ? 'poll'
-                          : 'text',
-        raw: message,
-      }
-
-      const senderObj = message.from
-        ? {
-            id: message.from.id,
-            firstName: message.from.first_name,
-            lastName: message.from.last_name,
-            username: message.from.username,
-            languageCode: message.from.language_code,
-            isBot: message.from.is_bot,
-          }
-        : null
-
-      const chatObj = message.chat
-        ? {
-            id: message.chat.id,
-            type: message.chat.type,
-            title: message.chat.title,
-            username: message.chat.username,
-            firstName: message.chat.first_name,
-            lastName: message.chat.last_name,
-          }
-        : null
+    if (rawMessage) {
+      const messageType = rawMessage.photo
+        ? 'photo'
+        : rawMessage.document
+          ? 'document'
+          : rawMessage.audio
+            ? 'audio'
+            : rawMessage.video
+              ? 'video'
+              : rawMessage.voice
+                ? 'voice'
+                : rawMessage.sticker
+                  ? 'sticker'
+                  : rawMessage.location
+                    ? 'location'
+                    : rawMessage.contact
+                      ? 'contact'
+                      : rawMessage.poll
+                        ? 'poll'
+                        : 'text'
 
       return {
-        input,
-
-        // Top-level properties for backward compatibility with <blockName.message> syntax
-        message: messageObj,
-        sender: senderObj,
-        chat: chatObj,
+        message: {
+          id: rawMessage.message_id,
+          text: rawMessage.text,
+          date: rawMessage.date,
+          messageType,
+          raw: rawMessage,
+        },
+        sender: rawMessage.from
+          ? {
+              id: rawMessage.from.id,
+              username: rawMessage.from.username,
+              firstName: rawMessage.from.first_name,
+              lastName: rawMessage.from.last_name,
+              languageCode: rawMessage.from.language_code,
+              isBot: rawMessage.from.is_bot,
+            }
+          : null,
         updateId: body.update_id,
-        updateType: body.message
-          ? 'message'
-          : body.edited_message
-            ? 'edited_message'
-            : body.channel_post
-              ? 'channel_post'
-              : body.edited_channel_post
-                ? 'edited_channel_post'
-                : 'unknown',
-
-        // Keep the nested structure for the new telegram.message.text syntax
-        telegram: {
-          message: messageObj,
-          sender: senderObj,
-          chat: chatObj,
-          updateId: body.update_id,
-          updateType: body.message
-            ? 'message'
-            : body.edited_message
-              ? 'edited_message'
-              : body.channel_post
-                ? 'channel_post'
-                : body.edited_channel_post
-                  ? 'edited_channel_post'
-                  : 'unknown',
-        },
-        webhook: {
-          data: {
-            provider: 'telegram',
-            path: foundWebhook.path,
-            providerConfig: foundWebhook.providerConfig,
-            payload: body,
-            headers: Object.fromEntries(request.headers.entries()),
-            method: request.method,
-          },
-        },
-        workflowId: foundWorkflow.id,
+        updateType,
       }
     }
 
-    // Fallback for unknown Telegram update types
     logger.warn('Unknown Telegram update type', {
       updateId: body.update_id,
       bodyKeys: Object.keys(body || {}),
     })
 
     return {
-      input: 'Telegram update received',
-      telegram: {
-        updateId: body.update_id,
-        updateType: 'unknown',
-        raw: body,
-      },
-      webhook: {
-        data: {
-          provider: 'telegram',
-          path: foundWebhook.path,
-          providerConfig: foundWebhook.providerConfig,
-          payload: body,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
+      updateId: body.update_id,
+      updateType,
     }
   }
 
   if (foundWebhook.provider === 'twilio_voice') {
     return {
-      // Root-level properties matching trigger outputs for easy access
       callSid: body.CallSid,
       accountSid: body.AccountSid,
       from: body.From,
@@ -745,8 +850,6 @@ export async function formatWebhookInput(
       speechResult: body.SpeechResult,
       recordingUrl: body.RecordingUrl,
       recordingSid: body.RecordingSid,
-
-      // Additional fields from Twilio payload
       called: body.Called,
       caller: body.Caller,
       toCity: body.ToCity,
@@ -766,31 +869,61 @@ export async function formatWebhookInput(
       callerZip: body.CallerZip,
       callerCountry: body.CallerCountry,
       callToken: body.CallToken,
-
-      webhook: {
-        data: {
-          provider: 'twilio_voice',
-          path: foundWebhook.path,
-          providerConfig: foundWebhook.providerConfig,
-          payload: body,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
+      raw: JSON.stringify(body),
     }
   }
 
   if (foundWebhook.provider === 'gmail') {
     if (body && typeof body === 'object' && 'email' in body) {
-      return body
+      return {
+        email: body.email,
+        timestamp: body.timestamp,
+      }
     }
     return body
   }
 
   if (foundWebhook.provider === 'outlook') {
     if (body && typeof body === 'object' && 'email' in body) {
-      return body
+      return {
+        email: body.email,
+        timestamp: body.timestamp,
+      }
+    }
+    return body
+  }
+
+  if (foundWebhook.provider === 'rss') {
+    if (body && typeof body === 'object' && 'item' in body) {
+      return {
+        title: body.title,
+        link: body.link,
+        pubDate: body.pubDate,
+        item: body.item,
+        feed: body.feed,
+        timestamp: body.timestamp,
+      }
+    }
+    return body
+  }
+
+  if (foundWebhook.provider === 'imap') {
+    if (body && typeof body === 'object' && 'email' in body) {
+      return {
+        messageId: body.messageId,
+        subject: body.subject,
+        from: body.from,
+        to: body.to,
+        cc: body.cc,
+        date: body.date,
+        bodyText: body.bodyText,
+        bodyHtml: body.bodyHtml,
+        mailbox: body.mailbox,
+        hasAttachments: body.hasAttachments,
+        attachments: body.attachments,
+        email: body.email,
+        timestamp: body.timestamp,
+      }
     }
     return body
   }
@@ -814,24 +947,20 @@ export async function formatWebhookInput(
       payload: body,
       provider: 'hubspot',
       providerConfig: foundWebhook.providerConfig,
-      workflowId: foundWorkflow.id,
     }
   }
 
   if (foundWebhook.provider === 'microsoft-teams') {
-    // Check if this is a Microsoft Graph change notification
     if (body?.value && Array.isArray(body.value) && body.value.length > 0) {
       return await formatTeamsGraphNotification(body, foundWebhook, foundWorkflow, request)
     }
 
-    // Microsoft Teams outgoing webhook - Teams sending data to us
     const messageText = body?.text || ''
     const messageId = body?.id || ''
     const timestamp = body?.timestamp || body?.localTimestamp || ''
     const from = body?.from || {}
     const conversation = body?.conversation || {}
 
-    // Construct the message object
     const messageObj = {
       raw: {
         attachments: body?.attachments || [],
@@ -844,14 +973,12 @@ export async function formatWebhookInput(
       },
     }
 
-    // Construct the from object
     const fromObj = {
       id: from.id || '',
       name: from.name || '',
       aadObjectId: from.aadObjectId || '',
     }
 
-    // Construct the conversation object
     const conversationObj = {
       id: conversation.id || '',
       name: conversation.name || '',
@@ -861,167 +988,112 @@ export async function formatWebhookInput(
       conversationType: conversation.conversationType || '',
     }
 
-    // Construct the activity object
     const activityObj = body || {}
 
     return {
-      input: messageText, // Primary workflow input - the message text
-
-      // Top-level properties for direct access with <microsoftteams.from.name> syntax
       from: fromObj,
       message: messageObj,
       activity: activityObj,
       conversation: conversationObj,
-
-      webhook: {
-        data: {
-          provider: 'microsoft-teams',
-          path: foundWebhook.path,
-          providerConfig: foundWebhook.providerConfig,
-          payload: body,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
     }
   }
 
   if (foundWebhook.provider === 'slack') {
-    // Slack input formatting logic - check for valid event
-    const event = body?.event
+    const providerConfig = (foundWebhook.providerConfig as Record<string, any>) || {}
+    const botToken = providerConfig.botToken as string | undefined
+    const includeFiles = Boolean(providerConfig.includeFiles)
 
-    if (event && body?.type === 'event_callback') {
-      // Extract event text with fallbacks for different event types
-      let input = ''
+    const rawEvent = body?.event
 
-      if (event.text) {
-        input = event.text
-      } else if (event.type === 'app_mention') {
-        input = 'App mention received'
-      } else {
-        input = 'Slack event received'
-      }
-
-      // Create the event object for easier access
-      const eventObj = {
-        event_type: event.type || '',
-        channel: event.channel || '',
-        channel_name: '', // Could be resolved via additional API calls if needed
-        user: event.user || '',
-        user_name: '', // Could be resolved via additional API calls if needed
-        text: event.text || '',
-        timestamp: event.ts || event.event_ts || '',
-        team_id: body.team_id || event.team || '',
-        event_id: body.event_id || '',
-      }
-
-      return {
-        input, // Primary workflow input - the event content
-
-        // // // Top-level properties for backward compatibility with <blockName.event> syntax
-        event: eventObj,
-
-        // Keep the nested structure for the new slack.event.text syntax
-        slack: {
-          event: eventObj,
-        },
-        webhook: {
-          data: {
-            provider: 'slack',
-            path: foundWebhook.path,
-            providerConfig: foundWebhook.providerConfig,
-            payload: body,
-            headers: Object.fromEntries(request.headers.entries()),
-            method: request.method,
-          },
-        },
-        workflowId: foundWorkflow.id,
-      }
+    if (!rawEvent) {
+      logger.warn('Unknown Slack event type', {
+        type: body?.type,
+        hasEvent: false,
+        bodyKeys: Object.keys(body || {}),
+      })
     }
 
-    // Fallback for unknown Slack event types
-    logger.warn('Unknown Slack event type', {
-      type: body?.type,
-      hasEvent: !!body?.event,
-      bodyKeys: Object.keys(body || {}),
-    })
+    const eventType: string = rawEvent?.type || body?.type || 'unknown'
+    const isReactionEvent = SLACK_REACTION_EVENTS.has(eventType)
+
+    // Reaction events nest channel/ts inside event.item
+    const channel: string = isReactionEvent
+      ? rawEvent?.item?.channel || ''
+      : rawEvent?.channel || ''
+    const messageTs: string = isReactionEvent
+      ? rawEvent?.item?.ts || ''
+      : rawEvent?.ts || rawEvent?.event_ts || ''
+
+    // For reaction events, attempt to fetch the original message text
+    let text: string = rawEvent?.text || ''
+    if (isReactionEvent && channel && messageTs && botToken) {
+      text = await fetchSlackMessageText(channel, messageTs, botToken)
+    }
+
+    const rawFiles: any[] = rawEvent?.files ?? []
+    const hasFiles = rawFiles.length > 0
+
+    let files: any[] = []
+    if (hasFiles && includeFiles && botToken) {
+      files = await downloadSlackFiles(rawFiles, botToken)
+    } else if (hasFiles && includeFiles && !botToken) {
+      logger.warn('Slack message has files and includeFiles is enabled, but no bot token provided')
+    }
 
     return {
-      input: 'Slack webhook received',
-      slack: {
-        event: {
-          event_type: body?.event?.type || body?.type || 'unknown',
-          channel: body?.event?.channel || '',
-          user: body?.event?.user || '',
-          text: body?.event?.text || '',
-          timestamp: body?.event?.ts || '',
-          team_id: body?.team_id || '',
-          event_id: body?.event_id || '',
-        },
+      event: {
+        event_type: eventType,
+        channel,
+        channel_name: '',
+        user: rawEvent?.user || '',
+        user_name: '',
+        text,
+        timestamp: messageTs,
+        thread_ts: rawEvent?.thread_ts || '',
+        team_id: body?.team_id || rawEvent?.team || '',
+        event_id: body?.event_id || '',
+        reaction: rawEvent?.reaction || '',
+        item_user: rawEvent?.item_user || '',
+        hasFiles,
+        files,
       },
-      webhook: {
-        data: {
-          provider: 'slack',
-          path: foundWebhook.path,
-          providerConfig: foundWebhook.providerConfig,
-          payload: body,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
     }
   }
 
   if (foundWebhook.provider === 'webflow') {
-    const triggerType = body?.triggerType || 'unknown'
-    const siteId = body?.siteId || ''
-    const workspaceId = body?.workspaceId || ''
-    const collectionId = body?.collectionId || ''
-    const payload = body?.payload || {}
-    const formId = body?.formId || ''
-    const formName = body?.name || ''
-    const formSubmissionId = body?.id || ''
-    const submittedAt = body?.submittedAt || ''
-    const formData = body?.data || {}
-    const schema = body?.schema || {}
+    const providerConfig = (foundWebhook.providerConfig as Record<string, any>) || {}
+    const triggerId = providerConfig.triggerId as string | undefined
 
+    // Form submission trigger
+    if (triggerId === 'webflow_form_submission') {
+      return {
+        siteId: body?.siteId || '',
+        formId: body?.formId || '',
+        name: body?.name || '',
+        id: body?.id || '',
+        submittedAt: body?.submittedAt || '',
+        data: body?.data || {},
+        schema: body?.schema || {},
+        formElementId: body?.formElementId || '',
+      }
+    }
+
+    // Collection item triggers (created, changed, deleted)
+    // Webflow uses _cid for collection ID and _id for item ID
+    const { _cid, _id, ...itemFields } = body || {}
     return {
-      siteId,
-      workspaceId,
-      collectionId,
-      payload,
-      triggerType,
-
-      formId,
-      name: formName,
-      id: formSubmissionId,
-      submittedAt,
-      data: formData,
-      schema,
-      formElementId: body?.formElementId || '',
-
-      webflow: {
-        siteId,
-        workspaceId,
-        collectionId,
-        payload,
-        triggerType,
-        raw: body,
+      siteId: body?.siteId || '',
+      collectionId: _cid || body?.collectionId || '',
+      payload: {
+        id: _id || '',
+        cmsLocaleId: itemFields?.cmsLocaleId || '',
+        lastPublished: itemFields?.lastPublished || itemFields?.['last-published'] || '',
+        lastUpdated: itemFields?.lastUpdated || itemFields?.['last-updated'] || '',
+        createdOn: itemFields?.createdOn || itemFields?.['created-on'] || '',
+        isArchived: itemFields?.isArchived || itemFields?._archived || false,
+        isDraft: itemFields?.isDraft || itemFields?._draft || false,
+        fieldData: itemFields,
       },
-
-      webhook: {
-        data: {
-          provider: 'webflow',
-          path: foundWebhook.path,
-          providerConfig: foundWebhook.providerConfig,
-          payload: body,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
     }
   }
 
@@ -1032,7 +1104,6 @@ export async function formatWebhookInput(
   if (foundWebhook.provider === 'google_forms') {
     const providerConfig = (foundWebhook.providerConfig as Record<string, any>) || {}
 
-    // Normalize answers: if value is an array with single element, collapse to scalar; keep multi-select arrays
     const normalizeAnswers = (src: unknown): Record<string, unknown> => {
       if (!src || typeof src !== 'object') return {}
       const out: Record<string, unknown> = {}
@@ -1052,215 +1123,52 @@ export async function formatWebhookInput(
     const formId = body?.formId || providerConfig.formId || ''
     const includeRaw = providerConfig.includeRawPayload !== false
 
-    const normalizedAnswers = normalizeAnswers(body?.answers)
-
-    const summaryCount = Object.keys(normalizedAnswers).length
-    const input = `Google Form response${responseId ? ` ${responseId}` : ''} (${summaryCount} answers)`
-
     return {
-      input,
       responseId,
       createTime,
       lastSubmittedTime,
       formId,
-      answers: normalizedAnswers,
+      answers: normalizeAnswers(body?.answers),
       ...(includeRaw ? { raw: body?.raw ?? body } : {}),
-      google_forms: {
-        responseId,
-        createTime,
-        lastSubmittedTime,
-        formId,
-        answers: normalizedAnswers,
-        ...(includeRaw ? { raw: body?.raw ?? body } : {}),
-      },
-      webhook: {
-        data: {
-          provider: 'google_forms',
-          path: foundWebhook.path,
-          providerConfig: foundWebhook.providerConfig,
-          payload: includeRaw ? body : undefined,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
     }
   }
 
   if (foundWebhook.provider === 'github') {
-    // GitHub webhook input formatting logic
     const eventType = request.headers.get('x-github-event') || 'unknown'
-    const delivery = request.headers.get('x-github-delivery') || ''
-
-    // Extract common GitHub properties
-    const repository = body?.repository || {}
-    const sender = body?.sender || {}
-    const action = body?.action || ''
-
-    // Build GitHub-specific variables based on the trigger config outputs
-    const githubData = {
-      // Event metadata
-      event_type: eventType,
-      action: action,
-      delivery_id: delivery,
-
-      // Repository information (avoid 'repository' to prevent conflict with the object)
-      repository_full_name: repository.full_name || '',
-      repository_name: repository.name || '',
-      repository_owner: repository.owner?.login || '',
-      repository_id: repository.id || '',
-      repository_url: repository.html_url || '',
-
-      // Sender information (avoid 'sender' to prevent conflict with the object)
-      sender_login: sender.login || '',
-      sender_id: sender.id || '',
-      sender_type: sender.type || '',
-      sender_url: sender.html_url || '',
-
-      // Event-specific data
-      ...(body?.ref && {
-        ref: body.ref,
-        branch: body.ref?.replace('refs/heads/', '') || '',
-      }),
-      ...(body?.before && { before: body.before }),
-      ...(body?.after && { after: body.after }),
-      ...(body?.commits && {
-        commits: JSON.stringify(body.commits),
-        commit_count: body.commits.length || 0,
-      }),
-      ...(body?.head_commit && {
-        commit_message: body.head_commit.message || '',
-        commit_author: body.head_commit.author?.name || '',
-        commit_sha: body.head_commit.id || '',
-        commit_url: body.head_commit.url || '',
-      }),
-      ...(body?.pull_request && {
-        pull_request: JSON.stringify(body.pull_request),
-        pr_number: body.pull_request.number || '',
-        pr_title: body.pull_request.title || '',
-        pr_state: body.pull_request.state || '',
-        pr_url: body.pull_request.html_url || '',
-      }),
-      ...(body?.issue && {
-        issue: JSON.stringify(body.issue),
-        issue_number: body.issue.number || '',
-        issue_title: body.issue.title || '',
-        issue_state: body.issue.state || '',
-        issue_url: body.issue.html_url || '',
-      }),
-      ...(body?.comment && {
-        comment: JSON.stringify(body.comment),
-        comment_body: body.comment.body || '',
-        comment_url: body.comment.html_url || '',
-      }),
-    }
-
-    // Set input based on event type for workflow processing
-    let input = ''
-    switch (eventType) {
-      case 'push':
-        input = `Push to ${githubData.branch || githubData.ref}: ${githubData.commit_message || 'No commit message'}`
-        break
-      case 'pull_request':
-        input = `${action} pull request: ${githubData.pr_title || 'No title'}`
-        break
-      case 'issues':
-        input = `${action} issue: ${githubData.issue_title || 'No title'}`
-        break
-      case 'issue_comment':
-      case 'pull_request_review_comment':
-        input = `Comment ${action}: ${githubData.comment_body?.slice(0, 100) || 'No comment body'}${(githubData.comment_body?.length || 0) > 100 ? '...' : ''}`
-        break
-      default:
-        input = `GitHub ${eventType} event${action ? ` (${action})` : ''}`
-    }
+    const branch = body?.ref?.replace('refs/heads/', '') || ''
 
     return {
-      // Expose raw GitHub payload at the root
       ...body,
-      // Include webhook metadata alongside
-      webhook: {
-        data: {
-          provider: 'github',
-          path: foundWebhook.path,
-          providerConfig: foundWebhook.providerConfig,
-          payload: body,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
+      event_type: eventType,
+      action: body?.action || '',
+      branch,
     }
   }
 
   if (foundWebhook.provider === 'typeform') {
-    const eventId = body?.event_id || ''
-    const eventType = body?.event_type || 'form_response'
     const formResponse = body?.form_response || {}
-    const formId = formResponse.form_id || ''
-    const token = formResponse.token || ''
-    const submittedAt = formResponse.submitted_at || ''
-    const landedAt = formResponse.landed_at || ''
-    const calculated = formResponse.calculated || {}
-    const variables = formResponse.variables || []
-    const hidden = formResponse.hidden || {}
-    const answers = formResponse.answers || []
-    const definition = formResponse.definition || {}
-    const ending = formResponse.ending || {}
-
     const providerConfig = (foundWebhook.providerConfig as Record<string, any>) || {}
     const includeDefinition = providerConfig.includeDefinition === true
 
     return {
-      event_id: eventId,
-      event_type: eventType,
-      form_id: formId,
-      token,
-      submitted_at: submittedAt,
-      landed_at: landedAt,
-      calculated,
-      variables,
-      hidden,
-      answers,
-      ...(includeDefinition ? { definition } : {}),
-      ending,
-
-      typeform: {
-        event_id: eventId,
-        event_type: eventType,
-        form_id: formId,
-        token,
-        submitted_at: submittedAt,
-        landed_at: landedAt,
-        calculated,
-        variables,
-        hidden,
-        answers,
-        ...(includeDefinition ? { definition } : {}),
-        ending,
-      },
-
+      event_id: body?.event_id || '',
+      event_type: body?.event_type || 'form_response',
+      form_id: formResponse.form_id || '',
+      token: formResponse.token || '',
+      submitted_at: formResponse.submitted_at || '',
+      landed_at: formResponse.landed_at || '',
+      calculated: formResponse.calculated || {},
+      variables: formResponse.variables || [],
+      hidden: formResponse.hidden || {},
+      answers: formResponse.answers || [],
+      ...(includeDefinition ? { definition: formResponse.definition || {} } : {}),
+      ending: formResponse.ending || {},
       raw: body,
-
-      webhook: {
-        data: {
-          provider: 'typeform',
-          path: foundWebhook.path,
-          providerConfig: foundWebhook.providerConfig,
-          payload: body,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
     }
   }
 
   if (foundWebhook.provider === 'linear') {
-    // Linear webhook payload structure:
-    // { action, type, webhookId, webhookTimestamp, organizationId, createdAt, actor, data, updatedFrom? }
     return {
-      // Extract top-level fields from Linear payload
       action: body.action || '',
       type: body.type || '',
       webhookId: body.webhookId || '',
@@ -1270,23 +1178,9 @@ export async function formatWebhookInput(
       actor: body.actor || null,
       data: body.data || null,
       updatedFrom: body.updatedFrom || null,
-
-      // Keep webhook metadata
-      webhook: {
-        data: {
-          provider: 'linear',
-          path: foundWebhook.path,
-          providerConfig: foundWebhook.providerConfig,
-          payload: body,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
     }
   }
 
-  // Jira webhook format
   if (foundWebhook.provider === 'jira') {
     const { extractIssueData, extractCommentData, extractWorklogData } = await import(
       '@/triggers/jira/utils'
@@ -1295,83 +1189,162 @@ export async function formatWebhookInput(
     const providerConfig = (foundWebhook.providerConfig as Record<string, any>) || {}
     const triggerId = providerConfig.triggerId as string | undefined
 
-    let extractedData
     if (triggerId === 'jira_issue_commented') {
-      extractedData = extractCommentData(body)
-    } else if (triggerId === 'jira_worklog_created') {
-      extractedData = extractWorklogData(body)
-    } else {
-      extractedData = extractIssueData(body)
+      return extractCommentData(body)
     }
+    if (triggerId === 'jira_worklog_created') {
+      return extractWorklogData(body)
+    }
+    return extractIssueData(body)
+  }
 
+  if (foundWebhook.provider === 'confluence') {
+    const {
+      extractPageData,
+      extractCommentData,
+      extractBlogData,
+      extractAttachmentData,
+      extractSpaceData,
+      extractLabelData,
+    } = await import('@/triggers/confluence/utils')
+
+    const providerConfig = (foundWebhook.providerConfig as Record<string, any>) || {}
+    const triggerId = providerConfig.triggerId as string | undefined
+
+    if (triggerId?.startsWith('confluence_comment_')) {
+      return extractCommentData(body)
+    }
+    if (triggerId?.startsWith('confluence_blog_')) {
+      return extractBlogData(body)
+    }
+    if (triggerId?.startsWith('confluence_attachment_')) {
+      return extractAttachmentData(body)
+    }
+    if (triggerId?.startsWith('confluence_space_')) {
+      return extractSpaceData(body)
+    }
+    if (triggerId?.startsWith('confluence_label_')) {
+      return extractLabelData(body)
+    }
+    // Generic webhook — preserve all entity fields since event type varies
+    if (triggerId === 'confluence_webhook') {
+      return {
+        timestamp: body.timestamp,
+        userAccountId: body.userAccountId,
+        accountType: body.accountType,
+        page: body.page || null,
+        comment: body.comment || null,
+        blog: body.blog || body.blogpost || null,
+        attachment: body.attachment || null,
+        space: body.space || null,
+        label: body.label || null,
+        content: body.content || null,
+      }
+    }
+    // Default: page events
+    return extractPageData(body)
+  }
+
+  if (foundWebhook.provider === 'ashby') {
     return {
-      ...extractedData,
-      webhook: {
-        data: {
-          provider: 'jira',
-          path: foundWebhook.path,
-          providerConfig: foundWebhook.providerConfig,
-          payload: body,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
+      ...(body.data || {}),
+      action: body.action,
+      data: body.data || {},
     }
   }
 
   if (foundWebhook.provider === 'stripe') {
-    return {
-      ...body,
-      webhook: {
-        data: {
-          provider: 'stripe',
-          path: foundWebhook.path,
-          providerConfig: foundWebhook.providerConfig,
-          payload: body,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
-    }
+    return body
   }
 
   if (foundWebhook.provider === 'calendly') {
-    // Calendly webhook payload format matches the trigger outputs
     return {
       event: body.event,
       created_at: body.created_at,
       created_by: body.created_by,
       payload: body.payload,
-      webhook: {
-        data: {
-          provider: 'calendly',
-          path: foundWebhook.path,
-          providerConfig: foundWebhook.providerConfig,
-          payload: body,
-          headers: Object.fromEntries(request.headers.entries()),
-          method: request.method,
-        },
-      },
-      workflowId: foundWorkflow.id,
     }
   }
 
-  // Generic format for other providers
-  return {
-    webhook: {
-      data: {
-        path: foundWebhook.path,
-        provider: foundWebhook.provider,
-        providerConfig: foundWebhook.providerConfig,
-        payload: body,
-        headers: Object.fromEntries(request.headers.entries()),
-        method: request.method,
-      },
-    },
-    workflowId: foundWorkflow.id,
+  if (foundWebhook.provider === 'circleback') {
+    return {
+      id: body.id,
+      name: body.name,
+      createdAt: body.createdAt,
+      duration: body.duration,
+      url: body.url,
+      recordingUrl: body.recordingUrl,
+      tags: body.tags || [],
+      icalUid: body.icalUid,
+      attendees: body.attendees || [],
+      notes: body.notes || '',
+      actionItems: body.actionItems || [],
+      transcript: body.transcript || [],
+      insights: body.insights || {},
+      meeting: body,
+    }
   }
+
+  if (foundWebhook.provider === 'grain') {
+    return {
+      type: body.type,
+      user_id: body.user_id,
+      data: body.data || {},
+    }
+  }
+
+  if (foundWebhook.provider === 'fireflies') {
+    return {
+      meetingId: body.meetingId || '',
+      eventType: body.eventType || 'Transcription completed',
+      clientReferenceId: body.clientReferenceId || '',
+    }
+  }
+
+  if (foundWebhook.provider === 'attio') {
+    const {
+      extractAttioRecordData,
+      extractAttioRecordUpdatedData,
+      extractAttioRecordMergedData,
+      extractAttioNoteData,
+      extractAttioTaskData,
+      extractAttioCommentData,
+      extractAttioListEntryData,
+      extractAttioListEntryUpdatedData,
+      extractAttioGenericData,
+    } = await import('@/triggers/attio/utils')
+
+    const providerConfig = (foundWebhook.providerConfig as Record<string, any>) || {}
+    const triggerId = providerConfig.triggerId as string | undefined
+
+    if (triggerId === 'attio_record_updated') {
+      return extractAttioRecordUpdatedData(body)
+    }
+    if (triggerId === 'attio_record_merged') {
+      return extractAttioRecordMergedData(body)
+    }
+    if (triggerId === 'attio_record_created' || triggerId === 'attio_record_deleted') {
+      return extractAttioRecordData(body)
+    }
+    if (triggerId?.startsWith('attio_note_')) {
+      return extractAttioNoteData(body)
+    }
+    if (triggerId?.startsWith('attio_task_')) {
+      return extractAttioTaskData(body)
+    }
+    if (triggerId?.startsWith('attio_comment_')) {
+      return extractAttioCommentData(body)
+    }
+    if (triggerId === 'attio_list_entry_updated') {
+      return extractAttioListEntryUpdatedData(body)
+    }
+    if (triggerId === 'attio_list_entry_created' || triggerId === 'attio_list_entry_deleted') {
+      return extractAttioListEntryData(body)
+    }
+    return extractAttioGenericData(body)
+  }
+
+  return body
 }
 
 /**
@@ -1397,21 +1370,11 @@ export function validateMicrosoftTeamsSignature(
 
     const providedSignature = signature.substring(5)
 
-    const crypto = require('crypto')
     const secretBytes = Buffer.from(hmacSecret, 'base64')
     const bodyBytes = Buffer.from(body, 'utf8')
     const computedHash = crypto.createHmac('sha256', secretBytes).update(bodyBytes).digest('base64')
 
-    if (computedHash.length !== providedSignature.length) {
-      return false
-    }
-
-    let result = 0
-    for (let i = 0; i < computedHash.length; i++) {
-      result |= computedHash.charCodeAt(i) ^ providedSignature.charCodeAt(i)
-    }
-
-    return result === 0
+    return safeCompare(computedHash, providedSignature)
   } catch (error) {
     logger.error('Error validating Microsoft Teams signature:', error)
     return false
@@ -1441,19 +1404,9 @@ export function validateTypeformSignature(
 
     const providedSignature = signature.substring(7)
 
-    const crypto = require('crypto')
     const computedHash = crypto.createHmac('sha256', secret).update(body, 'utf8').digest('base64')
 
-    if (computedHash.length !== providedSignature.length) {
-      return false
-    }
-
-    let result = 0
-    for (let i = 0; i < computedHash.length; i++) {
-      result |= computedHash.charCodeAt(i) ^ providedSignature.charCodeAt(i)
-    }
-
-    return result === 0
+    return safeCompare(computedHash, providedSignature)
   } catch (error) {
     logger.error('Error validating Typeform signature:', error)
     return false
@@ -1478,7 +1431,6 @@ export function validateLinearSignature(secret: string, signature: string, body:
       return false
     }
 
-    const crypto = require('crypto')
     const computedHash = crypto.createHmac('sha256', secret).update(body, 'utf8').digest('hex')
 
     logger.debug('Linear signature comparison', {
@@ -1489,18 +1441,83 @@ export function validateLinearSignature(secret: string, signature: string, body:
       match: computedHash === signature,
     })
 
-    if (computedHash.length !== signature.length) {
+    return safeCompare(computedHash, signature)
+  } catch (error) {
+    logger.error('Error validating Linear signature:', error)
+    return false
+  }
+}
+
+/**
+ * Validates an Attio webhook request signature using HMAC SHA-256
+ * @param secret - Attio webhook signing secret (plain text)
+ * @param signature - Attio-Signature header value (hex-encoded HMAC SHA-256 signature)
+ * @param body - Raw request body string
+ * @returns Whether the signature is valid
+ */
+export function validateAttioSignature(secret: string, signature: string, body: string): boolean {
+  try {
+    if (!secret || !signature || !body) {
+      logger.warn('Attio signature validation missing required fields', {
+        hasSecret: !!secret,
+        hasSignature: !!signature,
+        hasBody: !!body,
+      })
       return false
     }
 
-    let result = 0
-    for (let i = 0; i < computedHash.length; i++) {
-      result |= computedHash.charCodeAt(i) ^ signature.charCodeAt(i)
+    const computedHash = crypto.createHmac('sha256', secret).update(body, 'utf8').digest('hex')
+
+    logger.debug('Attio signature comparison', {
+      computedSignature: `${computedHash.substring(0, 10)}...`,
+      providedSignature: `${signature.substring(0, 10)}...`,
+      computedLength: computedHash.length,
+      providedLength: signature.length,
+      match: computedHash === signature,
+    })
+
+    return safeCompare(computedHash, signature)
+  } catch (error) {
+    logger.error('Error validating Attio signature:', error)
+    return false
+  }
+}
+
+/**
+ * Validates a Circleback webhook request signature using HMAC SHA-256
+ * @param secret - Circleback signing secret (plain text)
+ * @param signature - x-signature header value (hex-encoded HMAC SHA-256 signature)
+ * @param body - Raw request body string
+ * @returns Whether the signature is valid
+ */
+export function validateCirclebackSignature(
+  secret: string,
+  signature: string,
+  body: string
+): boolean {
+  try {
+    if (!secret || !signature || !body) {
+      logger.warn('Circleback signature validation missing required fields', {
+        hasSecret: !!secret,
+        hasSignature: !!signature,
+        hasBody: !!body,
+      })
+      return false
     }
 
-    return result === 0
+    const computedHash = crypto.createHmac('sha256', secret).update(body, 'utf8').digest('hex')
+
+    logger.debug('Circleback signature comparison', {
+      computedSignature: `${computedHash.substring(0, 10)}...`,
+      providedSignature: `${signature.substring(0, 10)}...`,
+      computedLength: computedHash.length,
+      providedLength: signature.length,
+      match: computedHash === signature,
+    })
+
+    return safeCompare(computedHash, signature)
   } catch (error) {
-    logger.error('Error validating Linear signature:', error)
+    logger.error('Error validating Circleback signature:', error)
     return false
   }
 }
@@ -1532,7 +1549,6 @@ export function validateJiraSignature(secret: string, signature: string, body: s
 
     const providedSignature = signature.substring(7)
 
-    const crypto = require('crypto')
     const computedHash = crypto.createHmac('sha256', secret).update(body, 'utf8').digest('hex')
 
     logger.debug('Jira signature comparison', {
@@ -1543,18 +1559,89 @@ export function validateJiraSignature(secret: string, signature: string, body: s
       match: computedHash === providedSignature,
     })
 
-    if (computedHash.length !== providedSignature.length) {
+    return safeCompare(computedHash, providedSignature)
+  } catch (error) {
+    logger.error('Error validating Jira signature:', error)
+    return false
+  }
+}
+
+/**
+ * Validates a Fireflies webhook request signature using HMAC SHA-256
+ * @param secret - Fireflies webhook secret (16-32 characters)
+ * @param signature - x-hub-signature header value (format: 'sha256=<hex>')
+ * @param body - Raw request body string
+ * @returns Whether the signature is valid
+ */
+export function validateFirefliesSignature(
+  secret: string,
+  signature: string,
+  body: string
+): boolean {
+  try {
+    if (!secret || !signature || !body) {
+      logger.warn('Fireflies signature validation missing required fields', {
+        hasSecret: !!secret,
+        hasSignature: !!signature,
+        hasBody: !!body,
+      })
       return false
     }
 
-    let result = 0
-    for (let i = 0; i < computedHash.length; i++) {
-      result |= computedHash.charCodeAt(i) ^ providedSignature.charCodeAt(i)
+    if (!signature.startsWith('sha256=')) {
+      logger.warn('Fireflies signature has invalid format (expected sha256=)', {
+        signaturePrefix: signature.substring(0, 10),
+      })
+      return false
     }
 
-    return result === 0
+    const providedSignature = signature.substring(7)
+
+    const computedHash = crypto.createHmac('sha256', secret).update(body, 'utf8').digest('hex')
+
+    logger.debug('Fireflies signature comparison', {
+      computedSignature: `${computedHash.substring(0, 10)}...`,
+      providedSignature: `${providedSignature.substring(0, 10)}...`,
+      computedLength: computedHash.length,
+      providedLength: providedSignature.length,
+      match: computedHash === providedSignature,
+    })
+
+    return safeCompare(computedHash, providedSignature)
   } catch (error) {
-    logger.error('Error validating Jira signature:', error)
+    logger.error('Error validating Fireflies signature:', error)
+    return false
+  }
+}
+
+/**
+ * Validates an Ashby webhook signature using HMAC-SHA256.
+ * Ashby signs payloads with the secretToken and sends the digest in the Ashby-Signature header.
+ * @param secretToken - The secret token configured when creating the webhook
+ * @param signature - Ashby-Signature header value (format: 'sha256=<hex>')
+ * @param body - Raw request body string
+ * @returns Whether the signature is valid
+ */
+export function validateAshbySignature(
+  secretToken: string,
+  signature: string,
+  body: string
+): boolean {
+  try {
+    if (!secretToken || !signature || !body) {
+      return false
+    }
+
+    if (!signature.startsWith('sha256=')) {
+      return false
+    }
+
+    const providedSignature = signature.substring(7)
+    const computedHash = crypto.createHmac('sha256', secretToken).update(body, 'utf8').digest('hex')
+
+    return safeCompare(computedHash, providedSignature)
+  } catch (error) {
+    logger.error('Error validating Ashby signature:', error)
     return false
   }
 }
@@ -1577,7 +1664,6 @@ export function validateGitHubSignature(secret: string, signature: string, body:
       return false
     }
 
-    const crypto = require('crypto')
     let algorithm: 'sha256' | 'sha1'
     let providedSignature: string
 
@@ -1605,16 +1691,7 @@ export function validateGitHubSignature(secret: string, signature: string, body:
       match: computedHash === providedSignature,
     })
 
-    if (computedHash.length !== providedSignature.length) {
-      return false
-    }
-
-    let result = 0
-    for (let i = 0; i < computedHash.length; i++) {
-      result |= computedHash.charCodeAt(i) ^ providedSignature.charCodeAt(i)
-    }
-
-    return result === 0
+    return safeCompare(computedHash, providedSignature)
   } catch (error) {
     logger.error('Error validating GitHub signature:', error)
     return false
@@ -1637,26 +1714,10 @@ export function verifyProviderWebhook(
     case 'stripe':
       break
     case 'gmail':
-      if (providerConfig.secret) {
-        const secretHeader = request.headers.get('X-Webhook-Secret')
-        if (!secretHeader || secretHeader.length !== providerConfig.secret.length) {
-          logger.warn(`[${requestId}] Invalid Gmail webhook secret`)
-          return new NextResponse('Unauthorized', { status: 401 })
-        }
-        let result = 0
-        for (let i = 0; i < secretHeader.length; i++) {
-          result |= secretHeader.charCodeAt(i) ^ providerConfig.secret.charCodeAt(i)
-        }
-        if (result !== 0) {
-          logger.warn(`[${requestId}] Invalid Gmail webhook secret`)
-          return new NextResponse('Unauthorized', { status: 401 })
-        }
-      }
       break
     case 'telegram': {
       // Check User-Agent to ensure it's not blocked by middleware
       const userAgent = request.headers.get('user-agent') || ''
-      logger.debug(`[${requestId}] Telegram webhook request received with User-Agent: ${userAgent}`)
 
       if (!userAgent) {
         logger.warn(
@@ -1669,8 +1730,6 @@ export function verifyProviderWebhook(
         request.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
         request.headers.get('x-real-ip') ||
         'unknown'
-
-      logger.debug(`[${requestId}] Telegram webhook request from IP: ${clientIp}`)
 
       break
     }
@@ -1771,9 +1830,21 @@ export async function fetchAndProcessAirtablePayloads(
       return
     }
 
+    const resolvedAirtable = await resolveOAuthAccountId(credentialId)
+    if (!resolvedAirtable) {
+      logger.error(
+        `[${requestId}] Could not resolve credential ${credentialId} for Airtable webhook`
+      )
+      return
+    }
+
     let ownerUserId: string | null = null
     try {
-      const rows = await db.select().from(account).where(eq(account.id, credentialId)).limit(1)
+      const rows = await db
+        .select()
+        .from(account)
+        .where(eq(account.id, resolvedAirtable.accountId))
+        .limit(1)
       ownerUserId = rows.length ? rows[0].userId : null
     } catch (_e) {
       ownerUserId = null
@@ -1819,27 +1890,23 @@ export async function fetchAndProcessAirtablePayloads(
 
     if (storedCursor && typeof storedCursor === 'number') {
       currentCursor = storedCursor
-      logger.debug(
-        `[${requestId}] Using stored cursor: ${currentCursor} for webhook ${webhookData.id}`
-      )
     } else {
       currentCursor = null
-      logger.debug(
-        `[${requestId}] No valid stored cursor for webhook ${webhookData.id}, starting from beginning`
-      )
     }
 
     let accessToken: string | null = null
     try {
-      accessToken = await refreshAccessTokenIfNeeded(credentialId, ownerUserId, requestId)
+      accessToken = await refreshAccessTokenIfNeeded(
+        resolvedAirtable.accountId,
+        ownerUserId,
+        requestId
+      )
       if (!accessToken) {
         logger.error(
           `[${requestId}] Failed to obtain valid Airtable access token via credential ${credentialId}.`
         )
         throw new Error('Airtable access token not found.')
       }
-
-      logger.info(`[${requestId}] Successfully obtained Airtable access token`)
     } catch (tokenError: any) {
       logger.error(
         `[${requestId}] Failed to get Airtable OAuth token for credential ${credentialId}`,
@@ -1859,10 +1926,6 @@ export async function fetchAndProcessAirtablePayloads(
       apiCallCount++
       // Safety break
       if (apiCallCount > 10) {
-        logger.warn(`[${requestId}] Reached maximum polling limit (10 calls)`, {
-          webhookId: webhookData.id,
-          consolidatedCount: consolidatedChangesMap.size,
-        })
         mightHaveMore = false
         break
       }
@@ -1874,11 +1937,6 @@ export async function fetchAndProcessAirtablePayloads(
       }
       const fullUrl = `${apiUrl}?${queryParams.toString()}`
 
-      logger.debug(`[${requestId}] Fetching Airtable payloads (call ${apiCallCount})`, {
-        url: fullUrl,
-        webhookId: webhookData.id,
-      })
-
       try {
         const fetchStartTime = Date.now()
         const response = await fetch(fullUrl, {
@@ -1887,14 +1945,6 @@ export async function fetchAndProcessAirtablePayloads(
             Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           },
-        })
-
-        // DEBUG: Log API response time
-        logger.debug(`[${requestId}] TRACE: Airtable API response received`, {
-          status: response.status,
-          duration: `${Date.now() - fetchStartTime}ms`,
-          hasBody: true,
-          apiCall: apiCallCount,
         })
 
         const responseBody = await response.json()
@@ -1918,9 +1968,6 @@ export async function fetchAndProcessAirtablePayloads(
         }
 
         const receivedPayloads = responseBody.payloads || []
-        logger.debug(
-          `[${requestId}] Received ${receivedPayloads.length} payloads from Airtable (call ${apiCallCount})`
-        )
 
         // --- Process and Consolidate Changes ---
         if (receivedPayloads.length > 0) {
@@ -1932,13 +1979,6 @@ export async function fetchAndProcessAirtablePayloads(
           let changeCount = 0
           for (const payload of receivedPayloads) {
             if (payload.changedTablesById) {
-              // DEBUG: Log tables being processed
-              const tableIds = Object.keys(payload.changedTablesById)
-              logger.debug(`[${requestId}] TRACE: Processing changes for tables`, {
-                tables: tableIds,
-                payloadTimestamp: payload.timestamp,
-              })
-
               for (const [tableId, tableChangesUntyped] of Object.entries(
                 payload.changedTablesById
               )) {
@@ -1948,10 +1988,6 @@ export async function fetchAndProcessAirtablePayloads(
                 if (tableChanges.createdRecordsById) {
                   const createdCount = Object.keys(tableChanges.createdRecordsById).length
                   changeCount += createdCount
-                  // DEBUG: Log created records count
-                  logger.debug(
-                    `[${requestId}] TRACE: Processing ${createdCount} created records for table ${tableId}`
-                  )
 
                   for (const [recordId, recordDataUntyped] of Object.entries(
                     tableChanges.createdRecordsById
@@ -1981,10 +2017,6 @@ export async function fetchAndProcessAirtablePayloads(
                 if (tableChanges.changedRecordsById) {
                   const updatedCount = Object.keys(tableChanges.changedRecordsById).length
                   changeCount += updatedCount
-                  // DEBUG: Log updated records count
-                  logger.debug(
-                    `[${requestId}] TRACE: Processing ${updatedCount} updated records for table ${tableId}`
-                  )
 
                   for (const [recordId, recordDataUntyped] of Object.entries(
                     tableChanges.changedRecordsById
@@ -2021,21 +2053,12 @@ export async function fetchAndProcessAirtablePayloads(
               }
             }
           }
-
-          // DEBUG: Log totals for this batch
-          logger.debug(
-            `[${requestId}] TRACE: Processed ${changeCount} changes in API call ${apiCallCount})`,
-            {
-              currentMapSize: consolidatedChangesMap.size,
-            }
-          )
         }
 
         const nextCursor = responseBody.cursor
         mightHaveMore = responseBody.mightHaveMore || false
 
         if (nextCursor && typeof nextCursor === 'number' && nextCursor !== currentCursor) {
-          logger.debug(`[${requestId}] Updating cursor from ${currentCursor} to ${nextCursor}`)
           currentCursor = nextCursor
 
           // Follow exactly the old implementation - use awaited update instead of parallel
@@ -2072,7 +2095,6 @@ export async function fetchAndProcessAirtablePayloads(
           })
           mightHaveMore = false
         } else if (nextCursor === currentCursor) {
-          logger.debug(`[${requestId}] Cursor hasn't changed (${currentCursor}), stopping poll`)
           mightHaveMore = false // Explicitly stop if cursor hasn't changed
         }
       } catch (fetchError: any) {
@@ -2164,14 +2186,6 @@ export async function fetchAndProcessAirtablePayloads(
     )
     // Error logging handled by logging session
   }
-
-  // DEBUG: Log function completion
-  logger.debug(`[${requestId}] TRACE: fetchAndProcessAirtablePayloads completed`, {
-    totalFetched: payloadsFetched,
-    totalApiCalls: apiCallCount,
-    totalChanges: consolidatedChangesMap.size,
-    timestamp: new Date().toISOString(),
-  })
 }
 
 // Define an interface for AirtableChange
@@ -2184,7 +2198,380 @@ export interface AirtableChange {
 }
 
 /**
- * Configure Gmail polling for a webhook
+ * Result of syncing webhooks for a credential set
+ */
+export interface CredentialSetWebhookSyncResult {
+  webhooks: Array<{
+    id: string
+    credentialId: string
+    isNew: boolean
+  }>
+  created: number
+  updated: number
+  deleted: number
+  failed: Array<{
+    credentialId: string
+    error: string
+  }>
+}
+
+/**
+ * Sync webhooks for a credential set.
+ *
+ * For credential sets, we create one webhook per credential in the set.
+ * Each webhook has its own state and credentialId.
+ *
+ * Path strategy:
+ * - Polling triggers (gmail, outlook): unique paths per credential (for independent polling)
+ * - External triggers (slack, etc.): shared path (external service sends to one URL)
+ *
+ * This function:
+ * 1. Gets all credentials in the credential set
+ * 2. Gets existing webhooks for this workflow+block with this credentialSetId
+ * 3. Creates webhooks for new credentials
+ * 4. Updates config for existing webhooks (preserving state)
+ * 5. Deletes webhooks for credentials no longer in the set
+ */
+export async function syncWebhooksForCredentialSet(params: {
+  workflowId: string
+  blockId: string
+  provider: string
+  basePath: string
+  credentialSetId: string
+  oauthProviderId: string
+  providerConfig: Record<string, any>
+  requestId: string
+  tx?: DbOrTx
+  deploymentVersionId?: string
+}): Promise<CredentialSetWebhookSyncResult> {
+  const {
+    workflowId,
+    blockId,
+    provider,
+    basePath,
+    credentialSetId,
+    oauthProviderId,
+    providerConfig,
+    requestId,
+    tx,
+    deploymentVersionId,
+  } = params
+
+  const dbCtx = tx ?? db
+
+  const syncLogger = createLogger('CredentialSetWebhookSync')
+  syncLogger.info(
+    `[${requestId}] Syncing webhooks for credential set ${credentialSetId}, provider ${provider}`
+  )
+
+  const useUniquePaths = isPollingWebhookProvider(provider)
+
+  const credentials = await getCredentialsForCredentialSet(credentialSetId, oauthProviderId)
+
+  if (credentials.length === 0) {
+    syncLogger.warn(
+      `[${requestId}] No credentials found in credential set ${credentialSetId} for provider ${oauthProviderId}`
+    )
+    return { webhooks: [], created: 0, updated: 0, deleted: 0, failed: [] }
+  }
+
+  syncLogger.info(
+    `[${requestId}] Found ${credentials.length} credentials in set ${credentialSetId}`
+  )
+
+  // Get existing webhooks for this workflow+block that belong to this credential set
+  const existingWebhooks = await dbCtx
+    .select()
+    .from(webhook)
+    .where(
+      deploymentVersionId
+        ? and(
+            eq(webhook.workflowId, workflowId),
+            eq(webhook.blockId, blockId),
+            eq(webhook.deploymentVersionId, deploymentVersionId),
+            isNull(webhook.archivedAt)
+          )
+        : and(
+            eq(webhook.workflowId, workflowId),
+            eq(webhook.blockId, blockId),
+            isNull(webhook.archivedAt)
+          )
+    )
+
+  // Filter to only webhooks belonging to this credential set
+  const credentialSetWebhooks = existingWebhooks.filter(
+    (wh) => wh.credentialSetId === credentialSetId
+  )
+
+  syncLogger.info(
+    `[${requestId}] Found ${credentialSetWebhooks.length} existing webhooks for credential set`
+  )
+
+  // Build maps for efficient lookup
+  const existingByCredentialId = new Map<string, (typeof credentialSetWebhooks)[number]>()
+  for (const wh of credentialSetWebhooks) {
+    const config = wh.providerConfig as Record<string, any>
+    if (config?.credentialId) {
+      existingByCredentialId.set(config.credentialId, wh)
+    }
+  }
+
+  const credentialIdsInSet = new Set(credentials.map((c) => c.credentialId))
+  const [workflowRecord] = await db
+    .select({
+      id: workflow.id,
+      userId: workflow.userId,
+      workspaceId: workflow.workspaceId,
+    })
+    .from(workflow)
+    .where(eq(workflow.id, workflowId))
+    .limit(1)
+
+  const result: CredentialSetWebhookSyncResult = {
+    webhooks: [],
+    created: 0,
+    updated: 0,
+    deleted: 0,
+    failed: [],
+  }
+
+  // Process each credential in the set
+  for (const cred of credentials) {
+    try {
+      const existingWebhook = existingByCredentialId.get(cred.credentialId)
+
+      if (existingWebhook) {
+        // Update existing webhook - preserve state fields
+        const existingConfig = existingWebhook.providerConfig as Record<string, any>
+
+        const updatedConfig = {
+          ...providerConfig,
+          basePath, // Store basePath for reliable reconstruction during membership sync
+          credentialId: cred.credentialId,
+          credentialSetId: credentialSetId,
+          // Preserve state fields from existing config
+          historyId: existingConfig?.historyId,
+          lastCheckedTimestamp: existingConfig?.lastCheckedTimestamp,
+          setupCompleted: existingConfig?.setupCompleted,
+          externalId: existingConfig?.externalId,
+          userId: cred.userId,
+        }
+
+        await dbCtx
+          .update(webhook)
+          .set({
+            ...(deploymentVersionId ? { deploymentVersionId } : {}),
+            providerConfig: updatedConfig,
+            isActive: true,
+            updatedAt: new Date(),
+          })
+          .where(eq(webhook.id, existingWebhook.id))
+
+        result.webhooks.push({
+          id: existingWebhook.id,
+          credentialId: cred.credentialId,
+          isNew: false,
+        })
+        result.updated++
+
+        syncLogger.debug(
+          `[${requestId}] Updated webhook ${existingWebhook.id} for credential ${cred.credentialId}`
+        )
+      } else {
+        // Create new webhook for this credential
+        const webhookId = nanoid()
+        const webhookPath = useUniquePaths
+          ? `${basePath}-${cred.credentialId.slice(0, 8)}`
+          : basePath
+
+        const newConfig = {
+          ...providerConfig,
+          basePath, // Store basePath for reliable reconstruction during membership sync
+          credentialId: cred.credentialId,
+          credentialSetId: credentialSetId,
+          userId: cred.userId,
+        }
+
+        await dbCtx.insert(webhook).values({
+          id: webhookId,
+          workflowId,
+          blockId,
+          path: webhookPath,
+          provider,
+          providerConfig: newConfig,
+          credentialSetId, // Indexed column for efficient credential set queries
+          isActive: true,
+          ...(deploymentVersionId ? { deploymentVersionId } : {}),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+
+        result.webhooks.push({
+          id: webhookId,
+          credentialId: cred.credentialId,
+          isNew: true,
+        })
+        result.created++
+
+        syncLogger.debug(
+          `[${requestId}] Created webhook ${webhookId} for credential ${cred.credentialId}`
+        )
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      syncLogger.error(
+        `[${requestId}] Failed to sync webhook for credential ${cred.credentialId}: ${errorMessage}`
+      )
+      result.failed.push({
+        credentialId: cred.credentialId,
+        error: errorMessage,
+      })
+    }
+  }
+
+  // Delete webhooks for credentials no longer in the set
+  for (const [credentialId, existingWebhook] of existingByCredentialId) {
+    if (!credentialIdsInSet.has(credentialId)) {
+      try {
+        if (workflowRecord) {
+          await cleanupExternalWebhook(existingWebhook, workflowRecord, requestId)
+        }
+        await dbCtx.delete(webhook).where(eq(webhook.id, existingWebhook.id))
+        result.deleted++
+
+        syncLogger.debug(
+          `[${requestId}] Deleted webhook ${existingWebhook.id} for removed credential ${credentialId}`
+        )
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+        syncLogger.error(
+          `[${requestId}] Failed to delete webhook ${existingWebhook.id} for credential ${credentialId}: ${errorMessage}`
+        )
+        result.failed.push({
+          credentialId,
+          error: `Failed to delete: ${errorMessage}`,
+        })
+      }
+    }
+  }
+
+  syncLogger.info(
+    `[${requestId}] Credential set webhook sync complete: ${result.created} created, ${result.updated} updated, ${result.deleted} deleted, ${result.failed.length} failed`
+  )
+
+  return result
+}
+
+/**
+ * Sync all webhooks that use a specific credential set.
+ * Called when credential set membership changes (member added/removed).
+ *
+ * This finds all workflows with webhooks using this credential set and resyncs them.
+ */
+export async function syncAllWebhooksForCredentialSet(
+  credentialSetId: string,
+  requestId: string,
+  tx?: DbOrTx
+): Promise<{ workflowsUpdated: number; totalCreated: number; totalDeleted: number }> {
+  const dbCtx = tx ?? db
+  const syncLogger = createLogger('CredentialSetMembershipSync')
+  syncLogger.info(`[${requestId}] Syncing all webhooks for credential set ${credentialSetId}`)
+
+  // Find all webhooks that use this credential set using the indexed column
+  const webhooksForSet = await dbCtx
+    .select({ webhook })
+    .from(webhook)
+    .leftJoin(
+      workflowDeploymentVersion,
+      and(
+        eq(workflowDeploymentVersion.workflowId, webhook.workflowId),
+        eq(workflowDeploymentVersion.isActive, true)
+      )
+    )
+    .where(
+      and(
+        eq(webhook.credentialSetId, credentialSetId),
+        isNull(webhook.archivedAt),
+        or(
+          eq(webhook.deploymentVersionId, workflowDeploymentVersion.id),
+          and(isNull(workflowDeploymentVersion.id), isNull(webhook.deploymentVersionId))
+        )
+      )
+    )
+
+  if (webhooksForSet.length === 0) {
+    syncLogger.info(`[${requestId}] No webhooks found using credential set ${credentialSetId}`)
+    return { workflowsUpdated: 0, totalCreated: 0, totalDeleted: 0 }
+  }
+
+  // Group webhooks by workflow+block to find unique triggers
+  const triggerGroups = new Map<string, (typeof webhooksForSet)[number]['webhook']>()
+  for (const row of webhooksForSet) {
+    const wh = row.webhook
+    const key = `${wh.workflowId}:${wh.blockId}`
+    // Keep the first webhook as representative (they all have same config)
+    if (!triggerGroups.has(key)) {
+      triggerGroups.set(key, wh)
+    }
+  }
+
+  syncLogger.info(
+    `[${requestId}] Found ${triggerGroups.size} triggers using credential set ${credentialSetId}`
+  )
+
+  let workflowsUpdated = 0
+  let totalCreated = 0
+  let totalDeleted = 0
+
+  for (const [key, representativeWebhook] of triggerGroups) {
+    if (!representativeWebhook.provider) {
+      syncLogger.warn(`[${requestId}] Skipping webhook without provider: ${key}`)
+      continue
+    }
+
+    const config = representativeWebhook.providerConfig as Record<string, any>
+    const oauthProviderId = getProviderIdFromServiceId(representativeWebhook.provider)
+
+    const { credentialId: _cId, userId: _uId, basePath: _bp, ...baseConfig } = config
+    // Use stored basePath if available, otherwise fall back to blockId (for legacy webhooks)
+    const basePath = config.basePath || representativeWebhook.blockId || representativeWebhook.path
+
+    try {
+      const result = await syncWebhooksForCredentialSet({
+        workflowId: representativeWebhook.workflowId,
+        blockId: representativeWebhook.blockId || '',
+        provider: representativeWebhook.provider,
+        basePath,
+        credentialSetId,
+        oauthProviderId,
+        providerConfig: baseConfig,
+        requestId,
+        tx: dbCtx,
+        deploymentVersionId: representativeWebhook.deploymentVersionId || undefined,
+      })
+
+      workflowsUpdated++
+      totalCreated += result.created
+      totalDeleted += result.deleted
+
+      syncLogger.debug(
+        `[${requestId}] Synced webhooks for ${key}: ${result.created} created, ${result.deleted} deleted`
+      )
+    } catch (error) {
+      syncLogger.error(`[${requestId}] Error syncing webhooks for ${key}`, error)
+    }
+  }
+
+  syncLogger.info(
+    `[${requestId}] Credential set membership sync complete: ${workflowsUpdated} workflows updated, ${totalCreated} webhooks created, ${totalDeleted} webhooks deleted`
+  )
+
+  return { workflowsUpdated, totalCreated, totalDeleted }
+}
+
+/**
+ * Configure Gmail polling for a webhook.
+ * Each webhook has its own credentialId (credential sets are fanned out at save time).
  */
 export async function configureGmailPolling(webhookData: any, requestId: string): Promise<boolean> {
   const logger = createLogger('GmailWebhookSetup')
@@ -2199,8 +2586,19 @@ export async function configureGmailPolling(webhookData: any, requestId: string)
       return false
     }
 
-    // Get userId from credential
-    const rows = await db.select().from(account).where(eq(account.id, credentialId)).limit(1)
+    const resolvedGmail = await resolveOAuthAccountId(credentialId)
+    if (!resolvedGmail) {
+      logger.error(
+        `[${requestId}] Could not resolve credential ${credentialId} for Gmail webhook ${webhookData.id}`
+      )
+      return false
+    }
+
+    const rows = await db
+      .select()
+      .from(account)
+      .where(eq(account.id, resolvedGmail.accountId))
+      .limit(1)
     if (rows.length === 0) {
       logger.error(
         `[${requestId}] Credential ${credentialId} not found for Gmail webhook ${webhookData.id}`
@@ -2209,7 +2607,12 @@ export async function configureGmailPolling(webhookData: any, requestId: string)
     }
 
     const effectiveUserId = rows[0].userId
-    const accessToken = await refreshAccessTokenIfNeeded(credentialId, effectiveUserId, requestId)
+
+    const accessToken = await refreshAccessTokenIfNeeded(
+      resolvedGmail.accountId,
+      effectiveUserId,
+      requestId
+    )
     if (!accessToken) {
       logger.error(
         `[${requestId}] Failed to refresh/access Gmail token for credential ${credentialId}`
@@ -2235,14 +2638,14 @@ export async function configureGmailPolling(webhookData: any, requestId: string)
         providerConfig: {
           ...providerConfig,
           userId: effectiveUserId,
-          ...(credentialId ? { credentialId } : {}),
+          credentialId,
           maxEmailsPerPoll,
           pollingInterval,
           markAsRead: providerConfig.markAsRead || false,
           includeRawEmail: providerConfig.includeRawEmail || false,
           labelIds: providerConfig.labelIds || ['INBOX'],
           labelFilterBehavior: providerConfig.labelFilterBehavior || 'INCLUDE',
-          lastCheckedTimestamp: now.toISOString(),
+          lastCheckedTimestamp: providerConfig.lastCheckedTimestamp || now.toISOString(),
           setupCompleted: true,
         },
         updatedAt: now,
@@ -2264,7 +2667,8 @@ export async function configureGmailPolling(webhookData: any, requestId: string)
 }
 
 /**
- * Configure Outlook polling for a webhook
+ * Configure Outlook polling for a webhook.
+ * Each webhook has its own credentialId (credential sets are fanned out at save time).
  */
 export async function configureOutlookPolling(
   webhookData: any,
@@ -2282,8 +2686,19 @@ export async function configureOutlookPolling(
       return false
     }
 
-    // Get userId from credential
-    const rows = await db.select().from(account).where(eq(account.id, credentialId)).limit(1)
+    const resolvedOutlook = await resolveOAuthAccountId(credentialId)
+    if (!resolvedOutlook) {
+      logger.error(
+        `[${requestId}] Could not resolve credential ${credentialId} for Outlook webhook ${webhookData.id}`
+      )
+      return false
+    }
+
+    const rows = await db
+      .select()
+      .from(account)
+      .where(eq(account.id, resolvedOutlook.accountId))
+      .limit(1)
     if (rows.length === 0) {
       logger.error(
         `[${requestId}] Credential ${credentialId} not found for Outlook webhook ${webhookData.id}`
@@ -2292,7 +2707,12 @@ export async function configureOutlookPolling(
     }
 
     const effectiveUserId = rows[0].userId
-    const accessToken = await refreshAccessTokenIfNeeded(credentialId, effectiveUserId, requestId)
+
+    const accessToken = await refreshAccessTokenIfNeeded(
+      resolvedOutlook.accountId,
+      effectiveUserId,
+      requestId
+    )
     if (!accessToken) {
       logger.error(
         `[${requestId}] Failed to refresh/access Outlook token for credential ${credentialId}`
@@ -2300,30 +2720,28 @@ export async function configureOutlookPolling(
       return false
     }
 
-    const providerCfg = (webhookData.providerConfig as Record<string, any>) || {}
-
     const now = new Date()
 
     await db
       .update(webhook)
       .set({
         providerConfig: {
-          ...providerCfg,
+          ...providerConfig,
           userId: effectiveUserId,
-          ...(credentialId ? { credentialId } : {}),
+          credentialId,
           maxEmailsPerPoll:
-            typeof providerCfg.maxEmailsPerPoll === 'string'
-              ? Number.parseInt(providerCfg.maxEmailsPerPoll, 10) || 25
-              : providerCfg.maxEmailsPerPoll || 25,
+            typeof providerConfig.maxEmailsPerPoll === 'string'
+              ? Number.parseInt(providerConfig.maxEmailsPerPoll, 10) || 25
+              : providerConfig.maxEmailsPerPoll || 25,
           pollingInterval:
-            typeof providerCfg.pollingInterval === 'string'
-              ? Number.parseInt(providerCfg.pollingInterval, 10) || 5
-              : providerCfg.pollingInterval || 5,
-          markAsRead: providerCfg.markAsRead || false,
-          includeRawEmail: providerCfg.includeRawEmail || false,
-          folderIds: providerCfg.folderIds || ['inbox'],
-          folderFilterBehavior: providerCfg.folderFilterBehavior || 'INCLUDE',
-          lastCheckedTimestamp: now.toISOString(),
+            typeof providerConfig.pollingInterval === 'string'
+              ? Number.parseInt(providerConfig.pollingInterval, 10) || 5
+              : providerConfig.pollingInterval || 5,
+          markAsRead: providerConfig.markAsRead || false,
+          includeRawEmail: providerConfig.includeRawEmail || false,
+          folderIds: providerConfig.folderIds || ['inbox'],
+          folderFilterBehavior: providerConfig.folderFilterBehavior || 'INCLUDE',
+          lastCheckedTimestamp: providerConfig.lastCheckedTimestamp || now.toISOString(),
           setupCompleted: true,
         },
         updatedAt: now,
@@ -2344,6 +2762,89 @@ export async function configureOutlookPolling(
   }
 }
 
+/**
+ * Configure RSS polling for a webhook
+ */
+export async function configureRssPolling(webhookData: any, requestId: string): Promise<boolean> {
+  const logger = createLogger('RssWebhookSetup')
+  logger.info(`[${requestId}] Setting up RSS polling for webhook ${webhookData.id}`)
+
+  try {
+    const providerConfig = (webhookData.providerConfig as Record<string, any>) || {}
+    const now = new Date()
+
+    await db
+      .update(webhook)
+      .set({
+        providerConfig: {
+          ...providerConfig,
+          lastCheckedTimestamp: now.toISOString(),
+          lastSeenGuids: [],
+          setupCompleted: true,
+        },
+        updatedAt: now,
+      })
+      .where(eq(webhook.id, webhookData.id))
+
+    logger.info(`[${requestId}] Successfully configured RSS polling for webhook ${webhookData.id}`)
+    return true
+  } catch (error: any) {
+    logger.error(`[${requestId}] Failed to configure RSS polling`, {
+      webhookId: webhookData.id,
+      error: error.message,
+    })
+    return false
+  }
+}
+
+/**
+ * Configure IMAP polling for a webhook
+ */
+export async function configureImapPolling(webhookData: any, requestId: string): Promise<boolean> {
+  const logger = createLogger('ImapWebhookSetup')
+  logger.info(`[${requestId}] Setting up IMAP polling for webhook ${webhookData.id}`)
+
+  try {
+    const providerConfig = (webhookData.providerConfig as Record<string, any>) || {}
+    const now = new Date()
+
+    if (!providerConfig.host || !providerConfig.username || !providerConfig.password) {
+      logger.error(
+        `[${requestId}] Missing required IMAP connection settings for webhook ${webhookData.id}`
+      )
+      return false
+    }
+
+    await db
+      .update(webhook)
+      .set({
+        providerConfig: {
+          ...providerConfig,
+          port: providerConfig.port || '993',
+          secure: providerConfig.secure !== false,
+          rejectUnauthorized: providerConfig.rejectUnauthorized !== false,
+          mailbox: providerConfig.mailbox || 'INBOX',
+          searchCriteria: providerConfig.searchCriteria || 'UNSEEN',
+          markAsRead: providerConfig.markAsRead || false,
+          includeAttachments: providerConfig.includeAttachments !== false,
+          lastCheckedTimestamp: now.toISOString(),
+          setupCompleted: true,
+        },
+        updatedAt: now,
+      })
+      .where(eq(webhook.id, webhookData.id))
+
+    logger.info(`[${requestId}] Successfully configured IMAP polling for webhook ${webhookData.id}`)
+    return true
+  } catch (error: any) {
+    logger.error(`[${requestId}] Failed to configure IMAP polling`, {
+      webhookId: webhookData.id,
+      error: error.message,
+    })
+    return false
+  }
+}
+
 export function convertSquareBracketsToTwiML(twiml: string | undefined): string | undefined {
   if (!twiml) {
     return twiml
@@ -2351,4 +2852,49 @@ export function convertSquareBracketsToTwiML(twiml: string | undefined): string 
 
   // Replace [Tag] with <Tag> and [/Tag] with </Tag>
   return twiml.replace(/\[(\/?[^\]]+)\]/g, '<$1>')
+}
+
+/**
+ * Validates a Cal.com webhook request signature using HMAC SHA-256
+ * @param secret - Cal.com webhook secret (plain text)
+ * @param signature - X-Cal-Signature-256 header value (hex-encoded HMAC SHA-256 signature)
+ * @param body - Raw request body string
+ * @returns Whether the signature is valid
+ */
+export function validateCalcomSignature(secret: string, signature: string, body: string): boolean {
+  try {
+    if (!secret || !signature || !body) {
+      logger.warn('Cal.com signature validation missing required fields', {
+        hasSecret: !!secret,
+        hasSignature: !!signature,
+        hasBody: !!body,
+      })
+      return false
+    }
+
+    // Cal.com sends signature in format: sha256=<hex>
+    // We need to strip the prefix before comparing
+    let providedSignature: string
+    if (signature.startsWith('sha256=')) {
+      providedSignature = signature.substring(7)
+    } else {
+      // If no prefix, use as-is (for backwards compatibility)
+      providedSignature = signature
+    }
+
+    const computedHash = crypto.createHmac('sha256', secret).update(body, 'utf8').digest('hex')
+
+    logger.debug('Cal.com signature comparison', {
+      computedSignature: `${computedHash.substring(0, 10)}...`,
+      providedSignature: `${providedSignature.substring(0, 10)}...`,
+      computedLength: computedHash.length,
+      providedLength: providedSignature.length,
+      match: computedHash === providedSignature,
+    })
+
+    return safeCompare(computedHash, providedSignature)
+  } catch (error) {
+    logger.error('Error validating Cal.com signature:', error)
+    return false
+  }
 }

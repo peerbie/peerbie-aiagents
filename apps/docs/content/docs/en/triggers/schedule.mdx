@@ -5,7 +5,7 @@ title: Schedule
 import { Callout } from 'fumadocs-ui/components/callout'
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs'
 import { Image } from '@/components/ui/image'
-import { Video } from '@/components/ui/video'
+import { FAQ } from '@/components/ui/faq'
 
 The Schedule block automatically triggers workflows on a recurring schedule at specified intervals or times.
 
@@ -21,16 +21,16 @@ The Schedule block automatically triggers workflows on a recurring schedule at s
 
 ## Schedule Options
 
-Configure when your workflow runs using the dropdown options:
+Configure when your workflow runs:
 
 <Tabs items={['Simple Intervals', 'Cron Expressions']}>
   <Tab>
     <ul className="list-disc space-y-1 pl-6">
-      <li><strong>Every few minutes</strong>: 5, 15, 30 minute intervals</li>
-      <li><strong>Hourly</strong>: Every hour or every few hours</li>
-      <li><strong>Daily</strong>: Once or multiple times per day</li>
-      <li><strong>Weekly</strong>: Specific days of the week</li>
-      <li><strong>Monthly</strong>: Specific days of the month</li>
+      <li><strong>Every X Minutes</strong>: Run at minute intervals (1-1440)</li>
+      <li><strong>Hourly</strong>: Run at a specific minute each hour</li>
+      <li><strong>Daily</strong>: Run at a specific time each day</li>
+      <li><strong>Weekly</strong>: Run on a specific day and time each week</li>
+      <li><strong>Monthly</strong>: Run on a specific day and time each month</li>
     </ul>
   </Tab>
   <Tab>
@@ -43,24 +43,25 @@ Configure when your workflow runs using the dropdown options:
   </Tab>
 </Tabs>
 
-## Configuring Schedules
+## Activation
 
-When a workflow is scheduled:
-- The schedule becomes **active** and shows the next execution time
-- Click the **"Scheduled"** button to deactivate the schedule
-- Schedules automatically deactivate after **3 consecutive failures**
+Schedules are tied to workflow deployment:
 
-<div className="flex justify-center">
-  <Image
-    src="/static/blocks/schedule-2.png"
-    alt="Active Schedule Block"
-    width={500}
-    height={400}
-    className="my-6"
-  />
-</div>
+- **Deploy workflow** → Schedule becomes active and starts running
+- **Undeploy workflow** → Schedule is removed
+- **Redeploy workflow** → Schedule is recreated with current configuration
 
-## Disabled Schedules
+<Callout>
+You must deploy your workflow for the schedule to start running. Configure the schedule block, then deploy from the toolbar.
+</Callout>
+
+## Automatic Disabling
+
+Schedules automatically disable after **100 consecutive failures** to prevent runaway errors. When disabled:
+
+- A warning badge appears on the schedule block
+- The schedule stops executing
+- Click the badge to reactivate the schedule
 
 <div className="flex justify-center">
   <Image
@@ -72,8 +73,16 @@ When a workflow is scheduled:
   />
 </div>
 
-Disabled schedules show when they were last active. Click the **"Disabled"** badge to reactivate the schedule.
-
 <Callout>
-Schedule blocks cannot receive incoming connections and serve as pure workflow triggers.
+Schedule blocks cannot receive incoming connections and serve as workflow entry points only.
 </Callout>
+
+<FAQ items={[
+  { question: "Do I need to deploy my workflow for the schedule to start?", answer: "Yes. Schedules are created in the database only when you deploy the workflow. Undeploying removes the schedule, and redeploying recreates it with the current configuration." },
+  { question: "What exactly happens after 100 consecutive failures?", answer: "After 100 consecutive failures, the schedule is automatically set to a disabled status to prevent runaway errors. A warning badge appears on the schedule block in the editor. You can click the badge to reactivate it. The failure counter resets to zero on any successful execution." },
+  { question: "Does the schedule support timezones?", answer: "Yes. The schedule configuration includes a timezone setting. Cron expressions and simple intervals are evaluated relative to the configured timezone, which defaults to UTC if not specified." },
+  { question: "What happens if my scheduled workflow is rate-limited?", answer: "If a rate limit (HTTP 429) is encountered during execution, the schedule automatically retries after a 5-minute delay rather than counting it as a failure." },
+  { question: "Can I have multiple schedule blocks in one workflow?", answer: "Yes. The deployment process finds all schedule blocks in the workflow and creates a separate schedule record for each one. Each schedule operates independently with its own cron expression and failure counter." },
+  { question: "What happens if the workflow is undeployed while a schedule execution is in progress?", answer: "The currently running execution will complete, but no new executions will be triggered. When the schedule next tries to fire, it checks that the workflow is still deployed and the schedule record still exists before executing." },
+]} />
+

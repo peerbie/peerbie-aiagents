@@ -3,17 +3,24 @@
   "pages": [
     "./introduction/index",
     "./getting-started/index",
+    "./quick-reference/index",
     "triggers",
     "blocks",
     "tools",
     "connections",
     "mcp",
     "copilot",
+    "mailer",
+    "skills",
     "knowledgebase",
+    "tables",
     "variables",
+    "credentials",
     "execution",
     "permissions",
-    "sdks"
+    "self-hosting",
+    "./enterprise/index",
+    "./keyboard-shortcuts/index"
   ],
   "defaultOpen": false
 }

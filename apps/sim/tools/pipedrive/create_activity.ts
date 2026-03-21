@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   PipedriveCreateActivityParams,
   PipedriveCreateActivityResponse,
@@ -26,55 +26,55 @@ export const pipedriveCreateActivityTool: ToolConfig<
     subject: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The subject/title of the activity',
+      visibility: 'user-or-llm',
+      description: 'The subject/title of the activity (e.g., "Follow up call with John")',
     },
     type: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Activity type: call, meeting, task, deadline, email, lunch',
     },
     due_date: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'Due date in YYYY-MM-DD format',
+      visibility: 'user-or-llm',
+      description: 'Due date in YYYY-MM-DD format (e.g., "2025-03-15")',
     },
     due_time: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Due time in HH:MM format',
+      visibility: 'user-or-llm',
+      description: 'Due time in HH:MM format (e.g., "14:30")',
     },
     duration: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Duration in HH:MM format',
+      visibility: 'user-or-llm',
+      description: 'Duration in HH:MM format (e.g., "01:00" for 1 hour)',
     },
     deal_id: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'ID of the deal to associate with',
+      visibility: 'user-or-llm',
+      description: 'ID of the deal to associate with (e.g., "123")',
     },
     person_id: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'ID of the person to associate with',
+      visibility: 'user-or-llm',
+      description: 'ID of the person to associate with (e.g., "456")',
     },
     org_id: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'ID of the organization to associate with',
+      visibility: 'user-or-llm',
+      description: 'ID of the organization to associate with (e.g., "789")',
     },
     note: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Notes for the activity',
     },
   },
@@ -122,31 +122,14 @@ export const pipedriveCreateActivityTool: ToolConfig<
     return {
       success: true,
       output: {
-        activity: data.data,
-        metadata: {
-          operation: 'create_activity' as const,
-        },
+        activity: data.data ?? null,
         success: true,
       },
     }
   },
 
   outputs: {
+    activity: { type: 'object', description: 'The created activity object', optional: true },
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Created activity details',
-      properties: {
-        activity: {
-          type: 'object',
-          description: 'The created activity object',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

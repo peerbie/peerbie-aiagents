@@ -1,32 +1,56 @@
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
+import { AuditAction, AuditResourceType, recordAudit } from '@/lib/audit/log'
 import { getSession } from '@/lib/auth'
-import { createKnowledgeBase, getKnowledgeBases } from '@/lib/knowledge/service'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
+import { PlatformEvents } from '@/lib/core/telemetry'
+import { generateRequestId } from '@/lib/core/utils/request'
+import {
+  createKnowledgeBase,
+  getKnowledgeBases,
+  type KnowledgeBaseScope,
+} from '@/lib/knowledge/service'
 
 const logger = createLogger('KnowledgeBaseAPI')
 
+/**
+ * Schema for creating a knowledge base
+ *
+ * Chunking config units:
+ * - maxSize: tokens (1 token ≈ 4 characters)
+ * - minSize: characters
+ * - overlap: tokens (1 token ≈ 4 characters)
+ */
 const CreateKnowledgeBaseSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   description: z.string().optional(),
-  workspaceId: z.string().optional(),
+  workspaceId: z.string().min(1, 'Workspace ID is required'),
   embeddingModel: z.literal('text-embedding-3-small').default('text-embedding-3-small'),
   embeddingDimension: z.literal(1536).default(1536),
   chunkingConfig: z
     .object({
+      /** Maximum chunk size in tokens (1 token ≈ 4 characters) */
       maxSize: z.number().min(100).max(4000).default(1024),
-      minSize: z.number().min(1).max(2000).default(1),
+      /** Minimum chunk size in characters */
+      minSize: z.number().min(1).max(2000).default(100),
+      /** Overlap between chunks in tokens (1 token ≈ 4 characters) */
       overlap: z.number().min(0).max(500).default(200),
     })
     .default({
       maxSize: 1024,
-      minSize: 1,
+      minSize: 100,
       overlap: 200,
     })
-    .refine((data) => data.minSize < data.maxSize, {
-      message: 'Min chunk size must be less than max chunk size',
-    }),
+    .refine(
+      (data) => {
+        // Convert maxSize from tokens to characters for comparison (1 token ≈ 4 chars)
+        const maxSizeInChars = data.maxSize * 4
+        return data.minSize < maxSizeInChars
+      },
+      {
+        message: 'Min chunk size (characters) must be less than max chunk size (tokens × 4)',
+      }
+    ),
 })
 
 export async function GET(req: NextRequest) {
@@ -41,8 +65,12 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url)
     const workspaceId = searchParams.get('workspaceId')
+    const scope = (searchParams.get('scope') ?? 'active') as KnowledgeBaseScope
+    if (!['active', 'archived', 'all'].includes(scope)) {
+      return NextResponse.json({ error: 'Invalid scope' }, { status: 400 })
+    }
 
-    const knowledgeBasesWithCounts = await getKnowledgeBases(session.user.id, workspaceId)
+    const knowledgeBasesWithCounts = await getKnowledgeBases(session.user.id, workspaceId, scope)
 
     return NextResponse.json({
       success: true,
@@ -76,9 +104,33 @@ export async function POST(req: NextRequest) {
 
       const newKnowledgeBase = await createKnowledgeBase(createData, requestId)
 
+      try {
+        PlatformEvents.knowledgeBaseCreated({
+          knowledgeBaseId: newKnowledgeBase.id,
+          name: validatedData.name,
+          workspaceId: validatedData.workspaceId,
+        })
+      } catch {
+        // Telemetry should not fail the operation
+      }
+
       logger.info(
         `[${requestId}] Knowledge base created: ${newKnowledgeBase.id} for user ${session.user.id}`
       )
+
+      recordAudit({
+        workspaceId: validatedData.workspaceId,
+        actorId: session.user.id,
+        actorName: session.user.name,
+        actorEmail: session.user.email,
+        action: AuditAction.KNOWLEDGE_BASE_CREATED,
+        resourceType: AuditResourceType.KNOWLEDGE_BASE,
+        resourceId: newKnowledgeBase.id,
+        resourceName: validatedData.name,
+        description: `Created knowledge base "${validatedData.name}"`,
+        metadata: { name: validatedData.name },
+        request: req,
+      })
 
       return NextResponse.json({
         success: true,

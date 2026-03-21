@@ -1,12 +1,28 @@
 import { db } from '@sim/db'
 import { apiKey as apiKeyTable } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq } from 'drizzle-orm'
 import { authenticateApiKey } from '@/lib/api-key/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { getUserEntityPermissions } from '@/lib/permissions/utils'
+import { getUserEntityPermissions } from '@/lib/workspaces/permissions/utils'
 import { getWorkspaceBillingSettings } from '@/lib/workspaces/utils'
 
 const logger = createLogger('ApiKeyService')
+
+export async function listApiKeys(workspaceId: string) {
+  return db
+    .select({
+      id: apiKeyTable.id,
+      name: apiKeyTable.name,
+      type: apiKeyTable.type,
+      lastUsed: apiKeyTable.lastUsed,
+      createdAt: apiKeyTable.createdAt,
+      expiresAt: apiKeyTable.expiresAt,
+      createdBy: apiKeyTable.createdBy,
+    })
+    .from(apiKeyTable)
+    .where(and(eq(apiKeyTable.workspaceId, workspaceId), eq(apiKeyTable.type, 'workspace')))
+    .orderBy(apiKeyTable.createdAt)
+}
 
 export interface ApiKeyAuthOptions {
   userId?: string

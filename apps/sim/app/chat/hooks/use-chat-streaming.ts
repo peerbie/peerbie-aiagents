@@ -1,11 +1,51 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { createLogger } from '@/lib/logs/console/logger'
-import type { ChatMessage } from '@/app/chat/components/message/message'
+import { createLogger } from '@sim/logger'
+import { isUserFileWithMetadata } from '@/lib/core/utils/user-file'
+import type { ChatFile, ChatMessage } from '@/app/chat/components/message/message'
 import { CHAT_ERROR_MESSAGES } from '@/app/chat/constants'
 
 const logger = createLogger('UseChatStreaming')
+
+function extractFilesFromData(
+  data: any,
+  files: ChatFile[] = [],
+  seenIds = new Set<string>()
+): ChatFile[] {
+  if (!data || typeof data !== 'object') {
+    return files
+  }
+
+  if (isUserFileWithMetadata(data)) {
+    if (!seenIds.has(data.id)) {
+      seenIds.add(data.id)
+      files.push({
+        id: data.id,
+        name: data.name,
+        url: data.url,
+        key: data.key,
+        size: data.size,
+        type: data.type,
+        context: data.context,
+      })
+    }
+    return files
+  }
+
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      extractFilesFromData(item, files, seenIds)
+    }
+    return files
+  }
+
+  for (const value of Object.values(data)) {
+    extractFilesFromData(value, files, seenIds)
+  }
+
+  return files
+}
 
 export interface VoiceSettings {
   isVoiceEnabled: boolean
@@ -38,18 +78,15 @@ export function useChatStreaming() {
       abortControllerRef.current.abort()
       abortControllerRef.current = null
 
-      // Add a message indicating the response was stopped
+      const latestContent = accumulatedTextRef.current
+
       setMessages((prev) => {
         const lastMessage = prev[prev.length - 1]
 
-        // Only modify if the last message is from the assistant (as expected)
         if (lastMessage && lastMessage.type === 'assistant') {
-          // Append a note that the response was stopped
+          const content = latestContent || lastMessage.content
           const updatedContent =
-            lastMessage.content +
-            (lastMessage.content
-              ? '\n\n_Response stopped by user._'
-              : '_Response stopped by user._')
+            content + (content ? '\n\n_Response stopped by user._' : '_Response stopped by user._')
 
           return [
             ...prev.slice(0, -1),
@@ -60,7 +97,6 @@ export function useChatStreaming() {
         return prev
       })
 
-      // Reset streaming state immediately
       setIsStreamingResponse(false)
       accumulatedTextRef.current = ''
       lastStreamedPositionRef.current = 0
@@ -99,9 +135,49 @@ export function useChatStreaming() {
     let accumulatedText = ''
     let lastAudioPosition = 0
 
-    // Track which blocks have streamed content (like chat panel)
     const messageIdMap = new Map<string, string>()
     const messageId = crypto.randomUUID()
+
+    const UI_BATCH_MAX_MS = 50
+    let uiDirty = false
+    let uiRAF: number | null = null
+    let uiTimer: ReturnType<typeof setTimeout> | null = null
+    let lastUIFlush = 0
+
+    const flushUI = () => {
+      if (uiRAF !== null) {
+        cancelAnimationFrame(uiRAF)
+        uiRAF = null
+      }
+      if (uiTimer !== null) {
+        clearTimeout(uiTimer)
+        uiTimer = null
+      }
+      if (!uiDirty) return
+      uiDirty = false
+      lastUIFlush = performance.now()
+      const snapshot = accumulatedText
+      setMessages((prev) =>
+        prev.map((msg) => {
+          if (msg.id !== messageId) return msg
+          if (!msg.isStreaming) return msg
+          return { ...msg, content: snapshot }
+        })
+      )
+    }
+
+    const scheduleUIFlush = () => {
+      if (uiRAF !== null) return
+      const elapsed = performance.now() - lastUIFlush
+      if (elapsed >= UI_BATCH_MAX_MS) {
+        flushUI()
+        return
+      }
+      uiRAF = requestAnimationFrame(flushUI)
+      if (uiTimer === null) {
+        uiTimer = setTimeout(flushUI, Math.max(0, UI_BATCH_MAX_MS - elapsed))
+      }
+    }
     setMessages((prev) => [
       ...prev,
       {
@@ -125,6 +201,7 @@ export function useChatStreaming() {
         const { done, value } = await reader.read()
 
         if (done) {
+          flushUI()
           // Stream any remaining text for TTS
           if (
             shouldPlayAudio &&
@@ -177,6 +254,7 @@ export function useChatStreaming() {
               }
 
               if (eventType === 'final' && json.data) {
+                flushUI()
                 const finalData = json.data as {
                   success: boolean
                   error?: string | { message?: string }
@@ -185,9 +263,18 @@ export function useChatStreaming() {
 
                 const outputConfigs = streamingOptions?.outputConfigs
                 const formattedOutputs: string[] = []
+                let extractedFiles: ChatFile[] = []
 
                 const formatValue = (value: any): string | null => {
                   if (value === null || value === undefined) {
+                    return null
+                  }
+
+                  if (isUserFileWithMetadata(value)) {
+                    return null
+                  }
+
+                  if (Array.isArray(value) && value.length === 0) {
                     return null
                   }
 
@@ -235,6 +322,26 @@ export function useChatStreaming() {
                     if (!blockOutputs) continue
 
                     const value = getOutputValue(blockOutputs, config.path)
+
+                    if (isUserFileWithMetadata(value)) {
+                      extractedFiles.push({
+                        id: value.id,
+                        name: value.name,
+                        url: value.url,
+                        key: value.key,
+                        size: value.size,
+                        type: value.type,
+                        context: value.context,
+                      })
+                      continue
+                    }
+
+                    const nestedFiles = extractFilesFromData(value)
+                    if (nestedFiles.length > 0) {
+                      extractedFiles = [...extractedFiles, ...nestedFiles]
+                      continue
+                    }
+
                     const formatted = formatValue(value)
                     if (formatted) {
                       formattedOutputs.push(formatted)
@@ -245,29 +352,16 @@ export function useChatStreaming() {
                 let finalContent = accumulatedText
 
                 if (formattedOutputs.length > 0) {
-                  const trimmedStreamingContent = accumulatedText.trim()
-
-                  const uniqueOutputs = formattedOutputs.filter((output) => {
-                    const trimmedOutput = output.trim()
-                    if (!trimmedOutput) return false
-
-                    // Skip outputs that exactly match the streamed content to avoid duplication
-                    if (trimmedStreamingContent && trimmedOutput === trimmedStreamingContent) {
-                      return false
-                    }
-
-                    return true
-                  })
-
-                  if (uniqueOutputs.length > 0) {
-                    const combinedOutputs = uniqueOutputs.join('\n\n')
+                  const nonEmptyOutputs = formattedOutputs.filter((output) => output.trim())
+                  if (nonEmptyOutputs.length > 0) {
+                    const combinedOutputs = nonEmptyOutputs.join('\n\n')
                     finalContent = finalContent
                       ? `${finalContent.trim()}\n\n${combinedOutputs}`
                       : combinedOutputs
                   }
                 }
 
-                if (!finalContent) {
+                if (!finalContent && extractedFiles.length === 0) {
                   if (finalData.error) {
                     if (typeof finalData.error === 'string') {
                       finalContent = finalData.error
@@ -291,6 +385,7 @@ export function useChatStreaming() {
                           ...msg,
                           isStreaming: false,
                           content: finalContent ?? msg.content,
+                          files: extractedFiles.length > 0 ? extractedFiles : undefined,
                         }
                       : msg
                   )
@@ -310,6 +405,7 @@ export function useChatStreaming() {
                 }
 
                 accumulatedText += contentChunk
+                accumulatedTextRef.current = accumulatedText
                 logger.debug('[useChatStreaming] Received chunk', {
                   blockId,
                   chunkLength: contentChunk.length,
@@ -317,11 +413,8 @@ export function useChatStreaming() {
                   messageId,
                   chunk: contentChunk.substring(0, 20),
                 })
-                setMessages((prev) =>
-                  prev.map((msg) =>
-                    msg.id === messageId ? { ...msg, content: accumulatedText } : msg
-                  )
-                )
+                uiDirty = true
+                scheduleUIFlush()
 
                 // Real-time TTS for voice mode
                 if (shouldPlayAudio && streamingOptions?.audioStreamHandler) {
@@ -362,10 +455,13 @@ export function useChatStreaming() {
       }
     } catch (error) {
       logger.error('Error processing stream:', error)
+      flushUI()
       setMessages((prev) =>
         prev.map((msg) => (msg.id === messageId ? { ...msg, isStreaming: false } : msg))
       )
     } finally {
+      if (uiRAF !== null) cancelAnimationFrame(uiRAF)
+      if (uiTimer !== null) clearTimeout(uiTimer)
       setIsStreamingResponse(false)
       abortControllerRef.current = null
 

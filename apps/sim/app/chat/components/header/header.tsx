@@ -3,8 +3,7 @@
 import Image from 'next/image'
 import Link from 'next/link'
 import { GithubIcon } from '@/components/icons'
-import { useBrandConfig } from '@/lib/branding/branding'
-import { inter } from '@/app/_styles/fonts/inter/inter'
+import { useBrandConfig } from '@/ee/whitelabeling'
 
 interface ChatHeaderProps {
   chatConfig: {
@@ -37,10 +36,11 @@ export function ChatHeader({ chatConfig, starCount }: ChatHeaderProps) {
               alt={`${chatConfig?.title || 'Chat'} logo`}
               width={24}
               height={24}
+              unoptimized
               className='h-6 w-6 rounded-md object-cover'
             />
           )}
-          <h2 className={`${inter.className} font-medium text-[18px] text-foreground`}>
+          <h2 className='font-medium text-[18px] text-foreground'>
             {chatConfig?.customizations?.headerText || chatConfig?.title || 'Chat'}
           </h2>
         </div>
@@ -56,9 +56,7 @@ export function ChatHeader({ chatConfig, starCount }: ChatHeaderProps) {
             aria-label={`GitHub repository - ${starCount} stars`}
           >
             <GithubIcon className='h-[16px] w-[16px]' aria-hidden='true' />
-            <span className={`${inter.className}`} aria-live='polite'>
-              {starCount}
-            </span>
+            <span aria-live='polite'>{starCount}</span>
           </a>
           {/* Only show Sim logo if no custom branding is set */}
 

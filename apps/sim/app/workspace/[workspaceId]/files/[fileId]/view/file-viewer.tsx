@@ -1,6 +1,6 @@
 'use client'
 
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type { WorkspaceFileRecord } from '@/lib/uploads/contexts/workspace'
 
 const logger = createLogger('FileViewer')
@@ -13,7 +13,7 @@ export function FileViewer({ file }: FileViewerProps) {
   const serveUrl = `/api/files/serve/${encodeURIComponent(file.key)}?context=workspace`
 
   return (
-    <div className='fixed inset-0 z-50 bg-white'>
+    <div className='fixed inset-0 z-50 bg-[var(--bg)]'>
       <iframe
         src={serveUrl}
         className='h-full w-full border-0'

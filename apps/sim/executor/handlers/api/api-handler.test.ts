@@ -1,7 +1,8 @@
-import '@/executor/__test-utils__/mock-dependencies'
+import '@sim/testing/mocks/executor'
 
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
-import { BlockType } from '@/executor/consts'
+import { validateUrlWithDNS } from '@/lib/core/security/input-validation.server'
+import { BlockType } from '@/executor/constants'
 import { ApiBlockHandler } from '@/executor/handlers/api/api-handler'
 import type { ExecutionContext } from '@/executor/types'
 import type { SerializedBlock } from '@/serializer/types'
@@ -9,8 +10,13 @@ import { executeTool } from '@/tools'
 import type { ToolConfig } from '@/tools/types'
 import { getTool } from '@/tools/utils'
 
+vi.mock('@/lib/core/security/input-validation.server', () => ({
+  validateUrlWithDNS: vi.fn(),
+}))
+
 const mockGetTool = vi.mocked(getTool)
 const mockExecuteTool = executeTool as Mock
+const mockValidateUrlWithDNS = vi.mocked(validateUrlWithDNS)
 
 describe('ApiBlockHandler', () => {
   let handler: ApiBlockHandler
@@ -63,6 +69,12 @@ describe('ApiBlockHandler', () => {
     // Reset mocks using vi
     vi.clearAllMocks()
 
+    mockValidateUrlWithDNS.mockResolvedValue({
+      isValid: true,
+      resolvedIP: '93.184.216.34',
+      originalHostname: 'example.com',
+    })
+
     // Set up mockGetTool to return the mockApiTool
     mockGetTool.mockImplementation((toolId) => {
       if (toolId === 'http_request') {
@@ -106,7 +118,6 @@ describe('ApiBlockHandler', () => {
         body: { key: 'value' }, // Expect parsed body
         _context: { workflowId: 'test-workflow-id' },
       },
-      false, // skipProxy
       false, // skipPostProcess
       mockContext // execution context
     )
@@ -131,8 +142,13 @@ describe('ApiBlockHandler', () => {
   it('should throw error for invalid URL format (no protocol)', async () => {
     const inputs = { url: 'example.com/api' }
 
+    mockValidateUrlWithDNS.mockResolvedValueOnce({
+      isValid: false,
+      error: 'url must be a valid URL',
+    })
+
     await expect(handler.execute(mockContext, mockBlock, inputs)).rejects.toThrow(
-      'Invalid URL: "example.com/api" - URL must include protocol (try "https://example.com/api")'
+      'url must be a valid URL'
     )
     expect(mockExecuteTool).not.toHaveBeenCalled()
   })
@@ -140,8 +156,13 @@ describe('ApiBlockHandler', () => {
   it('should throw error for generally invalid URL format', async () => {
     const inputs = { url: 'htp:/invalid-url' }
 
+    mockValidateUrlWithDNS.mockResolvedValueOnce({
+      isValid: false,
+      error: 'url must use https:// protocol',
+    })
+
     await expect(handler.execute(mockContext, mockBlock, inputs)).rejects.toThrow(
-      /^Invalid URL: "htp:\/invalid-url" - URL must include protocol/
+      'url must use https:// protocol'
     )
     expect(mockExecuteTool).not.toHaveBeenCalled()
   })
@@ -158,7 +179,6 @@ describe('ApiBlockHandler', () => {
     expect(mockExecuteTool).toHaveBeenCalledWith(
       'http_request',
       expect.objectContaining({ body: expectedParsedBody }),
-      false, // skipProxy
       false, // skipPostProcess
       mockContext // execution context
     )
@@ -175,7 +195,6 @@ describe('ApiBlockHandler', () => {
     expect(mockExecuteTool).toHaveBeenCalledWith(
       'http_request',
       expect.objectContaining({ body: 'This is plain text' }),
-      false, // skipProxy
       false, // skipPostProcess
       mockContext // execution context
     )
@@ -192,7 +211,6 @@ describe('ApiBlockHandler', () => {
     expect(mockExecuteTool).toHaveBeenCalledWith(
       'http_request',
       expect.objectContaining({ body: undefined }),
-      false, // skipProxy
       false, // skipPostProcess
       mockContext // execution context
     )

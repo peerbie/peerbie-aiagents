@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { createLogger } from '@sim/logger'
 import { History, Plus } from 'lucide-react'
 import {
   Button,
@@ -21,10 +22,12 @@ import {
   PopoverTrigger,
 } from '@/components/emcn'
 import { Trash } from '@/components/emcn/icons/trash'
-import { createLogger } from '@/lib/logs/console/logger'
+import { cn } from '@/lib/core/utils/cn'
 import {
+  ChatHistorySkeleton,
   CopilotMessage,
   PlanModeSection,
+  QueuedMessages,
   TodoList,
   UserInput,
   Welcome,
@@ -34,11 +37,12 @@ import type { UserInputRef } from '@/app/workspace/[workspaceId]/w/[workflowId]/
 import {
   useChatHistory,
   useCopilotInitialization,
-  useLandingPrompt,
   useTodoManagement,
 } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/copilot/hooks'
 import { useScrollManagement } from '@/app/workspace/[workspaceId]/w/[workflowId]/hooks'
-import { useCopilotStore } from '@/stores/panel/copilot/store'
+import { useProgressiveList } from '@/hooks/use-progressive-list'
+import type { ChatContext } from '@/stores/panel'
+import { useCopilotStore } from '@/stores/panel'
 import { useWorkflowRegistry } from '@/stores/workflows/registry/store'
 
 const logger = createLogger('Copilot')
@@ -72,9 +76,11 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
   const copilotContainerRef = useRef<HTMLDivElement>(null)
   const cancelEditCallbackRef = useRef<(() => void) | null>(null)
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
-  const [isEditingMessage, setIsEditingMessage] = useState(false)
   const [revertingMessageId, setRevertingMessageId] = useState<string | null>(null)
   const [isHistoryDropdownOpen, setIsHistoryDropdownOpen] = useState(false)
+
+  // Derived state - editing when there's an editingMessageId
+  const isEditingMessage = editingMessageId !== null
 
   const { activeWorkflowId } = useWorkflowRegistry()
 
@@ -85,7 +91,6 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
     isSendingMessage,
     isAborting,
     mode,
-    inputValue,
     planTodos,
     showPlanTodos,
     streamingPlanContent,
@@ -93,21 +98,24 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
     abortMessage,
     createNewChat,
     setMode,
-    setInputValue,
     chatsLoadedForWorkflow,
     setWorkflowId: setCopilotWorkflowId,
     loadChats,
     messageCheckpoints,
     currentChat,
-    fetchContextUsage,
     selectChat,
     deleteChat,
-    areChatsFresh,
     workflowId: copilotWorkflowId,
     setPlanTodos,
+    closePlanTodos,
     clearPlanArtifact,
     savePlanArtifact,
+    loadAvailableModels,
+    loadAutoAllowedTools,
+    resumeActiveStream,
   } = useCopilotStore()
+
+  const [inputValue, setInputValue] = useState('')
 
   // Initialize copilot
   const { isInitialized } = useCopilotInitialization({
@@ -116,13 +124,18 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
     chatsLoadedForWorkflow,
     setCopilotWorkflowId,
     loadChats,
-    fetchContextUsage,
+    loadAvailableModels,
+    loadAutoAllowedTools,
     currentChat,
     isSendingMessage,
+    resumeActiveStream,
   })
 
   // Handle scroll management
   const { scrollAreaRef, scrollToBottom } = useScrollManagement(messages, isSendingMessage)
+
+  const chatKey = currentChat?.id ?? ''
+  const { staged: stagedMessages } = useProgressiveList(messages, chatKey)
 
   // Handle chat history grouping
   const { groupedChats, handleHistoryDropdownOpen: handleHistoryDropdownOpenHook } = useChatHistory(
@@ -131,7 +144,6 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
       activeWorkflowId,
       copilotWorkflowId,
       loadChats,
-      areChatsFresh,
       isSendingMessage,
     }
   )
@@ -141,15 +153,10 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
     isSendingMessage,
     showPlanTodos,
     planTodos,
-    setPlanTodos,
   })
 
-  /**
-   * Get markdown content for design document section
-   * Available in all modes once created
-   */
+  /** Gets markdown content for design document section (available in all modes once created) */
   const designDocumentContent = useMemo(() => {
-    // Use streaming content if available
     if (streamingPlanContent) {
       logger.info('[DesignDocument] Using streaming plan content', {
         contentLength: streamingPlanContent.length,
@@ -160,46 +167,35 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
     return ''
   }, [streamingPlanContent])
 
-  /**
-   * Helper function to focus the copilot input
-   */
+  /** Focuses the copilot input */
   const focusInput = useCallback(() => {
     userInputRef.current?.focus()
   }, [])
 
-  // Handle landing page prompt retrieval and population
-  useLandingPrompt({
-    isInitialized,
-    setInputValue,
-    focusInput,
-    isSendingMessage,
-    currentInputValue: inputValue,
-  })
-
-  /**
-   * Auto-scroll to bottom when chat loads in
-   */
+  /** Auto-scrolls to bottom when chat loads */
   useEffect(() => {
     if (isInitialized && messages.length > 0) {
       scrollToBottom()
     }
   }, [isInitialized, messages.length, scrollToBottom])
 
-  /**
-   * Cleanup on component unmount (page refresh, navigation, etc.)
-   */
+  /** Cleanup on unmount - aborts active streaming. Uses refs to avoid stale closures */
+  const isSendingRef = useRef(isSendingMessage)
+  isSendingRef.current = isSendingMessage
+  const abortMessageRef = useRef(abortMessage)
+  abortMessageRef.current = abortMessage
+
   useEffect(() => {
     return () => {
-      if (isSendingMessage) {
-        abortMessage()
+      if (isSendingRef.current) {
+        abortMessageRef.current()
         logger.info('Aborted active message streaming due to component unmount')
       }
     }
-  }, [isSendingMessage, abortMessage])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  /**
-   * Container-level click capture to cancel edit mode when clicking outside the current edit area
-   */
+  /** Cancels edit mode when clicking outside the current edit area */
   const handleCopilotClickCapture = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       if (!isEditingMessage) return
@@ -228,10 +224,7 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
     [isEditingMessage, editingMessageId]
   )
 
-  /**
-   * Handles creating a new chat session
-   * Focuses the input after creation
-   */
+  /** Creates a new chat session and focuses the input */
   const handleStartNewChat = useCallback(() => {
     createNewChat()
     logger.info('Started new chat')
@@ -241,10 +234,7 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
     }, 100)
   }, [createNewChat])
 
-  /**
-   * Sets the input value and focuses the textarea
-   * @param value - The value to set in the input
-   */
+  /** Sets the input value and focuses the textarea */
   const handleSetInputValueAndFocus = useCallback(
     (value: string) => {
       setInputValue(value)
@@ -255,7 +245,7 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
     [setInputValue]
   )
 
-  // Expose functions to parent
+  /** Exposes imperative functions to parent */
   useImperativeHandle(
     ref,
     () => ({
@@ -266,10 +256,7 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
     [handleStartNewChat, handleSetInputValueAndFocus, focusInput]
   )
 
-  /**
-   * Handles aborting the current message streaming
-   * Collapses todos if they are currently shown
-   */
+  /** Aborts current message streaming and collapses todos if shown */
   const handleAbort = useCallback(() => {
     abortMessage()
     if (showPlanTodos) {
@@ -277,19 +264,20 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
     }
   }, [abortMessage, showPlanTodos])
 
-  /**
-   * Handles message submission to the copilot
-   * @param query - The message text to send
-   * @param fileAttachments - Optional file attachments
-   * @param contexts - Optional context references
-   */
+  /** Closes the plan todos section and clears the todos */
+  const handleClosePlanTodos = useCallback(() => {
+    closePlanTodos()
+    setPlanTodos([])
+  }, [closePlanTodos, setPlanTodos])
+
+  /** Handles message submission to the copilot */
   const handleSubmit = useCallback(
-    async (query: string, fileAttachments?: MessageFileAttachment[], contexts?: any[]) => {
-      if (!query || isSendingMessage || !activeWorkflowId) return
+    async (query: string, fileAttachments?: MessageFileAttachment[], contexts?: ChatContext[]) => {
+      // Allow submission even when isSendingMessage - store will queue the message
+      if (!query || !activeWorkflowId) return
 
       if (showPlanTodos) {
-        const store = useCopilotStore.getState()
-        store.setPlanTodos([])
+        setPlanTodos([])
       }
 
       try {
@@ -303,37 +291,25 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
         logger.error('Failed to send message:', error)
       }
     },
-    [isSendingMessage, activeWorkflowId, sendMessage, showPlanTodos]
+    [activeWorkflowId, sendMessage, showPlanTodos, setPlanTodos]
   )
 
-  /**
-   * Handles message edit mode changes
-   * @param messageId - ID of the message being edited
-   * @param isEditing - Whether edit mode is active
-   */
+  /** Handles message edit mode changes */
   const handleEditModeChange = useCallback(
     (messageId: string, isEditing: boolean, cancelCallback?: () => void) => {
       setEditingMessageId(isEditing ? messageId : null)
-      setIsEditingMessage(isEditing)
       cancelEditCallbackRef.current = isEditing ? cancelCallback || null : null
       logger.info('Edit mode changed', { messageId, isEditing, willDimMessages: isEditing })
     },
     []
   )
 
-  /**
-   * Handles checkpoint revert mode changes
-   * @param messageId - ID of the message being reverted
-   * @param isReverting - Whether revert mode is active
-   */
+  /** Handles checkpoint revert mode changes */
   const handleRevertModeChange = useCallback((messageId: string, isReverting: boolean) => {
     setRevertingMessageId(isReverting ? messageId : null)
   }, [])
 
-  /**
-   * Handles chat deletion
-   * @param chatId - ID of the chat to delete
-   */
+  /** Handles chat deletion */
   const handleDeleteChat = useCallback(
     async (chatId: string) => {
       try {
@@ -345,36 +321,13 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
     [deleteChat]
   )
 
-  /**
-   * Handles history dropdown opening state
-   * Loads chats if needed when dropdown opens (non-blocking)
-   * @param open - Whether the dropdown is open
-   */
+  /** Handles history dropdown opening state, loads chats if needed (non-blocking) */
   const handleHistoryDropdownOpen = useCallback(
     (open: boolean) => {
       setIsHistoryDropdownOpen(open)
-      // Fire hook without awaiting - prevents blocking and state issues
       handleHistoryDropdownOpenHook(open)
     },
     [handleHistoryDropdownOpenHook]
-  )
-
-  /**
-   * Skeleton loading component for chat history
-   */
-  const ChatHistorySkeleton = () => (
-    <>
-      <PopoverSection>
-        <div className='h-3 w-12 animate-pulse rounded bg-muted/40' />
-      </PopoverSection>
-      <div className='flex flex-col gap-0.5'>
-        {[1, 2, 3].map((i) => (
-          <div key={i} className='flex h-[25px] items-center px-[6px]'>
-            <div className='h-3 w-full animate-pulse rounded bg-muted/40' />
-          </div>
-        ))}
-      </div>
-    </>
   )
 
   return (
@@ -385,8 +338,8 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
         className='flex h-full flex-col overflow-hidden'
       >
         {/* Header */}
-        <div className='flex flex-shrink-0 items-center justify-between rounded-[4px] bg-[#2A2A2A] px-[12px] py-[8px] dark:bg-[#2A2A2A]'>
-          <h2 className='font-medium text-[14px] text-[var(--white)] dark:text-[var(--white)]'>
+        <div className='mx-[-1px] flex flex-shrink-0 items-center justify-between gap-[8px] rounded-[4px] border border-[var(--border)] bg-[var(--surface-4)] px-[12px] py-[6px]'>
+          <h2 className='min-w-0 flex-1 truncate font-medium text-[14px] text-[var(--text-primary)]'>
             {currentChat?.title || 'New Chat'}
           </h2>
           <div className='flex items-center gap-[8px]'>
@@ -405,7 +358,7 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
                     <ChatHistorySkeleton />
                   </PopoverScrollArea>
                 ) : groupedChats.length === 0 ? (
-                  <div className='px-[6px] py-[16px] text-center text-[12px] text-[var(--white)] dark:text-[var(--white)]'>
+                  <div className='px-[6px] py-[16px] text-center text-[12px] text-muted-foreground'>
                     No chats yet
                   </div>
                 ) : (
@@ -430,7 +383,13 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
                                 <span className='min-w-0 flex-1 truncate'>
                                   {chat.title || 'New Chat'}
                                 </span>
-                                <div className='flex flex-shrink-0 items-center gap-[4px] opacity-0 transition-opacity group-hover:opacity-100'>
+                                <div
+                                  className={cn(
+                                    'flex flex-shrink-0 items-center gap-[4px]',
+                                    currentChat?.id !== chat.id &&
+                                      'opacity-0 transition-opacity group-hover:opacity-100'
+                                  )}
+                                >
                                   <Button
                                     variant='ghost'
                                     className='h-[16px] w-[16px] p-0'
@@ -456,11 +415,11 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
           </div>
         </div>
 
-        {/* Show loading state until fully initialized */}
-        {!isInitialized ? (
+        {/* Show loading state until fully initialized, but skip if actively streaming (resume case) */}
+        {!isInitialized && !isSendingMessage ? (
           <div className='flex h-full w-full items-center justify-center'>
             <div className='flex flex-col items-center gap-3'>
-              <p className='text-muted-foreground text-sm'>Loading chat history...</p>
+              <p className='text-muted-foreground text-sm'>Loading copilot</p>
             </div>
           </div>
         ) : (
@@ -509,29 +468,27 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
                     className='h-full overflow-y-auto overflow-x-hidden px-[8px]'
                   >
                     <div
-                      className={`w-full max-w-full space-y-4 overflow-hidden py-[8px] ${
+                      className={`w-full max-w-full space-y-[8px] overflow-hidden py-[8px] ${
                         showPlanTodos && planTodos.length > 0 ? 'pb-14' : 'pb-10'
                       }`}
                     >
-                      {messages.map((message, index) => {
-                        // Determine if this message should be dimmed
+                      {stagedMessages.map((message, index) => {
                         let isDimmed = false
 
-                        // Dim messages after the one being edited
+                        const globalIndex = messages.length - stagedMessages.length + index
+
                         if (editingMessageId) {
                           const editingIndex = messages.findIndex((m) => m.id === editingMessageId)
-                          isDimmed = editingIndex !== -1 && index > editingIndex
+                          isDimmed = editingIndex !== -1 && globalIndex > editingIndex
                         }
 
-                        // Also dim messages after the one showing restore confirmation
                         if (!isDimmed && revertingMessageId) {
                           const revertingIndex = messages.findIndex(
                             (m) => m.id === revertingMessageId
                           )
-                          isDimmed = revertingIndex !== -1 && index > revertingIndex
+                          isDimmed = revertingIndex !== -1 && globalIndex > revertingIndex
                         }
 
-                        // Get checkpoint count for this message to force re-render when it changes
                         const checkpointCount = messageCheckpoints[message.id]?.length || 0
 
                         return (
@@ -550,6 +507,7 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
                             onRevertModeChange={(isReverting) =>
                               handleRevertModeChange(message.id, isReverting)
                             }
+                            isLastMessage={globalIndex === messages.length - 1}
                           />
                         )
                       })}
@@ -565,15 +523,14 @@ export const Copilot = forwardRef<CopilotRef, CopilotProps>(({ panelWidth }, ref
                       <TodoList
                         todos={planTodos}
                         collapsed={todosCollapsed}
-                        onClose={() => {
-                          const store = useCopilotStore.getState()
-                          store.closePlanTodos?.()
-                          useCopilotStore.setState({ planTodos: [] })
-                        }}
+                        onClose={handleClosePlanTodos}
                       />
                     </div>
                   )}
                 </div>
+
+                {/* Queued messages (shown when messages are waiting) */}
+                <QueuedMessages />
 
                 {/* Input area with integrated mode selector */}
                 <div className='flex-shrink-0 px-[8px] pb-[8px]'>

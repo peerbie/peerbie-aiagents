@@ -1,4 +1,5 @@
 import { GoogleDocsIcon } from '@/components/icons'
+import { getScopesForService } from '@/lib/oauth/utils'
 import type { BlockConfig } from '@/blocks/types'
 import { AuthMode } from '@/blocks/types'
 import type { GoogleDocsResponse } from '@/tools/google_docs/types'
@@ -32,14 +33,21 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
       id: 'credential',
       title: 'Google Account',
       type: 'oauth-input',
+      canonicalParamId: 'oauthCredential',
+      mode: 'basic',
       required: true,
-      provider: 'google-docs',
       serviceId: 'google-docs',
-      requiredScopes: [
-        'https://www.googleapis.com/auth/drive.file',
-        'https://www.googleapis.com/auth/drive',
-      ],
+      requiredScopes: getScopesForService('google-docs'),
       placeholder: 'Select Google account',
+    },
+    {
+      id: 'manualCredential',
+      title: 'Google Account',
+      type: 'short-input',
+      canonicalParamId: 'oauthCredential',
+      mode: 'advanced',
+      placeholder: 'Enter credential ID',
+      required: true,
     },
     // Document selector (basic mode)
     {
@@ -47,8 +55,8 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
       title: 'Select Document',
       type: 'file-selector',
       canonicalParamId: 'documentId',
-      provider: 'google-docs',
       serviceId: 'google-docs',
+      selectorKey: 'google.drive',
       requiredScopes: [],
       mimeType: 'application/vnd.google-apps.document',
       placeholder: 'Select a document',
@@ -75,6 +83,14 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
       placeholder: 'Enter title for the new document',
       condition: { field: 'operation', value: 'create' },
       required: true,
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a clear, descriptive document title based on the user's request.
+The title should be concise but informative about the document's purpose.
+
+Return ONLY the document title - no explanations, no extra text.`,
+        placeholder: 'Describe the document...',
+      },
     },
     // Folder selector (basic mode)
     {
@@ -82,8 +98,8 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
       title: 'Select Parent Folder',
       type: 'file-selector',
       canonicalParamId: 'folderId',
-      provider: 'google-docs',
       serviceId: 'google-docs',
+      selectorKey: 'google.drive',
       requiredScopes: [],
       mimeType: 'application/vnd.google-apps.folder',
       placeholder: 'Select a parent folder',
@@ -110,6 +126,14 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
       placeholder: 'Enter document content',
       condition: { field: 'operation', value: 'write' },
       required: true,
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate document content based on the user's request.
+The content should be well-structured and appropriate for a Google Doc.
+
+Return ONLY the document content - no explanations, no extra text.`,
+        placeholder: 'Describe the document content you want to write...',
+      },
     },
     // Content Field for create operation
     {
@@ -118,6 +142,14 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
       type: 'long-input',
       placeholder: 'Enter document content',
       condition: { field: 'operation', value: 'create' },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate initial document content based on the user's request.
+The content should be well-structured and appropriate for a new Google Doc.
+
+Return ONLY the document content - no explanations, no extra text.`,
+        placeholder: 'Describe the document content you want to create...',
+      },
     },
   ],
   tools: {
@@ -136,29 +168,26 @@ export const GoogleDocsBlock: BlockConfig<GoogleDocsResponse> = {
         }
       },
       params: (params) => {
-        const { credential, documentId, manualDocumentId, folderSelector, folderId, ...rest } =
-          params
+        const { oauthCredential, documentId, folderId, ...rest } = params
 
-        const effectiveDocumentId = (documentId || manualDocumentId || '').trim()
-        const effectiveFolderId = (folderSelector || folderId || '').trim()
+        const effectiveDocumentId = documentId ? String(documentId).trim() : ''
+        const effectiveFolderId = folderId ? String(folderId).trim() : ''
 
         return {
           ...rest,
           documentId: effectiveDocumentId || undefined,
           folderId: effectiveFolderId || undefined,
-          credential,
+          oauthCredential,
         }
       },
     },
   },
   inputs: {
     operation: { type: 'string', description: 'Operation to perform' },
-    credential: { type: 'string', description: 'Google Docs access token' },
-    documentId: { type: 'string', description: 'Document identifier' },
-    manualDocumentId: { type: 'string', description: 'Manual document identifier' },
+    oauthCredential: { type: 'string', description: 'Google Docs access token' },
+    documentId: { type: 'string', description: 'Document identifier (canonical param)' },
     title: { type: 'string', description: 'Document title' },
-    folderSelector: { type: 'string', description: 'Selected folder' },
-    folderId: { type: 'string', description: 'Folder identifier' },
+    folderId: { type: 'string', description: 'Parent folder identifier (canonical param)' },
     content: { type: 'string', description: 'Document content' },
   },
   outputs: {

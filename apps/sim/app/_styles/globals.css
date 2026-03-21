@@ -5,17 +5,84 @@
 /**
  * CSS-based sidebar and panel widths to prevent SSR hydration mismatches.
  * Default widths are set here and updated via blocking script before React hydrates.
+ *
+ * @important These values must stay in sync with stores/constants.ts
+ * @see stores/constants.ts for the source of truth
  */
 :root {
-  --sidebar-width: 232px;
-  --panel-width: 244px;
-  --toolbar-triggers-height: 300px;
-  --editor-connections-height: 200px;
-  --terminal-height: 196px;
+  --sidebar-width: 248px; /* SIDEBAR_WIDTH.DEFAULT */
+  --panel-width: 320px; /* PANEL_WIDTH.DEFAULT */
+  --toolbar-triggers-height: 300px; /* TOOLBAR_TRIGGERS_HEIGHT.DEFAULT */
+  --editor-connections-height: 172px; /* EDITOR_CONNECTIONS_HEIGHT.DEFAULT */
+  --terminal-height: 206px; /* TERMINAL_HEIGHT.DEFAULT */
+}
+
+.workspace-root {
+  letter-spacing: 0.02em;
+}
+
+.workspace-root code,
+.workspace-root kbd,
+.workspace-root samp,
+.workspace-root pre,
+.workspace-root .font-mono {
+  letter-spacing: normal;
 }
 
 .sidebar-container {
   width: var(--sidebar-width);
+  transition: width 200ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.sidebar-container span,
+.sidebar-container .text-small {
+  transition: opacity 120ms ease;
+  white-space: nowrap;
+}
+
+.sidebar-container[data-collapsed] span,
+.sidebar-container[data-collapsed] .text-small {
+  opacity: 0;
+}
+
+html[data-sidebar-collapsed] .sidebar-container span,
+html[data-sidebar-collapsed] .sidebar-container .text-small {
+  opacity: 0;
+}
+
+.sidebar-container .sidebar-collapse-hide {
+  transition: opacity 60ms ease;
+}
+
+.sidebar-container[data-collapsed] .sidebar-collapse-hide,
+html[data-sidebar-collapsed] .sidebar-container .sidebar-collapse-hide {
+  opacity: 0;
+}
+
+html[data-sidebar-collapsed] .sidebar-container .sidebar-collapse-remove {
+  display: none;
+}
+
+html[data-sidebar-collapsed] .sidebar-container .sidebar-collapse-btn {
+  width: 0;
+  opacity: 0;
+}
+
+@keyframes sidebar-collapse-guard {
+  from {
+    pointer-events: none;
+  }
+  to {
+    pointer-events: auto;
+  }
+}
+
+.sidebar-container[data-collapsed] {
+  animation: sidebar-collapse-guard 250ms step-end;
+}
+
+.sidebar-container.is-resizing {
+  transition: none;
 }
 
 .panel-container {
@@ -24,41 +91,6 @@
 
 .terminal-container {
   height: var(--terminal-height);
-}
-
-/**
- * Workflow component z-index fixes and background colors
- */
-.workflow-container .react-flow__edges {
-  z-index: 0 !important;
-}
-
-.workflow-container .react-flow__node {
-  z-index: 21 !important;
-}
-
-.workflow-container .react-flow__handle {
-  z-index: 30 !important;
-}
-
-.workflow-container .react-flow__edge [data-testid="workflow-edge"] {
-  z-index: 0 !important;
-}
-
-.workflow-container .react-flow__edge-labels {
-  z-index: 60 !important;
-}
-
-.workflow-container,
-.workflow-container .react-flow__pane,
-.workflow-container .react-flow__renderer {
-  background-color: var(--bg) !important;
-}
-
-.dark .workflow-container,
-.dark .workflow-container .react-flow__pane,
-.dark .workflow-container .react-flow__renderer {
-  background-color: var(--bg) !important;
 }
 
 /**
@@ -75,65 +107,98 @@
 }
 
 /**
- * Dark color tokens - single source of truth for all colors (dark-only)
+ * React Flow selection box styling
+ * Uses brand-secondary color for selection highlighting
+ */
+.react-flow__selection {
+  background: rgba(51, 180, 255, 0.08) !important;
+  border: 1px solid var(--brand-secondary) !important;
+}
+
+.react-flow__nodesselection-rect,
+.react-flow__nodesselection {
+  background: transparent !important;
+  border: none !important;
+  pointer-events: none !important;
+}
+
+/**
+ * Workflow canvas cursor styles
+ * Override React Flow's default selection cursor based on canvas mode
+ */
+.workflow-container.canvas-mode-cursor .react-flow__pane,
+.workflow-container.canvas-mode-cursor .react-flow__selectionpane {
+  cursor: default !important;
+}
+
+.workflow-container.canvas-mode-hand .react-flow__pane,
+.workflow-container.canvas-mode-hand .react-flow__selectionpane {
+  cursor: grab !important;
+}
+
+.workflow-container.canvas-mode-hand .react-flow__pane:active,
+.workflow-container.canvas-mode-hand .react-flow__selectionpane:active {
+  cursor: grabbing !important;
+}
+
+/**
+ * Color tokens - single source of truth for all colors
+ * Light mode: Warm theme
+ * Dark mode: Dark neutral theme
  */
 @layer base {
   :root,
   .light {
-    /* Neutrals (surfaces) */
-    --bg: #ffffff;
-    --surface-1: #ffffff;
-    --surface-2: #fafafa;
-    --surface-3: #f8f8f8;
-    --surface-4: #f6f6f6;
-    --surface-5: #f3f3f3;
-    --surface-6: #f0f0f0;
-    --surface-9: #eaeaea;
-    --surface-11: #e6e6e6;
-    --surface-12: #e0e0e0;
-    --surface-13: #dcdcdc;
-    --surface-14: #d6d6d6;
-    --surface-15: #cfcfcf;
-    --surface-elevated: #ffffff;
-    --bg-strong: #f5f5f5;
+    --bg: #fefefe; /* main canvas - neutral near-white */
+    --surface-1: #f9f9f9; /* sidebar, panels */
+    --surface-2: #ffffff; /* blocks, cards, modals - pure white */
+    --surface-3: #f7f7f7; /* popovers, headers */
+    --surface-4: #f5f5f5; /* buttons base */
+    --border: #dedede; /* primary border */
+    --surface-5: #f3f3f3; /* inputs, form elements */
+    --border-1: #e0e0e0; /* stronger border */
+    --surface-6: #e5e5e5; /* popovers, elevated surfaces */
+    --surface-7: #d9d9d9;
+    --surface-active: #ececec; /* hover/active state */
 
-    /* Text */
-    --text-primary: #1b1b1b;
-    --text-secondary: #404040;
-    --text-tertiary: #555555;
-    --text-muted: #737373;
-    --text-subtle: #8a8a8a;
-    --text-inverse: #1b1b1b;
+    --workflow-edge: #e0e0e0; /* workflow handles/edges - matches border-1 */
+
+    /* Text - neutral */
+    --text-primary: #1a1a1a;
+    --text-secondary: #525252;
+    --text-tertiary: #5c5c5c;
+    --text-muted: #707070;
+    --text-subtle: #8c8c8c;
+    --text-body: #3b3b3b;
+    --text-icon: #5e5e5e;
+
+    --text-inverse: #ffffff;
+    --text-muted-inverse: #a0a0a0;
     --text-error: #ef4444;
 
     /* Borders / dividers */
-    --border: #dddddd;
-    --border-strong: #d1d1d1;
-    --divider: #e5e5e5;
-    --border-muted: #eeeeee;
-    --border-success: #d5d5d5;
+    --divider: #ededed;
+    --border-muted: #e4e4e4;
+    --border-success: #e0e0e0;
 
     /* Brand & state */
     --brand-400: #1992fc;
     --brand-500: #3ba0f8;
     --brand-secondary: #33b4ff;
     --brand-tertiary: #22c55e;
-    --warning: #ff6600;
+    --brand-tertiary-2: #33c482;
+    --selection: #1a5cf6;
+    --warning: #ea580c;
 
     /* Utility */
     --white: #ffffff;
 
-    /* RGB for opacity usage */
-    --surface-4-rgb: 246 246 246;
-    --surface-5-rgb: 243 243 243;
-    --surface-7-rgb: 230 230 230;
-    --surface-9-rgb: 234 234 234;
-    --divider-rgb: 229 229 229;
-    --white-rgb: 255 255 255;
-    --black-rgb: 0 0 0;
+    /* Font weights - lighter for light mode */
+    --font-weight-base: 420;
+    --font-weight-medium: 440;
+    --font-weight-semibold: 500;
 
-    /* Extended palette (exhaustive from code usage via -[#...]) */
-    /* Neutral deep shades */
+    /* Extended palette */
     --c-0D0D0D: #0d0d0d;
     --c-1A1A1A: #1a1a1a;
     --c-1F1F1F: #1f1f1f;
@@ -180,51 +245,61 @@
     --c-8C10FF: #8c10ff;
 
     /* Greens */
-    --c-4CAF50: #4caf50;
+    --c-4CAF50: #22c55e;
 
     /* Oranges / Ambers */
     --c-F59E0B: #f59e0b;
-    --c-F97316: #f97316;
-    --c-FF972F: #ff972f;
+    --c-F97316: #ea580c;
+    --c-FF972F: #f97316;
 
     /* Reds */
     --c-DC2626: #dc2626;
-    --c-F6D2D2: #f6d2d2;
+    --c-F6D2D2: #fecaca;
     --c-F87171: #f87171;
-    --c-FF402F: #ff402f;
+    --c-FF402F: #ef4444;
     --c-B91C1C: #b91c1c;
-    --c-883827: #883827;
+    --c-883827: #7c2d12;
+
+    /* Terminal status badges */
+    --terminal-status-error-bg: #fef2f2;
+    --terminal-status-error-border: #f87171;
+    --terminal-status-info-bg: #f7f7f7;
+    --terminal-status-info-border: #a3a3a3;
+    --terminal-status-info-color: #525252;
+    --terminal-status-warning-bg: #fefce8;
+    --terminal-status-warning-border: #facc15;
+    --terminal-status-warning-color: #a16207;
   }
   .dark {
-    /* Neutrals (surfaces) */
+    /* Surface */
     --bg: #1b1b1b;
     --surface-1: #1e1e1e;
     --surface-2: #232323;
     --surface-3: #242424;
-    --surface-4: #252525;
-    --surface-5: #272727;
-    --surface-6: #282828;
-    --surface-9: #363636;
-    --surface-11: #3d3d3d;
-    --surface-12: #434343;
-    --surface-13: #454545;
-    --surface-14: #4a4a4a;
-    --surface-15: #5a5a5a;
-    --surface-elevated: #202020;
-    --bg-strong: #0c0c0c;
+    --surface-4: #292929;
+    --border: #333333;
+    --surface-5: #363636;
+    --border-1: #3d3d3d;
+    --surface-6: #454545;
+    --surface-7: #505050;
+    --surface-active: #2c2c2c; /* hover/active state */
+
+    --workflow-edge: #454545; /* workflow handles/edges - same as surface-6 in dark */
 
     /* Text */
     --text-primary: #e6e6e6;
-    --text-secondary: #b1b1b1;
-    --text-tertiary: #aeaeae;
+    --text-secondary: #cccccc;
+    --text-tertiary: #b3b3b3;
     --text-muted: #787878;
     --text-subtle: #7d7d7d;
+    --text-body: #cdcdcd;
+    --text-icon: #939393;
+
     --text-inverse: #1b1b1b;
+    --text-muted-inverse: #b3b3b3;
     --text-error: #ef4444;
 
-    /* Borders / dividers */
-    --border: #2c2c2c;
-    --border-strong: #303030;
+    /* --border-strong: #303030; */
     --divider: #393939;
     --border-muted: #424242;
     --border-success: #575757;
@@ -233,19 +308,17 @@
     --brand-400: #1992fc;
     --brand-secondary: #33b4ff;
     --brand-tertiary: #22c55e;
+    --brand-tertiary-2: #33c482;
+    --selection: #4b83f7;
     --warning: #ff6600;
 
     /* Utility */
     --white: #ffffff;
 
-    /* RGB for opacity usage */
-    --surface-4-rgb: 37 37 37;
-    --surface-5-rgb: 39 39 39;
-    --surface-7-rgb: 44 44 44;
-    --surface-9-rgb: 54 54 54;
-    --divider-rgb: 57 57 57;
-    --white-rgb: 255 255 255;
-    --black-rgb: 0 0 0;
+    /* Font weights - standard weights for dark mode */
+    --font-weight-base: 420;
+    --font-weight-medium: 480;
+    --font-weight-semibold: 550;
 
     /* Extended palette (exhaustive from code usage via -[#...]) */
     /* Neutral deep shades */
@@ -311,6 +384,16 @@
     --c-FF402F: #ff402f;
     --c-B91C1C: #b91c1c;
     --c-883827: #883827;
+
+    /* Terminal status badges */
+    --terminal-status-error-bg: #491515;
+    --terminal-status-error-border: #883827;
+    --terminal-status-info-bg: #383838;
+    --terminal-status-info-border: #686868;
+    --terminal-status-info-color: #b7b7b7;
+    --terminal-status-warning-bg: #3d3520;
+    --terminal-status-warning-border: #5c4d1f;
+    --terminal-status-warning-color: #d4a72c;
   }
 }
 
@@ -360,38 +443,38 @@
   }
 
   ::-webkit-scrollbar-track {
-    background: var(--white);
+    background: transparent;
   }
 
   ::-webkit-scrollbar-thumb {
-    background-color: hsl(var(--muted-foreground) / 0.3);
+    background-color: #c0c0c0;
     border-radius: var(--radius);
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    background-color: hsl(var(--muted-foreground) / 0.4);
+    background-color: #a8a8a8;
   }
 
   /* Dark Mode Global Scrollbar */
   .dark ::-webkit-scrollbar-track {
-    background: var(--surface-5);
+    background: transparent;
   }
 
   .dark ::-webkit-scrollbar-thumb {
-    background-color: hsl(var(--muted-foreground) / 0.3);
+    background-color: #5a5a5a;
   }
 
   .dark ::-webkit-scrollbar-thumb:hover {
-    background-color: hsl(var(--muted-foreground) / 0.4);
+    background-color: #6a6a6a;
   }
 
   * {
     scrollbar-width: thin;
-    scrollbar-color: hsl(var(--muted-foreground) / 0.3) var(--white);
+    scrollbar-color: #c0c0c0 transparent;
   }
 
   .dark * {
-    scrollbar-color: hsl(var(--muted-foreground) / 0.3) var(--surface-5);
+    scrollbar-color: #5a5a5a transparent;
   }
 
   .copilot-scrollable {
@@ -407,8 +490,8 @@
 }
 
 .panel-tab-active {
-  background-color: var(--white);
-  color: var(--text-inverse);
+  background-color: var(--surface-5);
+  color: var(--text-primary);
   border-color: var(--border-muted);
 }
 
@@ -419,8 +502,19 @@
 }
 
 .panel-tab-inactive:hover {
-  background-color: var(--surface-9);
+  background-color: var(--surface-5);
   color: var(--text-primary);
+}
+
+/**
+ * Subblock divider visibility
+ * Hides dividers when adjacent subblocks render empty content (e.g., schedule-info without data).
+ * Uses CSS :has() to detect empty .subblock-content elements and hide associated dividers.
+ * Selectors ordered by ascending specificity: (0,4,0) then (0,5,0)
+ */
+.subblock-row:has(> .subblock-content:empty) > .subblock-divider,
+.subblock-row:has(+ .subblock-row > .subblock-content:empty) > .subblock-divider {
+  display: none;
 }
 
 /**
@@ -497,99 +591,35 @@ input[type="search"]::-ms-clear {
     background-color: hsl(var(--input-background));
   }
 
-  .auth-card {
-    background-color: var(--white) !important;
-    border-color: var(--border-muted) !important;
-  }
-
-  .dark .auth-card {
-    background-color: var(--surface-1) !important;
-    border-color: var(--border-muted) !important;
-  }
-
-  .auth-text-primary {
-    color: var(--text-inverse) !important;
-  }
-
-  .auth-text-secondary {
-    color: var(--text-secondary) !important;
-  }
-
-  .auth-text-muted {
-    color: var(--text-muted) !important;
-  }
-
-  .auth-divider {
-    border-color: var(--border-muted) !important;
-  }
-
-  .auth-card-shadow {
-    box-shadow:
-      0 10px 15px -3px rgba(0, 0, 0, 0.05),
-      0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
-  }
-
-  .auth-link {
-    color: var(--text-muted) !important;
-  }
-
   .transition-ring {
     transition-property: box-shadow, transform;
     transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
     transition-duration: 300ms;
   }
 
-  .streaming-effect {
-    @apply relative overflow-hidden;
-  }
-
-  .streaming-effect::after {
-    content: "";
-    @apply pointer-events-none absolute left-0 top-0 h-full w-full;
-    background: linear-gradient(
-      90deg,
-      rgba(128, 128, 128, 0) 0%,
-      rgba(128, 128, 128, 0.1) 50%,
-      rgba(128, 128, 128, 0) 100%
-    );
-    animation: code-shimmer 1.5s infinite;
-    z-index: 10;
-  }
-
-  .dark .streaming-effect::after {
-    background: linear-gradient(
-      90deg,
-      rgba(180, 180, 180, 0) 0%,
-      rgba(180, 180, 180, 0.1) 50%,
-      rgba(180, 180, 180, 0) 100%
-    );
-  }
-
   .loading-placeholder::placeholder {
     animation: placeholder-pulse 1.5s ease-in-out infinite;
   }
 
-  .auth-button-gradient {
-    background: linear-gradient(to bottom, var(--brand-500), var(--brand-400)) !important;
-    border-color: var(--brand-400) !important;
-    box-shadow: inset 0 2px 4px 0 var(--brand-400) !important;
+  .branded-button-gradient {
+    background: linear-gradient(to bottom, #8357ff, #6f3dfa) !important;
+    border-color: #6f3dfa !important;
+    box-shadow: inset 0 2px 4px 0 #9b77ff !important;
   }
 
-  .auth-button-gradient:hover {
-    background: linear-gradient(to bottom, var(--brand-500), var(--brand-400)) !important;
+  .branded-button-gradient:hover {
+    background: linear-gradient(to bottom, #8357ff, #6f3dfa) !important;
     opacity: 0.9;
   }
 
-  .auth-button-custom {
-    background: var(--brand-500) !important;
-    border-color: var(--brand-500) !important;
-    box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.1) !important;
+  .branded-button-custom {
+    background: var(--brand-primary-hex) !important;
+    border-color: var(--brand-primary-hex) !important;
   }
 
-  .auth-button-custom:hover {
-    background: var(--brand-500) !important;
-    border-color: var(--brand-500) !important;
-    opacity: 1;
+  .branded-button-custom:hover {
+    background: var(--brand-primary-hover-hex) !important;
+    border-color: var(--brand-primary-hover-hex) !important;
   }
 
   /**
@@ -611,7 +641,7 @@ input[type="search"]::-ms-clear {
   }
 
   html[data-panel-active-tab="copilot"] .panel-container [data-tab-button="copilot"] {
-    background-color: var(--surface-11) !important;
+    background-color: var(--border-1) !important;
     color: var(--text-primary) !important;
   }
   html[data-panel-active-tab="copilot"] .panel-container [data-tab-button="toolbar"],
@@ -621,7 +651,7 @@ input[type="search"]::-ms-clear {
   }
 
   html[data-panel-active-tab="toolbar"] .panel-container [data-tab-button="toolbar"] {
-    background-color: var(--surface-11) !important;
+    background-color: var(--border-1) !important;
     color: var(--text-primary) !important;
   }
   html[data-panel-active-tab="toolbar"] .panel-container [data-tab-button="copilot"],
@@ -631,7 +661,7 @@ input[type="search"]::-ms-clear {
   }
 
   html[data-panel-active-tab="editor"] .panel-container [data-tab-button="editor"] {
-    background-color: var(--surface-11) !important;
+    background-color: var(--border-1) !important;
     color: var(--text-primary) !important;
   }
   html[data-panel-active-tab="editor"] .panel-container [data-tab-button="copilot"],
@@ -727,4 +757,167 @@ input[type="search"]::-ms-clear {
     --brand-background-hex: #0c0c0c;
     --surface-elevated: #202020;
   }
+}
+
+/**
+ * Remove backticks from inline code in prose (Tailwind Typography default)
+ */
+.prose code::before,
+.prose code::after {
+  content: none !important;
+}
+
+/**
+ * Remove underlines from heading anchor links in prose
+ */
+.prose h1 a,
+.prose h2 a,
+.prose h3 a,
+.prose h4 a,
+.prose h5 a,
+.prose h6 a {
+  text-decoration: none !important;
+  color: inherit !important;
+}
+
+/**
+ * Respect user's prefers-reduced-motion setting (WCAG 2.3.3)
+ * Disables animations and transitions for users who prefer reduced motion.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@keyframes notification-enter {
+  from {
+    opacity: 0;
+    transform: translateX(calc(var(--stack-offset, 0px) - 8px)) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(var(--stack-offset, 0px)) scale(1);
+  }
+}
+
+@keyframes notification-countdown {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 34.56;
+  }
+}
+
+@keyframes notification-exit {
+  from {
+    opacity: 1;
+    transform: translateX(var(--stack-offset, 0px)) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(calc(var(--stack-offset, 0px) + 8px)) scale(0.97);
+  }
+}
+
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+}
+
+/* WandPromptBar status indicator */
+@keyframes smoke-pulse {
+  0%,
+  100% {
+    transform: scale(0.8);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 0.8;
+  }
+}
+
+.status-indicator {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  overflow: hidden;
+  background-color: hsl(var(--muted-foreground) / 0.5);
+  transition: background-color 0.3s ease;
+}
+
+.status-indicator.streaming {
+  background-color: transparent;
+}
+
+.status-indicator.streaming::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    hsl(var(--primary) / 0.9) 0%,
+    hsl(var(--primary) / 0.4) 60%,
+    transparent 80%
+  );
+  animation: smoke-pulse 1.8s ease-in-out infinite;
+  opacity: 0.9;
+}
+
+.dark .status-indicator.streaming::before {
+  background: #6b7280;
+  opacity: 0.9;
+  animation: smoke-pulse 1.8s ease-in-out infinite;
+}
+
+/* MessageContainer loading dot */
+@keyframes growShrink {
+  0%,
+  100% {
+    transform: scale(0.9);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+}
+
+.loading-dot {
+  animation: growShrink 1.5s infinite ease-in-out;
+}
+
+/* Subflow node drag-over styles */
+.loop-node-drag-over,
+.parallel-node-drag-over {
+  box-shadow: 0 0 0 1.75px var(--brand-secondary) !important;
+  border-radius: 8px !important;
+}
+
+.react-flow__node[data-parent-node-id] .react-flow__handle {
+  z-index: 30;
 }

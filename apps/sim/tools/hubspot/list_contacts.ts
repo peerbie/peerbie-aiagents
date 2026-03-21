@@ -1,5 +1,6 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type { HubSpotListContactsParams, HubSpotListContactsResponse } from '@/tools/hubspot/types'
+import { CONTACTS_ARRAY_OUTPUT, METADATA_OUTPUT, PAGING_OUTPUT } from '@/tools/hubspot/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('HubSpotListContacts')
@@ -28,27 +29,28 @@ export const hubspotListContactsTool: ToolConfig<
     limit: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Maximum number of results per page (max 100, default 100)',
     },
     after: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Pagination cursor for next page of results',
+      visibility: 'user-or-llm',
+      description: 'Pagination cursor for next page of results (from previous response)',
     },
     properties: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description:
-        'Comma-separated list of properties to return (e.g., "email,firstname,lastname")',
+        'Comma-separated list of HubSpot property names to return (e.g., "email,firstname,lastname,phone")',
     },
     associations: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Comma-separated list of object types to retrieve associated IDs for',
+      visibility: 'user-or-llm',
+      description:
+        'Comma-separated list of object types to retrieve associated IDs for (e.g., "companies,deals")',
     },
   },
 
@@ -98,9 +100,8 @@ export const hubspotListContactsTool: ToolConfig<
       success: true,
       output: {
         contacts: data.results || [],
-        paging: data.paging,
+        paging: data.paging ?? null,
         metadata: {
-          operation: 'list_contacts' as const,
           totalReturned: data.results?.length || 0,
           hasMore: !!data.paging?.next,
         },
@@ -110,25 +111,9 @@ export const hubspotListContactsTool: ToolConfig<
   },
 
   outputs: {
+    contacts: CONTACTS_ARRAY_OUTPUT,
+    paging: PAGING_OUTPUT,
+    metadata: METADATA_OUTPUT,
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Contacts data',
-      properties: {
-        contacts: {
-          type: 'array',
-          description: 'Array of contact objects',
-        },
-        paging: {
-          type: 'object',
-          description: 'Pagination information',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

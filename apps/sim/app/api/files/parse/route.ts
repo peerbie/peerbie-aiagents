@@ -2,24 +2,32 @@ import { Buffer } from 'buffer'
 import { createHash } from 'crypto'
 import fsPromises, { readFile } from 'fs/promises'
 import path from 'path'
+import { createLogger } from '@sim/logger'
 import binaryExtensionsList from 'binary-extensions'
 import { type NextRequest, NextResponse } from 'next/server'
-import { checkHybridAuth } from '@/lib/auth/hybrid'
+import { checkInternalAuth } from '@/lib/auth/hybrid'
+import {
+  secureFetchWithPinnedIP,
+  validateUrlWithDNS,
+} from '@/lib/core/security/input-validation.server'
+import { sanitizeUrlForLog } from '@/lib/core/utils/logging'
 import { isSupportedFileType, parseFile } from '@/lib/file-parsers'
-import { createLogger } from '@/lib/logs/console/logger'
-import { getUserEntityPermissions } from '@/lib/permissions/utils'
-import { validateExternalUrl } from '@/lib/security/input-validation'
 import { isUsingCloudStorage, type StorageContext, StorageService } from '@/lib/uploads'
+import { uploadExecutionFile } from '@/lib/uploads/contexts/execution'
 import { UPLOAD_DIR_SERVER } from '@/lib/uploads/core/setup.server'
 import { getFileMetadataByKey } from '@/lib/uploads/server/metadata'
 import {
   extractCleanFilename,
   extractStorageKey,
   extractWorkspaceIdFromExecutionKey,
+  getMimeTypeFromExtension,
   getViewerUrl,
   inferContextFromKey,
+  isInternalFileUrl,
 } from '@/lib/uploads/utils/file-utils'
+import { getUserEntityPermissions } from '@/lib/workspaces/permissions/utils'
 import { verifyFileAccess } from '@/app/api/files/authorization'
+import type { UserFile } from '@/executor/types'
 import '@/lib/uploads/core/setup.server'
 
 export const dynamic = 'force-dynamic'
@@ -29,6 +37,12 @@ const logger = createLogger('FilesParseAPI')
 const MAX_DOWNLOAD_SIZE_BYTES = 100 * 1024 * 1024 // 100 MB
 const DOWNLOAD_TIMEOUT_MS = 30000 // 30 seconds
 
+interface ExecutionContext {
+  workspaceId: string
+  workflowId: string
+  executionId: string
+}
+
 interface ParseResult {
   success: boolean
   content?: string
@@ -36,42 +50,13 @@ interface ParseResult {
   filePath: string
   originalName?: string // Original filename from database (for workspace files)
   viewerUrl?: string | null // Viewer URL for the file if available
+  userFile?: UserFile // UserFile object for the raw file
   metadata?: {
     fileType: string
     size: number
     hash: string
     processingTime: number
   }
-}
-
-const fileTypeMap: Record<string, string> = {
-  // Text formats
-  txt: 'text/plain',
-  csv: 'text/csv',
-  json: 'application/json',
-  xml: 'application/xml',
-  md: 'text/markdown',
-  html: 'text/html',
-  css: 'text/css',
-  js: 'application/javascript',
-  ts: 'application/typescript',
-  // Document formats
-  pdf: 'application/pdf',
-  doc: 'application/msword',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  // Spreadsheet formats
-  xls: 'application/vnd.ms-excel',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  // Presentation formats
-  ppt: 'application/vnd.ms-powerpoint',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  // Image formats
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  // Archive formats
-  zip: 'application/zip',
 }
 
 /**
@@ -81,7 +66,7 @@ export async function POST(request: NextRequest) {
   const startTime = Date.now()
 
   try {
-    const authResult = await checkHybridAuth(request, { requireWorkflowId: true })
+    const authResult = await checkInternalAuth(request, { requireWorkflowId: true })
 
     if (!authResult.success) {
       logger.warn('Unauthorized file parse request', {
@@ -99,27 +84,45 @@ export async function POST(request: NextRequest) {
 
     const userId = authResult.userId
     const requestData = await request.json()
-    const { filePath, fileType, workspaceId } = requestData
+    const { filePath, fileType, workspaceId, workflowId, executionId } = requestData
 
     if (!filePath || (typeof filePath === 'string' && filePath.trim() === '')) {
       return NextResponse.json({ success: false, error: 'No file path provided' }, { status: 400 })
     }
 
-    logger.info('File parse request received:', { filePath, fileType, workspaceId, userId })
+    // Build execution context if all required fields are present
+    const executionContext: ExecutionContext | undefined =
+      workspaceId && workflowId && executionId
+        ? { workspaceId, workflowId, executionId }
+        : undefined
+
+    logger.info('File parse request received:', {
+      filePath,
+      fileType,
+      workspaceId,
+      userId,
+      hasExecutionContext: !!executionContext,
+    })
 
     if (Array.isArray(filePath)) {
       const results = []
-      for (const path of filePath) {
-        if (!path || (typeof path === 'string' && path.trim() === '')) {
+      for (const singlePath of filePath) {
+        if (!singlePath || (typeof singlePath === 'string' && singlePath.trim() === '')) {
           results.push({
             success: false,
             error: 'Empty file path in array',
-            filePath: path || '',
+            filePath: singlePath || '',
           })
           continue
         }
 
-        const result = await parseFileSingle(path, fileType, workspaceId, userId)
+        const result = await parseFileSingle(
+          singlePath,
+          fileType,
+          workspaceId,
+          userId,
+          executionContext
+        )
         if (result.metadata) {
           result.metadata.processingTime = Date.now() - startTime
         }
@@ -135,6 +138,7 @@ export async function POST(request: NextRequest) {
               fileType: result.metadata?.fileType || 'application/octet-stream',
               size: result.metadata?.size || 0,
               binary: false,
+              file: result.userFile,
             },
             filePath: result.filePath,
             viewerUrl: result.viewerUrl,
@@ -150,7 +154,7 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const result = await parseFileSingle(filePath, fileType, workspaceId, userId)
+    const result = await parseFileSingle(filePath, fileType, workspaceId, userId, executionContext)
 
     if (result.metadata) {
       result.metadata.processingTime = Date.now() - startTime
@@ -166,6 +170,7 @@ export async function POST(request: NextRequest) {
           fileType: result.metadata?.fileType || 'application/octet-stream',
           size: result.metadata?.size || 0,
           binary: false,
+          file: result.userFile,
         },
         filePath: result.filePath,
         viewerUrl: result.viewerUrl,
@@ -193,7 +198,8 @@ async function parseFileSingle(
   filePath: string,
   fileType: string,
   workspaceId: string,
-  userId: string
+  userId: string,
+  executionContext?: ExecutionContext
 ): Promise<ParseResult> {
   logger.info('Parsing file:', filePath)
 
@@ -214,19 +220,19 @@ async function parseFileSingle(
     }
   }
 
-  if (filePath.includes('/api/files/serve/')) {
-    return handleCloudFile(filePath, fileType, undefined, userId)
+  if (isInternalFileUrl(filePath)) {
+    return handleCloudFile(filePath, fileType, undefined, userId, executionContext)
   }
 
   if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
-    return handleExternalUrl(filePath, fileType, workspaceId, userId)
+    return handleExternalUrl(filePath, fileType, workspaceId, userId, executionContext)
   }
 
   if (isUsingCloudStorage()) {
-    return handleCloudFile(filePath, fileType, undefined, userId)
+    return handleCloudFile(filePath, fileType, undefined, userId, executionContext)
   }
 
-  return handleLocalFile(filePath, fileType, userId)
+  return handleLocalFile(filePath, fileType, userId, executionContext)
 }
 
 /**
@@ -245,7 +251,7 @@ function validateFilePath(filePath: string): { isValid: boolean; error?: string 
     return { isValid: false, error: 'Invalid path: tilde character not allowed' }
   }
 
-  if (filePath.startsWith('/') && !filePath.startsWith('/api/files/serve/')) {
+  if (filePath.startsWith('/') && !isInternalFileUrl(filePath)) {
     return { isValid: false, error: 'Path outside allowed directory' }
   }
 
@@ -259,18 +265,20 @@ function validateFilePath(filePath: string): { isValid: boolean; error?: string 
 /**
  * Handle external URL
  * If workspaceId is provided, checks if file already exists and saves to workspace if not
+ * If executionContext is provided, also stores the file in execution storage and returns UserFile
  */
 async function handleExternalUrl(
   url: string,
   fileType: string,
   workspaceId: string,
-  userId: string
+  userId: string,
+  executionContext?: ExecutionContext
 ): Promise<ParseResult> {
   try {
     logger.info('Fetching external URL:', url)
     logger.info('WorkspaceId for URL save:', workspaceId)
 
-    const urlValidation = validateExternalUrl(url, 'fileUrl')
+    const urlValidation = await validateUrlWithDNS(url, 'fileUrl')
     if (!urlValidation.isValid) {
       logger.warn(`Blocked external URL request: ${urlValidation.error}`)
       return {
@@ -341,13 +349,13 @@ async function handleExternalUrl(
 
         if (existingFile) {
           const storageFilePath = `/api/files/serve/${existingFile.key}`
-          return handleCloudFile(storageFilePath, fileType, 'workspace', userId)
+          return handleCloudFile(storageFilePath, fileType, 'workspace', userId, executionContext)
         }
       }
     }
 
-    const response = await fetch(url, {
-      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    const response = await secureFetchWithPinnedIP(url, urlValidation.resolvedIP!, {
+      timeout: DOWNLOAD_TIMEOUT_MS,
     })
     if (!response.ok) {
       throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`)
@@ -366,6 +374,19 @@ async function handleExternalUrl(
 
     logger.info(`Downloaded file from URL: ${url}, size: ${buffer.length} bytes`)
 
+    let userFile: UserFile | undefined
+    const mimeType = response.headers.get('content-type') || getMimeTypeFromExtension(extension)
+
+    if (executionContext) {
+      try {
+        userFile = await uploadExecutionFile(executionContext, buffer, filename, mimeType, userId)
+        logger.info(`Stored file in execution storage: ${filename}`, { key: userFile.key })
+      } catch (uploadError) {
+        logger.warn(`Failed to store file in execution storage:`, uploadError)
+        // Continue without userFile - parsing can still work
+      }
+    }
+
     if (shouldCheckWorkspace) {
       try {
         const permission = await getUserEntityPermissions(userId, 'workspace', workspaceId)
@@ -378,7 +399,6 @@ async function handleExternalUrl(
           })
         } else {
           const { uploadWorkspaceFile } = await import('@/lib/uploads/contexts/workspace')
-          const mimeType = response.headers.get('content-type') || getMimeType(extension)
           await uploadWorkspaceFile(workspaceId, userId, buffer, filename, mimeType)
           logger.info(`Saved URL file to workspace storage: ${filename}`)
         }
@@ -387,19 +407,25 @@ async function handleExternalUrl(
       }
     }
 
+    let parseResult: ParseResult
     if (extension === 'pdf') {
-      return await handlePdfBuffer(buffer, filename, fileType, url)
-    }
-    if (extension === 'csv') {
-      return await handleCsvBuffer(buffer, filename, fileType, url)
-    }
-    if (isSupportedFileType(extension)) {
-      return await handleGenericTextBuffer(buffer, filename, extension, fileType, url)
+      parseResult = await handlePdfBuffer(buffer, filename, fileType, url)
+    } else if (extension === 'csv') {
+      parseResult = await handleCsvBuffer(buffer, filename, fileType, url)
+    } else if (isSupportedFileType(extension)) {
+      parseResult = await handleGenericTextBuffer(buffer, filename, extension, fileType, url)
+    } else {
+      parseResult = handleGenericBuffer(buffer, filename, extension, fileType)
     }
 
-    return handleGenericBuffer(buffer, filename, extension, fileType)
+    // Attach userFile to the result
+    if (userFile) {
+      parseResult.userFile = userFile
+    }
+
+    return parseResult
   } catch (error) {
-    logger.error(`Error handling external URL ${url}:`, error)
+    logger.error(`Error handling external URL ${sanitizeUrlForLog(url)}:`, error)
     return {
       success: false,
       error: `Error fetching URL: ${(error as Error).message}`,
@@ -410,12 +436,15 @@ async function handleExternalUrl(
 
 /**
  * Handle file stored in cloud storage
+ * If executionContext is provided and file is not already from execution storage,
+ * copies the file to execution storage and returns UserFile
  */
 async function handleCloudFile(
   filePath: string,
   fileType: string,
   explicitContext: string | undefined,
-  userId: string
+  userId: string,
+  executionContext?: ExecutionContext
 ): Promise<ParseResult> {
   try {
     const cloudKey = extractStorageKey(filePath)
@@ -462,6 +491,7 @@ async function handleCloudFile(
 
     const filename = originalFilename || cloudKey.split('/').pop() || cloudKey
     const extension = path.extname(filename).toLowerCase().substring(1)
+    const mimeType = getMimeTypeFromExtension(extension)
 
     const normalizedFilePath = `/api/files/serve/${encodeURIComponent(cloudKey)}?context=${context}`
     let workspaceIdFromKey: string | undefined
@@ -476,6 +506,39 @@ async function handleCloudFile(
     }
 
     const viewerUrl = getViewerUrl(cloudKey, workspaceIdFromKey)
+
+    // Store file in execution storage if executionContext is provided
+    let userFile: UserFile | undefined
+
+    if (executionContext) {
+      // If file is already from execution context, create UserFile reference without re-uploading
+      if (context === 'execution') {
+        userFile = {
+          id: `file_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+          name: filename,
+          url: normalizedFilePath,
+          size: fileBuffer.length,
+          type: mimeType,
+          key: cloudKey,
+          context: 'execution',
+        }
+        logger.info(`Created UserFile reference for existing execution file: ${filename}`)
+      } else {
+        // Copy from workspace/other storage to execution storage
+        try {
+          userFile = await uploadExecutionFile(
+            executionContext,
+            fileBuffer,
+            filename,
+            mimeType,
+            userId
+          )
+          logger.info(`Copied file to execution storage: ${filename}`, { key: userFile.key })
+        } catch (uploadError) {
+          logger.warn(`Failed to copy file to execution storage:`, uploadError)
+        }
+      }
+    }
 
     let parseResult: ParseResult
     if (extension === 'pdf') {
@@ -501,6 +564,11 @@ async function handleCloudFile(
 
     parseResult.viewerUrl = viewerUrl
 
+    // Attach userFile to the result
+    if (userFile) {
+      parseResult.userFile = userFile
+    }
+
     return parseResult
   } catch (error) {
     logger.error(`Error handling cloud file ${filePath}:`, error)
@@ -524,7 +592,8 @@ async function handleCloudFile(
 async function handleLocalFile(
   filePath: string,
   fileType: string,
-  userId: string
+  userId: string,
+  executionContext?: ExecutionContext
 ): Promise<ParseResult> {
   try {
     const filename = filePath.split('/').pop() || filePath
@@ -564,13 +633,32 @@ async function handleLocalFile(
     const hash = createHash('md5').update(fileBuffer).digest('hex')
 
     const extension = path.extname(filename).toLowerCase().substring(1)
+    const mimeType = fileType || getMimeTypeFromExtension(extension)
+
+    // Store file in execution storage if executionContext is provided
+    let userFile: UserFile | undefined
+    if (executionContext) {
+      try {
+        userFile = await uploadExecutionFile(
+          executionContext,
+          fileBuffer,
+          filename,
+          mimeType,
+          userId
+        )
+        logger.info(`Stored local file in execution storage: ${filename}`, { key: userFile.key })
+      } catch (uploadError) {
+        logger.warn(`Failed to store local file in execution storage:`, uploadError)
+      }
+    }
 
     return {
       success: true,
       content: result.content,
       filePath,
+      userFile,
       metadata: {
-        fileType: fileType || getMimeType(extension),
+        fileType: mimeType,
         size: stats.size,
         hash,
         processingTime: 0,
@@ -705,7 +793,7 @@ async function handleGenericTextBuffer(
           content: result.content,
           filePath: originalPath || filename,
           metadata: {
-            fileType: fileType || getMimeType(extension),
+            fileType: fileType || getMimeTypeFromExtension(extension),
             size: fileBuffer.length,
             hash: createHash('md5').update(fileBuffer).digest('hex'),
             processingTime: 0,
@@ -723,7 +811,7 @@ async function handleGenericTextBuffer(
       content,
       filePath: originalPath || filename,
       metadata: {
-        fileType: fileType || getMimeType(extension),
+        fileType: fileType || getMimeTypeFromExtension(extension),
         size: fileBuffer.length,
         hash: createHash('md5').update(fileBuffer).digest('hex'),
         processingTime: 0,
@@ -764,7 +852,7 @@ function handleGenericBuffer(
     content,
     filePath: filename,
     metadata: {
-      fileType: fileType || getMimeType(extension),
+      fileType: fileType || getMimeTypeFromExtension(extension),
       size: fileBuffer.length,
       hash: createHash('md5').update(fileBuffer).digest('hex'),
       processingTime: 0,
@@ -785,13 +873,6 @@ async function parseBufferAsPdf(buffer: Buffer) {
   } catch (error) {
     throw new Error(`PDF parsing failed: ${(error as Error).message}`)
   }
-}
-
-/**
- * Get MIME type from file extension
- */
-function getMimeType(extension: string): string {
-  return fileTypeMap[extension] || 'application/octet-stream'
 }
 
 /**

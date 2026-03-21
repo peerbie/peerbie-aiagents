@@ -1,12 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { ArrowRight, ChevronRight, Eye, EyeOff } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { cn } from '@/lib/utils'
-import { inter } from '@/app/_styles/fonts/inter/inter'
+import { useState } from 'react'
+import { Eye, EyeOff } from 'lucide-react'
+import { Input, Label } from '@/components/emcn'
+import { cn } from '@/lib/core/utils/cn'
+import { BrandedButton } from '@/app/(auth)/components/branded-button'
 
 interface RequestResetFormProps {
   email: string
@@ -63,7 +61,7 @@ export function RequestResetForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className={cn(`${inter.className} space-y-8`, className)}>
+    <form onSubmit={handleSubmit} className={cn('space-y-8', className)}>
       <div className='space-y-6'>
         <div className='space-y-2'>
           <div className='flex items-center justify-between'>
@@ -77,9 +75,8 @@ export function RequestResetForm({
             type='email'
             disabled={isSubmitting}
             required
-            className='rounded-[10px] shadow-sm transition-colors focus:border-gray-400 focus:ring-2 focus:ring-gray-100'
           />
-          <p className='text-muted-foreground text-sm'>
+          <p className='text-[#999] text-sm'>
             We'll send a password reset link to this email address.
           </p>
         </div>
@@ -94,7 +91,7 @@ export function RequestResetForm({
         )}
       </div>
 
-      <Button
+      <BrandedButton
         type='submit'
         disabled={isSubmitting}
         onMouseEnter={() => setIsButtonHovered(true)}
@@ -211,7 +208,7 @@ export function SetNewPasswordForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className={cn(`${inter.className} space-y-8`, className)}>
+    <form onSubmit={handleSubmit} className={cn('space-y-8', className)}>
       <div className='space-y-6'>
         <div className='space-y-2'>
           <div className='flex items-center justify-between'>
@@ -229,16 +226,12 @@ export function SetNewPasswordForm({
               onChange={(e) => setPassword(e.target.value)}
               required
               placeholder='Enter new password'
-              className={cn(
-                'rounded-[10px] pr-10 shadow-sm transition-colors focus:border-gray-400 focus:ring-2 focus:ring-gray-100',
-                validationMessage &&
-                  'border-red-500 focus:border-red-500 focus:ring-red-100 focus-visible:ring-red-500'
-              )}
+              className={cn('pr-10', validationMessage && 'border-red-500 focus:border-red-500')}
             />
             <button
               type='button'
               onClick={() => setShowPassword(!showPassword)}
-              className='-translate-y-1/2 absolute top-1/2 right-3 text-gray-500 transition hover:text-gray-700'
+              className='-translate-y-1/2 absolute top-1/2 right-3 text-[#999] transition hover:text-[#ECECEC]'
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
               {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
@@ -261,16 +254,12 @@ export function SetNewPasswordForm({
               onChange={(e) => setConfirmPassword(e.target.value)}
               required
               placeholder='Confirm new password'
-              className={cn(
-                'rounded-[10px] pr-10 shadow-sm transition-colors focus:border-gray-400 focus:ring-2 focus:ring-gray-100',
-                validationMessage &&
-                  'border-red-500 focus:border-red-500 focus:ring-red-100 focus-visible:ring-red-500'
-              )}
+              className={cn('pr-10', validationMessage && 'border-red-500 focus:border-red-500')}
             />
             <button
               type='button'
               onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-              className='-translate-y-1/2 absolute top-1/2 right-3 text-gray-500 transition hover:text-gray-700'
+              className='-translate-y-1/2 absolute top-1/2 right-3 text-[#999] transition hover:text-[#ECECEC]'
               aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
             >
               {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
@@ -296,7 +285,8 @@ export function SetNewPasswordForm({
         )}
       </div>
 
-      <Button
+      <BrandedButton
+        type='submit'
         disabled={isSubmitting || !token}
         type='submit'
         onMouseEnter={() => setIsButtonHovered(true)}

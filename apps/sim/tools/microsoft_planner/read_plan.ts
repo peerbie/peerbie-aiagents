@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   MicrosoftPlannerReadPlanResponse,
   MicrosoftPlannerToolParams,
@@ -31,8 +31,8 @@ export const readPlanTool: ToolConfig<
     planId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the plan to retrieve',
+      visibility: 'user-or-llm',
+      description: 'The ID of the plan to retrieve (e.g., "xqQg5FS2LkCe54tAMV_v2ZgADW2J")',
     },
   },
 
@@ -76,6 +76,13 @@ export const readPlanTool: ToolConfig<
   outputs: {
     success: { type: 'boolean', description: 'Whether the plan was retrieved successfully' },
     plan: { type: 'object', description: 'The plan object with all properties' },
-    metadata: { type: 'object', description: 'Metadata including planId and planUrl' },
+    metadata: {
+      type: 'object',
+      description: 'Metadata including planId and planUrl',
+      properties: {
+        planId: { type: 'string', description: 'Plan ID' },
+        planUrl: { type: 'string', description: 'Microsoft Graph API URL for the plan' },
+      },
+    },
   },
 }

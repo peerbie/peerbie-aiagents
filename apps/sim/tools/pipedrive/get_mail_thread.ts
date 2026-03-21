@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   PipedriveGetMailThreadParams,
   PipedriveGetMailThreadResponse,
@@ -31,8 +31,8 @@ export const pipedriveGetMailThreadTool: ToolConfig<
     thread_id: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the mail thread',
+      visibility: 'user-or-llm',
+      description: 'The ID of the mail thread (e.g., "12345")',
     },
   },
 
@@ -67,9 +67,8 @@ export const pipedriveGetMailThreadTool: ToolConfig<
       output: {
         messages,
         metadata: {
-          operation: 'get_mail_thread' as const,
-          threadId: params?.thread_id || '',
-          totalItems: messages.length,
+          thread_id: params?.thread_id || '',
+          total_items: messages.length,
         },
         success: true,
       },
@@ -77,21 +76,11 @@ export const pipedriveGetMailThreadTool: ToolConfig<
   },
 
   outputs: {
-    success: { type: 'boolean', description: 'Operation success status' },
-    output: {
+    messages: { type: 'array', description: 'Array of mail message objects from the thread' },
+    metadata: {
       type: 'object',
-      description: 'Mail thread messages data',
-      properties: {
-        messages: {
-          type: 'array',
-          description: 'Array of mail message objects from the thread',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata including thread ID',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
+      description: 'Thread and pagination metadata',
     },
+    success: { type: 'boolean', description: 'Operation success status' },
   },
 }

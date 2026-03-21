@@ -2,6 +2,7 @@ import type {
   LinearCreateProjectLabelParams,
   LinearCreateProjectLabelResponse,
 } from '@/tools/linear/types'
+import { PROJECT_LABEL_OUTPUT_PROPERTIES } from '@/tools/linear/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const linearCreateProjectLabelTool: ToolConfig<
@@ -19,12 +20,6 @@ export const linearCreateProjectLabelTool: ToolConfig<
   },
 
   params: {
-    projectId: {
-      type: 'string',
-      required: true,
-      visibility: 'user-only',
-      description: 'The project for this label',
-    },
     name: {
       type: 'string',
       required: true,
@@ -71,7 +66,6 @@ export const linearCreateProjectLabelTool: ToolConfig<
     },
     body: (params) => {
       const input: Record<string, any> = {
-        projectId: params.projectId,
         name: params.name,
       }
 
@@ -100,6 +94,7 @@ export const linearCreateProjectLabelTool: ToolConfig<
                 color
                 isGroup
                 createdAt
+                updatedAt
                 archivedAt
               }
             }
@@ -144,6 +139,7 @@ export const linearCreateProjectLabelTool: ToolConfig<
     projectLabel: {
       type: 'object',
       description: 'The created project label',
+      properties: PROJECT_LABEL_OUTPUT_PROPERTIES,
     },
   },
 }

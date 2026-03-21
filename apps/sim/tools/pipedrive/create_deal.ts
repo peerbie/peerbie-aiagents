@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   PipedriveCreateDealParams,
   PipedriveCreateDealResponse,
@@ -26,56 +26,56 @@ export const pipedriveCreateDealTool: ToolConfig<
     title: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The title of the deal',
+      visibility: 'user-or-llm',
+      description: 'The title of the deal (e.g., "Enterprise Software License")',
     },
     value: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'The monetary value of the deal',
+      visibility: 'user-or-llm',
+      description: 'The monetary value of the deal (e.g., "5000")',
     },
     currency: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Currency code (e.g., USD, EUR)',
+      visibility: 'user-or-llm',
+      description: 'Currency code (e.g., "USD", "EUR", "GBP")',
     },
     person_id: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'ID of the person this deal is associated with',
+      visibility: 'user-or-llm',
+      description: 'ID of the person this deal is associated with (e.g., "456")',
     },
     org_id: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'ID of the organization this deal is associated with',
+      visibility: 'user-or-llm',
+      description: 'ID of the organization this deal is associated with (e.g., "789")',
     },
     pipeline_id: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'ID of the pipeline this deal should be placed in',
+      visibility: 'user-or-llm',
+      description: 'ID of the pipeline this deal should be placed in (e.g., "1")',
     },
     stage_id: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'ID of the stage this deal should be placed in',
+      visibility: 'user-or-llm',
+      description: 'ID of the stage this deal should be placed in (e.g., "2")',
     },
     status: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Status of the deal: open, won, lost',
     },
     expected_close_date: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Expected close date in YYYY-MM-DD format',
+      visibility: 'user-or-llm',
+      description: 'Expected close date in YYYY-MM-DD format (e.g., "2025-06-30")',
     },
   },
 
@@ -122,31 +122,14 @@ export const pipedriveCreateDealTool: ToolConfig<
     return {
       success: true,
       output: {
-        deal: data.data,
-        metadata: {
-          operation: 'create_deal' as const,
-        },
+        deal: data.data ?? null,
         success: true,
       },
     }
   },
 
   outputs: {
+    deal: { type: 'object', description: 'The created deal object', optional: true },
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Created deal details',
-      properties: {
-        deal: {
-          type: 'object',
-          description: 'The created deal object',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

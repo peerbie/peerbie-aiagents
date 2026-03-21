@@ -1,7 +1,13 @@
 import { useCallback } from 'react'
+import { createLogger } from '@sim/logger'
 import { useReactFlow } from 'reactflow'
-import { BLOCK_DIMENSIONS, CONTAINER_DIMENSIONS } from '@/lib/blocks/block-dimensions'
-import { createLogger } from '@/lib/logs/console/logger'
+import { BLOCK_DIMENSIONS, CONTAINER_DIMENSIONS } from '@/lib/workflows/blocks/block-dimensions'
+import {
+  calculateContainerDimensions,
+  clampPositionToContainer,
+  estimateBlockDimensions,
+} from '@/app/workspace/[workspaceId]/w/[workflowId]/utils/node-position-utils'
+import { useWorkflowStore } from '@/stores/workflows/workflow/store'
 
 const logger = createLogger('NodeUtilities')
 
@@ -20,7 +26,7 @@ export function useNodeUtilities(blocks: Record<string, any>) {
 
   /**
    * Get the dimensions of a block.
-   * For regular blocks, estimates height if not yet measured by ResizeObserver.
+   * For regular blocks, uses stored height or estimates based on block config.
    */
   const getBlockDimensions = useCallback(
     (blockId: string): { width: number; height: number } => {
@@ -40,29 +46,14 @@ export function useNodeUtilities(blocks: Record<string, any>) {
         }
       }
 
-      // Workflow block nodes have fixed visual width
-      const width = BLOCK_DIMENSIONS.FIXED_WIDTH
-
-      // Prefer deterministic height published by the block component; fallback to estimate
-      let height = block.height
-
-      if (!height) {
-        // Estimate height for workflow blocks before ResizeObserver measures them
-        // Block structure: header + content area with subblocks
-        // Each subblock row is approximately 29px (14px text + 8px gap + padding)
-        const estimatedRows = 3 // Conservative estimate for typical blocks
-        const hasErrorRow = block.type !== 'starter' && block.type !== 'response' ? 1 : 0
-
-        height =
-          BLOCK_DIMENSIONS.HEADER_HEIGHT +
-          BLOCK_DIMENSIONS.WORKFLOW_CONTENT_PADDING +
-          (estimatedRows + hasErrorRow) * BLOCK_DIMENSIONS.WORKFLOW_ROW_HEIGHT
+      if (block.height) {
+        return {
+          width: BLOCK_DIMENSIONS.FIXED_WIDTH,
+          height: Math.max(block.height, BLOCK_DIMENSIONS.MIN_HEIGHT),
+        }
       }
 
-      return {
-        width,
-        height: Math.max(height, BLOCK_DIMENSIONS.MIN_HEIGHT),
-      }
+      return estimateBlockDimensions(block.type)
     },
     [blocks, isContainerType]
   )
@@ -90,14 +81,41 @@ export function useNodeUtilities(blocks: Record<string, any>) {
    * @returns Array of node IDs representing the hierarchy path
    */
   const getNodeHierarchy = useCallback(
-    (nodeId: string): string[] => {
+    (nodeId: string, maxDepth = 100): string[] => {
       const node = getNodes().find((n) => n.id === nodeId)
-      if (!node) return [nodeId]
+      if (!node || maxDepth <= 0) return [nodeId]
       const parentId = blocks?.[nodeId]?.data?.parentId
       if (!parentId) return [nodeId]
-      return [...getNodeHierarchy(parentId), nodeId]
+      return [...getNodeHierarchy(parentId, maxDepth - 1), nodeId]
     },
     [getNodes, blocks]
+  )
+
+  /**
+   * Returns true if nodeId is in the subtree of ancestorId (i.e. walking from nodeId
+   * up the parentId chain we reach ancestorId). Used to reject parent assignments that
+   * would create a cycle (e.g. setting dragged node's parent to a container inside it).
+   *
+   * @param ancestorId - Node that might be an ancestor
+   * @param nodeId - Node to walk from (upward)
+   * @returns True if ancestorId appears in the parent chain of nodeId
+   */
+  const isDescendantOf = useCallback(
+    (ancestorId: string, nodeId: string): boolean => {
+      const visited = new Set<string>()
+      const maxDepth = 100
+      let currentId: string | undefined = nodeId
+      let depth = 0
+      while (currentId && depth < maxDepth) {
+        if (currentId === ancestorId) return true
+        if (visited.has(currentId)) return false
+        visited.add(currentId)
+        currentId = blocks?.[currentId]?.data?.parentId
+        depth += 1
+      }
+      return false
+    },
+    [blocks]
   )
 
   /**
@@ -145,8 +163,6 @@ export function useNodeUtilities(blocks: Record<string, any>) {
 
       const parentPos = getNodeAbsolutePosition(parentId)
 
-      // Child positions are stored relative to the content area (after header and padding)
-      // Add these offsets when calculating absolute position
       const headerHeight = 50
       const leftPadding = 16
       const topPadding = 16
@@ -160,29 +176,38 @@ export function useNodeUtilities(blocks: Record<string, any>) {
   )
 
   /**
-   * Calculates the relative position of a node to a new parent's content area.
-   * Accounts for header height and padding offsets in container nodes.
+   * Calculates the relative position of a node to a new parent's origin.
+   * React Flow positions children relative to parent origin, so we clamp
+   * to the content area bounds (after header and padding).
    * @param nodeId ID of the node being repositioned
    * @param newParentId ID of the new parent
-   * @returns Relative position coordinates {x, y} within the parent's content area
+   * @param skipClamping If true, returns raw relative position without clamping to container bounds
+   * @returns Relative position coordinates {x, y} within the parent
    */
   const calculateRelativePosition = useCallback(
-    (nodeId: string, newParentId: string): { x: number; y: number } => {
+    (nodeId: string, newParentId: string, skipClamping?: boolean): { x: number; y: number } => {
       const nodeAbsPos = getNodeAbsolutePosition(nodeId)
       const parentAbsPos = getNodeAbsolutePosition(newParentId)
 
-      // Account for container's header and padding
-      // Children are positioned relative to content area, not container origin
-      const headerHeight = 50
-      const leftPadding = 16
-      const topPadding = 16
-
-      return {
-        x: nodeAbsPos.x - parentAbsPos.x - leftPadding,
-        y: nodeAbsPos.y - parentAbsPos.y - headerHeight - topPadding,
+      const rawPosition = {
+        x: nodeAbsPos.x - parentAbsPos.x,
+        y: nodeAbsPos.y - parentAbsPos.y,
       }
+
+      if (skipClamping) {
+        return rawPosition
+      }
+
+      const parentNode = getNodes().find((n) => n.id === newParentId)
+      const containerDimensions = {
+        width: parentNode?.data?.width || CONTAINER_DIMENSIONS.DEFAULT_WIDTH,
+        height: parentNode?.data?.height || CONTAINER_DIMENSIONS.DEFAULT_HEIGHT,
+      }
+      const blockDimensions = getBlockDimensions(nodeId)
+
+      return clampPositionToContainer(rawPosition, containerDimensions, blockDimensions)
     },
-    [getNodeAbsolutePosition]
+    [getNodeAbsolutePosition, getNodes, getBlockDimensions]
   )
 
   /**
@@ -220,7 +245,6 @@ export function useNodeUtilities(blocks: Record<string, any>) {
         })
         .map((n) => ({
           loopId: n.id,
-          // Return absolute position so callers can compute relative placement correctly
           loopPosition: getNodeAbsolutePosition(n.id),
           dimensions: {
             width: n.data?.width || CONTAINER_DIMENSIONS.DEFAULT_WIDTH,
@@ -248,49 +272,23 @@ export function useNodeUtilities(blocks: Record<string, any>) {
    */
   const calculateLoopDimensions = useCallback(
     (nodeId: string): { width: number; height: number } => {
-      const minWidth = CONTAINER_DIMENSIONS.DEFAULT_WIDTH
-      const minHeight = CONTAINER_DIMENSIONS.DEFAULT_HEIGHT
+      const currentBlocks = useWorkflowStore.getState().blocks
+      const childBlockIds = Object.keys(currentBlocks).filter(
+        (id) => currentBlocks[id]?.data?.parentId === nodeId
+      )
 
-      // Match styling in subflow-node.tsx:
-      // - Header section: 50px total height
-      // - Content area: px-[16px] pb-[0px] pt-[16px] pr-[70px]
-      //   Left padding: 16px, Right padding: 64px, Top padding: 16px, Bottom padding: -6px (reduced by additional 6px from 0 to achieve 14px total reduction from original 8px)
-      // - Children are positioned relative to the content area (after header, inside padding)
-      const headerHeight = 50
-      const leftPadding = 16
-      const rightPadding = 80
-      const topPadding = 16
-      const bottomPadding = 16
+      const childPositions = childBlockIds
+        .map((childId) => {
+          const child = currentBlocks[childId]
+          if (!child?.position) return null
+          const { width, height } = getBlockDimensions(childId)
+          return { x: child.position.x, y: child.position.y, width, height }
+        })
+        .filter((p): p is NonNullable<typeof p> => p !== null)
 
-      const childNodes = getNodes().filter((node) => node.parentId === nodeId)
-      if (childNodes.length === 0) {
-        return { width: minWidth, height: minHeight }
-      }
-
-      let maxRight = 0
-      let maxBottom = 0
-
-      childNodes.forEach((node) => {
-        const { width: nodeWidth, height: nodeHeight } = getBlockDimensions(node.id)
-
-        // Child positions are relative to content area's inner top-left (inside padding)
-        // Calculate the rightmost and bottommost edges of children
-        const rightEdge = node.position.x + nodeWidth
-        const bottomEdge = node.position.y + nodeHeight
-
-        maxRight = Math.max(maxRight, rightEdge)
-        maxBottom = Math.max(maxBottom, bottomEdge)
-      })
-
-      // Container dimensions = header + padding + children bounds + padding
-      // Width: left padding + max child right edge + right padding (64px)
-      const width = Math.max(minWidth, leftPadding + maxRight + rightPadding)
-      // Height: header + top padding + max child bottom edge + bottom padding (8px)
-      const height = Math.max(minHeight, headerHeight + topPadding + maxBottom + bottomPadding)
-
-      return { width, height }
+      return calculateContainerDimensions(childPositions)
     },
-    [getNodes, getBlockDimensions]
+    [getBlockDimensions]
   )
 
   /**
@@ -299,39 +297,47 @@ export function useNodeUtilities(blocks: Record<string, any>) {
    */
   const resizeLoopNodes = useCallback(
     (updateNodeDimensions: (id: string, dimensions: { width: number; height: number }) => void) => {
-      const containerNodes = getNodes()
-        .filter((node) => node.type && isContainerType(node.type))
-        .map((node) => ({
-          ...node,
-          depth: getNodeDepth(node.id),
+      const currentBlocks = useWorkflowStore.getState().blocks
+      const containerBlocks = Object.entries(currentBlocks)
+        .filter(([, block]) => block?.type && isContainerType(block.type))
+        .map(([id, block]) => ({
+          id,
+          block,
+          depth: getNodeDepth(id),
         }))
-        .sort((a, b) => a.depth - b.depth)
+        .sort((a, b) => b.depth - a.depth)
 
-      containerNodes.forEach((node) => {
-        const dimensions = calculateLoopDimensions(node.id)
+      for (const { id, block } of containerBlocks) {
+        const dimensions = calculateLoopDimensions(id)
+        const currentWidth = block?.data?.width
+        const currentHeight = block?.data?.height
 
-        if (dimensions.width !== node.data?.width || dimensions.height !== node.data?.height) {
-          updateNodeDimensions(node.id, dimensions)
+        if (dimensions.width !== currentWidth || dimensions.height !== currentHeight) {
+          updateNodeDimensions(id, dimensions)
         }
-      })
+      }
     },
-    [getNodes, isContainerType, getNodeDepth, calculateLoopDimensions]
+    [isContainerType, getNodeDepth, calculateLoopDimensions]
   )
 
   /**
    * Updates a node's parent with proper position calculation
    * @param nodeId ID of the node being reparented
    * @param newParentId ID of the new parent (or null to remove parent)
-   * @param updateBlockPosition Function to update the position of a block
-   * @param updateParentId Function to update the parent ID of a block
+   * @param batchUpdatePositions Function to batch update positions of blocks
+   * @param batchUpdateBlocksWithParent Function to batch update blocks with parent info
    * @param resizeCallback Function to resize loop nodes after parent update
    */
   const updateNodeParent = useCallback(
     (
       nodeId: string,
       newParentId: string | null,
-      updateBlockPosition: (id: string, position: { x: number; y: number }) => void,
-      updateParentId: (id: string, parentId: string, extent: 'parent') => void,
+      batchUpdatePositions: (
+        updates: Array<{ id: string; position: { x: number; y: number } }>
+      ) => void,
+      batchUpdateBlocksWithParent: (
+        updates: Array<{ id: string; position: { x: number; y: number }; parentId?: string }>
+      ) => void,
       resizeCallback: () => void
     ) => {
       const node = getNodes().find((n) => n.id === nodeId)
@@ -343,15 +349,15 @@ export function useNodeUtilities(blocks: Record<string, any>) {
       if (newParentId) {
         const relativePosition = calculateRelativePosition(nodeId, newParentId)
 
-        updateBlockPosition(nodeId, relativePosition)
-        updateParentId(nodeId, newParentId, 'parent')
+        batchUpdatePositions([{ id: nodeId, position: relativePosition }])
+        batchUpdateBlocksWithParent([
+          { id: nodeId, position: relativePosition, parentId: newParentId },
+        ])
       } else if (currentParentId) {
         const absolutePosition = getNodeAbsolutePosition(nodeId)
 
-        // First set the absolute position so the node visually stays in place
-        updateBlockPosition(nodeId, absolutePosition)
-        // Then clear the parent relationship in the store (empty string removes parentId/extent)
-        updateParentId(nodeId, '', 'parent')
+        batchUpdatePositions([{ id: nodeId, position: absolutePosition }])
+        batchUpdateBlocksWithParent([{ id: nodeId, position: absolutePosition, parentId: '' }])
       }
 
       resizeCallback()
@@ -373,7 +379,6 @@ export function useNodeUtilities(blocks: Record<string, any>) {
         return absPos
       }
 
-      // Use known defaults per node type without type casting
       const isSubflow = node.type === 'subflowNode'
       const width = isSubflow
         ? typeof node.data?.width === 'number'
@@ -401,6 +406,7 @@ export function useNodeUtilities(blocks: Record<string, any>) {
   return {
     getNodeDepth,
     getNodeHierarchy,
+    isDescendantOf,
     getNodeAbsolutePosition,
     calculateRelativePosition,
     isPointInLoopNode,

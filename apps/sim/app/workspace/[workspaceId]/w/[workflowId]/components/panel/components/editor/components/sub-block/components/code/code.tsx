@@ -1,8 +1,9 @@
 import type { ReactElement } from 'react'
-import { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Check, Copy, Wand2 } from 'lucide-react'
 import { useParams } from 'next/navigation'
 import 'prismjs/components/prism-python'
+import { createLogger } from '@sim/logger'
 import Editor from 'react-simple-code-editor'
 import {
   CODE_LINE_HEIGHT_PX,
@@ -11,16 +12,15 @@ import {
   getCodeEditorProps,
   highlight,
   languages,
-} from '@/components/emcn/components/code/code'
+} from '@/components/emcn'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/core/utils/cn'
 import { CodeLanguage } from '@/lib/execution/languages'
-import { createLogger } from '@/lib/logs/console/logger'
-import { cn } from '@/lib/utils'
 import {
   isLikelyReferenceSegment,
   SYSTEM_REFERENCE_PREFIXES,
   splitReferenceSegment,
-} from '@/lib/workflows/references'
+} from '@/lib/workflows/sanitization/references'
 import {
   checkEnvVarTrigger,
   EnvVarDropdown,
@@ -31,13 +31,17 @@ import {
 } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/components/tag-dropdown/tag-dropdown'
 import { useSubBlockValue } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/hooks/use-sub-block-value'
 import type { WandControlHandlers } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/sub-block'
+import { restoreCursorAfterInsertion } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/utils'
 import { WandPromptBar } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/wand-prompt-bar/wand-prompt-bar'
 import { useAccessibleReferencePrefixes } from '@/app/workspace/[workspaceId]/w/[workflowId]/hooks/use-accessible-reference-prefixes'
 import { useWand } from '@/app/workspace/[workspaceId]/w/[workflowId]/hooks/use-wand'
 import type { GenerationType } from '@/blocks/types'
+import { normalizeName } from '@/executor/constants'
 import { createEnvVarPattern, createReferencePattern } from '@/executor/utils/reference-validation'
-import { useTagSelection } from '@/hooks/use-tag-selection'
-import { normalizeBlockName } from '@/stores/workflows/utils'
+import { useTagSelection } from '@/hooks/kb/use-tag-selection'
+import { createShouldHighlightEnvVar, useAvailableEnvVarKeys } from '@/hooks/use-available-env-vars'
+import { useCodeUndoRedo } from '@/hooks/use-code-undo-redo'
+import { useWorkflowStore } from '@/stores/workflows/workflow/store'
 
 const logger = createLogger('Code')
 
@@ -88,26 +92,29 @@ interface CodePlaceholder {
 /**
  * Creates a syntax highlighter function with custom reference and environment variable highlighting.
  * @param effectiveLanguage - The language to use for syntax highlighting
- * @param shouldHighlightReference - Function to determine if a reference should be highlighted
+ * @param shouldHighlightReference - Function to determine if a block reference should be highlighted
+ * @param shouldHighlightEnvVar - Function to determine if an env var should be highlighted
  * @returns A function that highlights code with syntax and custom highlights
  */
 const createHighlightFunction = (
   effectiveLanguage: 'javascript' | 'python' | 'json',
-  shouldHighlightReference: (part: string) => boolean
+  shouldHighlightReference: (part: string) => boolean,
+  shouldHighlightEnvVar: (varName: string) => boolean
 ) => {
   return (codeToHighlight: string): string => {
     const placeholders: CodePlaceholder[] = []
     let processedCode = codeToHighlight
 
-    // Replace environment variables with placeholders
     processedCode = processedCode.replace(createEnvVarPattern(), (match) => {
-      const placeholder = `__ENV_VAR_${placeholders.length}__`
-      placeholders.push({ placeholder, original: match, type: 'env' })
-      return placeholder
+      const varName = match.slice(2, -2).trim()
+      if (shouldHighlightEnvVar(varName)) {
+        const placeholder = `__ENV_VAR_${placeholders.length}__`
+        placeholders.push({ placeholder, original: match, type: 'env' })
+        return placeholder
+      }
+      return match
     })
 
-    // Replace variable references with placeholders
-    // Use [^<>]+ to prevent matching across nested brackets (e.g., "<3 <real.ref>" should match separately)
     processedCode = processedCode.replace(createReferencePattern(), (match) => {
       if (shouldHighlightReference(match)) {
         const placeholder = `__VAR_REF_${placeholders.length}__`
@@ -117,25 +124,22 @@ const createHighlightFunction = (
       return match
     })
 
-    // Apply Prism syntax highlighting
     const lang = effectiveLanguage === 'python' ? 'python' : 'javascript'
     let highlightedCode = highlight(processedCode, languages[lang], lang)
 
-    // Apply dark mode token styling
     highlightedCode = applyDarkModeTokenStyling(highlightedCode)
 
-    // Restore and highlight the placeholders
     placeholders.forEach(({ placeholder, original, type }) => {
       if (type === 'env') {
         highlightedCode = highlightedCode.replace(
           placeholder,
-          `<span class="text-blue-500">${original}</span>`
+          `<span style="color: var(--brand-secondary);">${original}</span>`
         )
       } else if (type === 'var') {
         const escaped = original.replace(/</g, '&lt;').replace(/>/g, '&gt;')
         highlightedCode = highlightedCode.replace(
           placeholder,
-          `<span class="text-blue-500">${escaped}</span>`
+          `<span style="color: var(--brand-secondary);">${escaped}</span>`
         )
       }
     })
@@ -176,7 +180,7 @@ interface CodeProps {
   hideInternalWand?: boolean
 }
 
-export function Code({
+export const Code = memo(function Code({
   blockId,
   subBlockId,
   placeholder = 'Write JavaScript...',
@@ -194,11 +198,9 @@ export function Code({
   wandControlRef,
   hideInternalWand = false,
 }: CodeProps) {
-  // Route params
   const params = useParams()
   const workspaceId = params.workspaceId as string
 
-  // Local state
   const [code, setCode] = useState<string>('')
   const [showTags, setShowTags] = useState(false)
   const [showEnvVars, setShowEnvVars] = useState(false)
@@ -209,19 +211,23 @@ export function Code({
   const [activeLineNumber, setActiveLineNumber] = useState(1)
   const [copied, setCopied] = useState(false)
 
-  // Refs
   const editorRef = useRef<HTMLDivElement>(null)
   const handleStreamStartRef = useRef<() => void>(() => {})
   const handleGeneratedContentRef = useRef<(generatedCode: string) => void>(() => {})
   const handleStreamChunkRef = useRef<(chunk: string) => void>(() => {})
+  const codeRef = useRef(code)
+  codeRef.current = code
 
-  // Custom hooks
   const accessiblePrefixes = useAccessibleReferencePrefixes(blockId)
   const emitTagSelection = useTagSelection(blockId, subBlockId)
   const [languageValue] = useSubBlockValue<string>(blockId, 'language')
+  const availableEnvVars = useAvailableEnvVarKeys(workspaceId)
+  const blockType = useWorkflowStore(
+    useCallback((state) => state.blocks?.[blockId]?.type, [blockId])
+  )
 
-  // Derived state
   const effectiveLanguage = (languageValue as 'javascript' | 'python' | 'json') || language
+  const isFunctionCode = blockType === 'function' && subBlockId === 'code'
 
   const trimmedCode = code.trim()
   const containsReferencePlaceholders =
@@ -254,6 +260,7 @@ export function Code({
       case 'json-schema':
         return 'Describe the JSON schema to generate...'
       case 'json-object':
+      case 'table-schema':
         return 'Describe the JSON object to generate...'
       default:
         return 'Describe the JavaScript code to generate...'
@@ -278,10 +285,14 @@ export function Code({
     return wandConfig
   }, [wandConfig, languageValue])
 
-  // AI code generation integration
+  const [tableIdValue] = useSubBlockValue<string>(blockId, 'tableId')
+
   const wandHook = useWand({
     wandConfig: dynamicWandConfig || { enabled: false, prompt: '' },
     currentValue: code,
+    contextParams: {
+      tableId: typeof tableIdValue === 'string' ? tableIdValue : null,
+    },
     onStreamStart: () => handleStreamStartRef.current?.(),
     onStreamChunk: (chunk: string) => handleStreamChunkRef.current?.(chunk),
     onGeneratedContent: (content: string) => handleGeneratedContentRef.current?.(content),
@@ -297,7 +308,15 @@ export function Code({
   const updatePromptValue = wandHook?.updatePromptValue || (() => {})
   const cancelGeneration = wandHook?.cancelGeneration || (() => {})
 
-  // Store integration
+  const { recordChange, recordReplace, flushPending, startSession, undo, redo } = useCodeUndoRedo({
+    blockId,
+    subBlockId,
+    value: code,
+    enabled: isFunctionCode,
+    isReadOnly: readOnly || disabled || isPreview,
+    isStreaming: isAiStreaming,
+  })
+
   const [storeValue, setStoreValue] = useSubBlockValue(blockId, subBlockId, false, {
     isStreaming: isAiStreaming,
     onStreamingEnd: () => {
@@ -319,46 +338,41 @@ export function Code({
         ? getDefaultValueString()
         : storeValue
 
-  // Effects: JSON validation
-  const lastValidationStatus = useRef<boolean>(true)
-
   useEffect(() => {
     if (!onValidationChange) return
 
-    const nextStatus = shouldValidateJson ? isValidJson : true
-    if (lastValidationStatus.current === nextStatus) {
-      return
-    }
+    const isValid = !shouldValidateJson || isValidJson
 
-    lastValidationStatus.current = nextStatus
-
-    if (!shouldValidateJson) {
-      onValidationChange(nextStatus)
+    if (isValid) {
+      onValidationChange(true)
       return
     }
 
     const timeoutId = setTimeout(() => {
-      onValidationChange(nextStatus)
+      onValidationChange(false)
     }, 150)
 
     return () => clearTimeout(timeoutId)
   }, [isValidJson, onValidationChange, shouldValidateJson])
 
-  // Effects: AI stream handlers setup
   useEffect(() => {
     handleStreamStartRef.current = () => {
       setCode('')
+    }
+
+    handleStreamChunkRef.current = (chunk: string) => {
+      setCode((prev: string) => prev + chunk)
     }
 
     handleGeneratedContentRef.current = (generatedCode: string) => {
       setCode(generatedCode)
       if (!isPreview && !disabled) {
         setStoreValue(generatedCode)
+        recordReplace(generatedCode)
       }
     }
-  }, [isPreview, disabled, setStoreValue])
+  }, [disabled, isPreview, recordReplace, setStoreValue])
 
-  // Effects: Set read only state for textarea
   useEffect(() => {
     if (!editorRef.current) return
 
@@ -387,7 +401,6 @@ export function Code({
     }
   }, [readOnly])
 
-  // Effects: Sync code with external value
   useEffect(() => {
     if (isAiStreaming) return
     const valueString = value?.toString() ?? ''
@@ -396,7 +409,6 @@ export function Code({
     }
   }, [value, code, isAiStreaming])
 
-  // Effects: Track active line number for cursor position
   useEffect(() => {
     const textarea = editorRef.current?.querySelector('textarea')
     if (!textarea) return
@@ -421,7 +433,6 @@ export function Code({
     }
   }, [code])
 
-  // Effects: Calculate visual line heights for proper gutter alignment
   useEffect(() => {
     if (!editorRef.current) return
 
@@ -448,12 +459,12 @@ export function Code({
       `
       document.body.appendChild(tempContainer)
 
-      lines.forEach((line) => {
+      lines.forEach((line: string) => {
         const lineDiv = document.createElement('div')
 
         if (line.includes('<') && line.includes('>')) {
           const parts = line.split(/(<[^>]+>)/g)
-          parts.forEach((part) => {
+          parts.forEach((part: string) => {
             const span = document.createElement('span')
             span.textContent = part
             lineDiv.appendChild(span)
@@ -486,7 +497,6 @@ export function Code({
     }
   }, [code])
 
-  // Event Handlers
   /**
    * Handles drag-and-drop events for inserting reference tags into the code editor.
    * @param e - The drag event
@@ -504,6 +514,7 @@ export function Code({
 
       setCode(newValue)
       setStoreValue(newValue)
+      recordChange(newValue)
       const newCursorPosition = dropPosition + 1
       setCursorPosition(newCursorPosition)
 
@@ -513,7 +524,6 @@ export function Code({
           textarea.selectionStart = newCursorPosition
           textarea.selectionEnd = newCursorPosition
 
-          // Show tag dropdown after cursor is positioned
           setShowTags(true)
           if (data.connectionData?.sourceBlockId) {
             setActiveSourceBlockId(data.connectionData.sourceBlockId)
@@ -528,34 +538,40 @@ export function Code({
   /**
    * Handles selection of a tag from the tag dropdown.
    * @param newValue - The new code value with the selected tag inserted
+   * @param newCursorPosition - The cursor position after the inserted tag
    */
-  const handleTagSelect = (newValue: string) => {
+  const handleTagSelect = (newValue: string, newCursorPosition: number) => {
+    const textarea = editorRef.current?.querySelector('textarea') as HTMLTextAreaElement | null
+
     if (!isPreview && !readOnly) {
       setCode(newValue)
       emitTagSelection(newValue)
+      recordChange(newValue)
+      restoreCursorAfterInsertion(textarea, newCursorPosition)
+    } else {
+      setTimeout(() => textarea?.focus(), 0)
     }
     setShowTags(false)
     setActiveSourceBlockId(null)
-
-    setTimeout(() => {
-      editorRef.current?.querySelector('textarea')?.focus()
-    }, 0)
   }
 
   /**
    * Handles selection of an environment variable from the dropdown.
    * @param newValue - The new code value with the selected env var inserted
+   * @param newCursorPosition - The cursor position after the inserted env var
    */
-  const handleEnvVarSelect = (newValue: string) => {
+  const handleEnvVarSelect = (newValue: string, newCursorPosition: number) => {
+    const textarea = editorRef.current?.querySelector('textarea') as HTMLTextAreaElement | null
+
     if (!isPreview && !readOnly) {
       setCode(newValue)
       emitTagSelection(newValue)
+      recordChange(newValue)
+      restoreCursorAfterInsertion(textarea, newCursorPosition)
+    } else {
+      setTimeout(() => textarea?.focus(), 0)
     }
     setShowEnvVars(false)
-
-    setTimeout(() => {
-      editorRef.current?.querySelector('textarea')?.focus()
-    }, 0)
   }
 
   /**
@@ -570,44 +586,45 @@ export function Code({
     }
   }
 
-  // Helper Functions
   /**
    * Determines whether a `<...>` segment should be highlighted as a reference.
    * @param part - The code segment to check
    * @returns True if the segment should be highlighted as a reference
    */
-  const shouldHighlightReference = (part: string): boolean => {
-    if (!part.startsWith('<') || !part.endsWith('>')) {
-      return false
-    }
+  const shouldHighlightReference = useCallback(
+    (part: string): boolean => {
+      if (!part.startsWith('<') || !part.endsWith('>')) {
+        return false
+      }
 
-    if (!isLikelyReferenceSegment(part)) {
-      return false
-    }
+      if (!isLikelyReferenceSegment(part)) {
+        return false
+      }
 
-    const split = splitReferenceSegment(part)
-    if (!split) {
-      return false
-    }
+      const split = splitReferenceSegment(part)
+      if (!split) {
+        return false
+      }
 
-    const reference = split.reference
+      const reference = split.reference
 
-    if (!accessiblePrefixes) {
-      return true
-    }
+      if (!accessiblePrefixes) {
+        return true
+      }
 
-    const inner = reference.slice(1, -1)
-    const [prefix] = inner.split('.')
-    const normalizedPrefix = normalizeBlockName(prefix)
+      const inner = reference.slice(1, -1)
+      const [prefix] = inner.split('.')
+      const normalizedPrefix = normalizeName(prefix)
 
-    if (SYSTEM_REFERENCE_PREFIXES.has(normalizedPrefix)) {
-      return true
-    }
+      if (SYSTEM_REFERENCE_PREFIXES.has(normalizedPrefix)) {
+        return true
+      }
 
-    return accessiblePrefixes.has(normalizedPrefix)
-  }
+      return accessiblePrefixes.has(normalizedPrefix)
+    },
+    [accessiblePrefixes]
+  )
 
-  // Expose wand control handlers to parent via ref
   useImperativeHandle(
     wandControlRef,
     () => ({
@@ -620,6 +637,86 @@ export function Code({
     [generateCodeStream, isPromptVisible, isAiStreaming]
   )
 
+  const shouldHighlightEnvVar = useMemo(
+    () => createShouldHighlightEnvVar(availableEnvVars),
+    [availableEnvVars]
+  )
+
+  const highlightCode = useMemo(
+    () =>
+      createHighlightFunction(effectiveLanguage, shouldHighlightReference, shouldHighlightEnvVar),
+    [effectiveLanguage, shouldHighlightReference, shouldHighlightEnvVar]
+  )
+
+  const handleValueChange = useCallback(
+    (newCode: string) => {
+      if (!isAiStreaming && !isPreview && !disabled && !readOnly) {
+        setCode(newCode)
+        setStoreValue(newCode)
+        recordChange(newCode)
+
+        const textarea = editorRef.current?.querySelector('textarea')
+        if (textarea) {
+          const pos = textarea.selectionStart
+          setCursorPosition(pos)
+
+          const tagTrigger = checkTagTrigger(newCode, pos)
+          setShowTags(tagTrigger.show)
+          if (!tagTrigger.show) {
+            setActiveSourceBlockId(null)
+          }
+
+          const envVarTrigger = checkEnvVarTrigger(newCode, pos)
+          setShowEnvVars(envVarTrigger.show)
+          setSearchTerm(envVarTrigger.show ? envVarTrigger.searchTerm : '')
+        }
+      }
+    },
+    [isAiStreaming, isPreview, disabled, readOnly, recordChange, setStoreValue]
+  )
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement | HTMLTextAreaElement>) => {
+      if (e.key === 'Escape') {
+        setShowTags(false)
+        setShowEnvVars(false)
+      }
+      if (isAiStreaming) {
+        e.preventDefault()
+        return
+      }
+      if (!isFunctionCode) return
+      const isUndo = (e.key === 'z' || e.key === 'Z') && (e.metaKey || e.ctrlKey) && !e.shiftKey
+      const isRedo =
+        ((e.key === 'z' || e.key === 'Z') && (e.metaKey || e.ctrlKey) && e.shiftKey) ||
+        (e.key === 'y' && (e.metaKey || e.ctrlKey))
+      if (isUndo) {
+        e.preventDefault()
+        e.stopPropagation()
+        undo()
+        return
+      }
+      if (isRedo) {
+        e.preventDefault()
+        e.stopPropagation()
+        redo()
+      }
+    },
+    [isAiStreaming, isFunctionCode, redo, undo]
+  )
+
+  const handleEditorFocus = useCallback(() => {
+    startSession(codeRef.current)
+    if (!isPreview && !disabled && !readOnly && codeRef.current.trim() === '') {
+      setShowTags(true)
+      setCursorPosition(0)
+    }
+  }, [disabled, isPreview, readOnly, startSession])
+
+  const handleEditorBlur = useCallback(() => {
+    flushPending()
+  }, [flushPending])
+
   /**
    * Renders the line numbers, aligned with wrapped visual lines and highlighting the active line.
    * @returns Array of React elements representing the line numbers
@@ -628,13 +725,17 @@ export function Code({
     const numbers: ReactElement[] = []
     let lineNumber = 1
 
-    visualLineHeights.forEach((height) => {
+    visualLineHeights.forEach((height: number) => {
       const isActive = lineNumber === activeLineNumber
       numbers.push(
         <div
           key={`${lineNumber}-0`}
-          className={cn('text-right text-xs tabular-nums leading-[21px]')}
-          style={{ color: isActive ? '#eeeeee' : '#a8a8a8' }}
+          className={cn(
+            'text-right text-xs tabular-nums leading-[21px]',
+            isActive
+              ? 'text-[var(--text-primary)] dark:text-[#eeeeee]'
+              : 'text-[var(--text-muted)] dark:text-[#a8a8a8]'
+          )}
         >
           {lineNumber}
         </div>
@@ -656,8 +757,10 @@ export function Code({
       numbers.push(
         <div
           key={'1-0'}
-          className={cn('text-right text-xs tabular-nums leading-[21px]')}
-          style={{ color: '#a8a8a8' }}
+          className={cn(
+            'text-right text-xs tabular-nums leading-[21px]',
+            'text-[var(--text-muted)] dark:text-[#a8a8a8]'
+          )}
         >
           1
         </div>
@@ -700,11 +803,7 @@ export function Code({
         />
       )}
 
-      <CodeEditor.Container
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={handleDrop}
-        isStreaming={isAiStreaming}
-      >
+      <CodeEditor.Container onDragOver={(e) => e.preventDefault()} onDrop={handleDrop}>
         <div className='absolute top-2 right-3 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100'>
           {wandConfig?.enabled &&
             !isAiStreaming &&
@@ -733,38 +832,11 @@ export function Code({
 
           <Editor
             value={code}
-            onValueChange={(newCode) => {
-              if (!isAiStreaming && !isPreview && !disabled && !readOnly) {
-                setCode(newCode)
-                setStoreValue(newCode)
-
-                const textarea = editorRef.current?.querySelector('textarea')
-                if (textarea) {
-                  const pos = textarea.selectionStart
-                  setCursorPosition(pos)
-
-                  const tagTrigger = checkTagTrigger(newCode, pos)
-                  setShowTags(tagTrigger.show)
-                  if (!tagTrigger.show) {
-                    setActiveSourceBlockId(null)
-                  }
-
-                  const envVarTrigger = checkEnvVarTrigger(newCode, pos)
-                  setShowEnvVars(envVarTrigger.show)
-                  setSearchTerm(envVarTrigger.show ? envVarTrigger.searchTerm : '')
-                }
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                setShowTags(false)
-                setShowEnvVars(false)
-              }
-              if (isAiStreaming) {
-                e.preventDefault()
-              }
-            }}
-            highlight={createHighlightFunction(effectiveLanguage, shouldHighlightReference)}
+            onValueChange={handleValueChange}
+            onKeyDown={handleKeyDown}
+            onFocus={handleEditorFocus}
+            onBlur={handleEditorBlur}
+            highlight={highlightCode}
             {...getCodeEditorProps({ isStreaming: isAiStreaming, isPreview, disabled })}
           />
 
@@ -807,4 +879,4 @@ export function Code({
       </CodeEditor.Container>
     </>
   )
-}
+})

@@ -1,6 +1,7 @@
-import type { Logger } from '@/lib/logs/console/logger'
+import type { Logger } from '@sim/logger'
 import type { StorageContext } from '@/lib/uploads'
-import { ACCEPTED_FILE_TYPES } from '@/lib/uploads/utils/validation'
+import { ACCEPTED_FILE_TYPES, SUPPORTED_DOCUMENT_EXTENSIONS } from '@/lib/uploads/utils/validation'
+import { isUuid } from '@/executor/constants'
 import type { UserFile } from '@/executor/types'
 
 export interface FileAttachment {
@@ -31,7 +32,7 @@ export const MIME_TYPE_MAPPING: Record<string, 'image' | 'document' | 'audio' | 
   'image/png': 'image',
   'image/gif': 'image',
   'image/webp': 'image',
-  'image/svg+xml': 'image',
+  // SVG is XML text, not a raster image — handled separately in createFileContent
 
   // Documents
   'application/pdf': 'document',
@@ -96,16 +97,14 @@ export function isSupportedFileType(mimeType: string): boolean {
 /**
  * Check if a MIME type is an image type (for copilot uploads)
  */
+const IMAGE_MIME_TYPES = new Set(
+  Object.entries(MIME_TYPE_MAPPING)
+    .filter(([, v]) => v === 'image')
+    .map(([k]) => k)
+)
+
 export function isImageFileType(mimeType: string): boolean {
-  const imageTypes = [
-    'image/jpeg',
-    'image/jpg',
-    'image/png',
-    'image/gif',
-    'image/webp',
-    'image/svg+xml',
-  ]
-  return imageTypes.includes(mimeType.toLowerCase())
+  return IMAGE_MIME_TYPES.has(mimeType.toLowerCase())
 }
 
 /**
@@ -141,6 +140,19 @@ export function bufferToBase64(buffer: Buffer): string {
  * Create message content from file data
  */
 export function createFileContent(fileBuffer: Buffer, mimeType: string): MessageContent | null {
+  // SVG is XML text — Claude only supports raster image formats (JPEG, PNG, GIF, WebP),
+  // so send SVGs as an XML document instead
+  if (mimeType.toLowerCase() === 'image/svg+xml') {
+    return {
+      type: 'document',
+      source: {
+        type: 'base64',
+        media_type: 'text/xml',
+        data: bufferToBase64(fileBuffer),
+      },
+    }
+  }
+
   const contentType = getContentType(mimeType)
   if (!contentType) {
     return null
@@ -164,54 +176,135 @@ export function getFileExtension(filename: string): string {
   return lastDot !== -1 ? filename.slice(lastDot + 1).toLowerCase() : ''
 }
 
+const EXTENSION_TO_MIME: Record<string, string> = {
+  // Images
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+
+  // Documents
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  csv: 'text/csv',
+  json: 'application/json',
+  xml: 'application/xml',
+  html: 'text/html',
+  htm: 'text/html',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  doc: 'application/msword',
+  xls: 'application/vnd.ms-excel',
+  ppt: 'application/vnd.ms-powerpoint',
+  md: 'text/markdown',
+  yaml: 'application/x-yaml',
+  yml: 'application/x-yaml',
+  rtf: 'application/rtf',
+
+  // Audio
+  mp3: 'audio/mpeg',
+  m4a: 'audio/mp4',
+  wav: 'audio/wav',
+  webm: 'audio/webm',
+  ogg: 'audio/ogg',
+  flac: 'audio/flac',
+  aac: 'audio/aac',
+  opus: 'audio/opus',
+
+  // Video
+  mp4: 'video/mp4',
+  mov: 'video/quicktime',
+  avi: 'video/x-msvideo',
+  mkv: 'video/x-matroska',
+}
+
 /**
  * Get MIME type from file extension (fallback if not provided)
  */
 export function getMimeTypeFromExtension(extension: string): string {
-  const extensionMimeMap: Record<string, string> = {
-    // Images
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    png: 'image/png',
-    gif: 'image/gif',
-    webp: 'image/webp',
-    svg: 'image/svg+xml',
+  return EXTENSION_TO_MIME[extension.toLowerCase()] || 'application/octet-stream'
+}
 
-    // Documents
-    pdf: 'application/pdf',
-    txt: 'text/plain',
-    csv: 'text/csv',
-    json: 'application/json',
-    xml: 'application/xml',
-    html: 'text/html',
-    htm: 'text/html',
-    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    doc: 'application/msword',
-    xls: 'application/vnd.ms-excel',
-    ppt: 'application/vnd.ms-powerpoint',
-    md: 'text/markdown',
-    rtf: 'application/rtf',
+/**
+ * Resolve a reliable MIME type from a file, falling back to extension
+ * when the browser reports empty or generic `application/octet-stream`
+ */
+export function resolveFileType(file: { type: string; name: string }): string {
+  return file.type && file.type !== 'application/octet-stream'
+    ? file.type
+    : getMimeTypeFromExtension(getFileExtension(file.name))
+}
 
-    // Audio
-    mp3: 'audio/mpeg',
-    m4a: 'audio/mp4',
-    wav: 'audio/wav',
-    webm: 'audio/webm',
-    ogg: 'audio/ogg',
-    flac: 'audio/flac',
-    aac: 'audio/aac',
-    opus: 'audio/opus',
+const MIME_TO_EXTENSION: Record<string, string> = {
+  // Images
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/svg+xml': 'svg',
 
-    // Video
-    mp4: 'video/mp4',
-    mov: 'video/quicktime',
-    avi: 'video/x-msvideo',
-    mkv: 'video/x-matroska',
-  }
+  // Documents
+  'application/pdf': 'pdf',
+  'text/plain': 'txt',
+  'text/csv': 'csv',
+  'application/json': 'json',
+  'application/xml': 'xml',
+  'text/xml': 'xml',
+  'text/html': 'html',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'application/msword': 'doc',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.ms-powerpoint': 'ppt',
+  'text/markdown': 'md',
+  'application/rtf': 'rtf',
 
-  return extensionMimeMap[extension.toLowerCase()] || 'application/octet-stream'
+  // Audio
+  'audio/mpeg': 'mp3',
+  'audio/mp3': 'mp3',
+  'audio/mp4': 'm4a',
+  'audio/x-m4a': 'm4a',
+  'audio/m4a': 'm4a',
+  'audio/wav': 'wav',
+  'audio/wave': 'wav',
+  'audio/x-wav': 'wav',
+  'audio/webm': 'webm',
+  'audio/ogg': 'ogg',
+  'audio/vorbis': 'ogg',
+  'audio/flac': 'flac',
+  'audio/x-flac': 'flac',
+  'audio/aac': 'aac',
+  'audio/x-aac': 'aac',
+  'audio/opus': 'opus',
+
+  // Video
+  'video/mp4': 'mp4',
+  'video/mpeg': 'mpg',
+  'video/quicktime': 'mov',
+  'video/x-quicktime': 'mov',
+  'video/x-msvideo': 'avi',
+  'video/avi': 'avi',
+  'video/x-matroska': 'mkv',
+  'video/webm': 'webm',
+
+  // Archives
+  'application/zip': 'zip',
+  'application/x-zip-compressed': 'zip',
+  'application/gzip': 'gz',
+}
+
+/**
+ * Get file extension from MIME type
+ * @param mimeType - MIME type string
+ * @returns File extension without dot, or null if not found
+ */
+export function getExtensionFromMimeType(mimeType: string): string | null {
+  return MIME_TO_EXTENSION[mimeType.toLowerCase()] || null
 }
 
 /**
@@ -258,15 +351,27 @@ export function validateKnowledgeBaseFile(
     return `File "${file.name}" is too large. Maximum size is ${maxSizeMB}MB.`
   }
 
-  if (!ACCEPTED_FILE_TYPES.includes(file.type)) {
-    return `File "${file.name}" has an unsupported format. Please use PDF, DOC, DOCX, TXT, CSV, XLS, XLSX, MD, PPT, PPTX, HTML, JSON, YAML, or YML files.`
+  // Check MIME type first
+  if (ACCEPTED_FILE_TYPES.includes(file.type)) {
+    return null
   }
 
-  return null
+  // Fallback: check file extension (browsers often misidentify file types like .md)
+  const extension = getFileExtension(file.name)
+  if (
+    SUPPORTED_DOCUMENT_EXTENSIONS.includes(
+      extension as (typeof SUPPORTED_DOCUMENT_EXTENSIONS)[number]
+    )
+  ) {
+    return null
+  }
+
+  return `File "${file.name}" has an unsupported format. Please use PDF, DOC, DOCX, TXT, CSV, XLS, XLSX, MD, PPT, PPTX, HTML, JSON, YAML, or YML files.`
 }
 
 /**
  * Extract storage key from a file path
+ * Handles URLs like /api/files/serve/s3/key or /api/files/serve/blob/key
  */
 export function extractStorageKey(filePath: string): string {
   let pathWithoutQuery = filePath.split('?')[0]
@@ -281,7 +386,13 @@ export function extractStorageKey(filePath: string): string {
   }
 
   if (pathWithoutQuery.startsWith('/api/files/serve/')) {
-    return decodeURIComponent(pathWithoutQuery.substring('/api/files/serve/'.length))
+    let key = decodeURIComponent(pathWithoutQuery.substring('/api/files/serve/'.length))
+    if (key.startsWith('s3/')) {
+      key = key.substring(3)
+    } else if (key.startsWith('blob/')) {
+      key = key.substring(5)
+    }
+    return key
   }
   return pathWithoutQuery
 }
@@ -350,6 +461,7 @@ export interface RawFileInput {
   uploadedAt?: string | Date
   expiresAt?: string | Date
   context?: string
+  base64?: string
 }
 
 /**
@@ -362,43 +474,92 @@ function isCompleteUserFile(file: RawFileInput): file is UserFile {
     typeof file.url === 'string' &&
     typeof file.size === 'number' &&
     typeof file.type === 'string' &&
-    typeof file.key === 'string' &&
-    typeof file.uploadedAt === 'string' &&
-    typeof file.expiresAt === 'string'
+    typeof file.key === 'string'
   )
 }
 
+function isUrlLike(value: string): boolean {
+  return value.startsWith('http://') || value.startsWith('https://') || value.startsWith('/')
+}
+
 /**
- * Converts a single raw file object to UserFile format
- * @param file - Raw file object
- * @param requestId - Request ID for logging
- * @param logger - Logger instance
- * @returns UserFile object
- * @throws Error if file has no storage key
+ * Extracts HTTPS URL from a file input object (UserFile or RawFileInput)
+ * Returns null if no valid HTTPS URL is found
  */
-export function processSingleFileToUserFile(
-  file: RawFileInput,
-  requestId: string,
-  logger: Logger
-): UserFile {
-  if (isCompleteUserFile(file)) {
-    return file
+export function resolveHttpsUrlFromFileInput(fileInput: unknown): string | null {
+  if (!fileInput || typeof fileInput !== 'object') {
+    return null
   }
 
-  const storageKey = file.key || (file.path ? extractStorageKey(file.path) : null)
+  const record = fileInput as Record<string, unknown>
+  const url =
+    typeof record.url === 'string'
+      ? record.url.trim()
+      : typeof record.path === 'string'
+        ? record.path.trim()
+        : ''
 
+  if (!url || !url.startsWith('https://')) {
+    return null
+  }
+
+  return url
+}
+
+function resolveStorageKeyFromRawFile(file: RawFileInput): string | null {
+  if (file.key) {
+    return file.key
+  }
+
+  if (file.path) {
+    if (isUrlLike(file.path)) {
+      return isInternalFileUrl(file.path) ? extractStorageKey(file.path) : null
+    }
+    return file.path
+  }
+
+  if (file.url) {
+    return isInternalFileUrl(file.url) ? extractStorageKey(file.url) : null
+  }
+
+  return null
+}
+
+function resolveInternalFileUrl(file: RawFileInput): string {
+  if (file.url && isInternalFileUrl(file.url)) {
+    return file.url
+  }
+  if (file.path && isInternalFileUrl(file.path)) {
+    return file.path
+  }
+  return ''
+}
+
+/**
+ * Core conversion logic from RawFileInput to UserFile
+ */
+function convertToUserFile(file: RawFileInput, requestId: string, logger: Logger): UserFile | null {
+  if (isCompleteUserFile(file)) {
+    return {
+      ...file,
+      url: resolveInternalFileUrl(file) || file.url,
+    }
+  }
+
+  const storageKey = resolveStorageKeyFromRawFile(file)
   if (!storageKey) {
-    logger.warn(`[${requestId}] File has no storage key: ${file.name || 'unknown'}`)
-    throw new Error(`File has no storage key: ${file.name || 'unknown'}`)
+    return null
   }
 
   const userFile: UserFile = {
     id: file.id || `file-${Date.now()}`,
     name: file.name,
-    url: file.url || file.path || '',
+    url: resolveInternalFileUrl(file),
     size: file.size,
     type: file.type || 'application/octet-stream',
     key: storageKey,
+    context: file.context,
+    base64: file.base64,
   }
 
   logger.info(`[${requestId}] Converted file to UserFile: ${userFile.name} (key: ${userFile.key})`)
@@ -406,27 +567,52 @@ export function processSingleFileToUserFile(
 }
 
 /**
- * Converts raw file objects (from file-upload or variable references) to UserFile format
- * @param files - Array of raw file objects
- * @param requestId - Request ID for logging
- * @param logger - Logger instance
- * @returns Array of UserFile objects
+ * Converts a single raw file object to UserFile format
+ * @throws Error if file is an array or has no storage key
+ */
+export function processSingleFileToUserFile(
+  file: RawFileInput,
+  requestId: string,
+  logger: Logger
+): UserFile {
+  if (Array.isArray(file)) {
+    const errorMsg = `Expected a single file but received an array with ${file.length} file(s). Use a file input that accepts multiple files, or select a specific file from the array (e.g., {{block.files[0]}}).`
+    logger.error(`[${requestId}] ${errorMsg}`)
+    throw new Error(errorMsg)
+  }
+
+  const userFile = convertToUserFile(file, requestId, logger)
+  if (!userFile) {
+    const errorMsg = `File has no storage key: ${file.name || 'unknown'}`
+    logger.warn(`[${requestId}] ${errorMsg}`)
+    throw new Error(errorMsg)
+  }
+
+  return userFile
+}
+
+/**
+ * Converts raw file objects to UserFile format, accepting single or array input
  */
 export function processFilesToUserFiles(
-  files: RawFileInput[],
+  files: RawFileInput | RawFileInput[],
   requestId: string,
   logger: Logger
 ): UserFile[] {
+  const filesArray = Array.isArray(files) ? files : [files]
   const userFiles: UserFile[] = []
 
-  for (const file of files) {
-    try {
-      const userFile = processSingleFileToUserFile(file, requestId, logger)
+  for (const file of filesArray) {
+    if (Array.isArray(file)) {
+      logger.warn(`[${requestId}] Skipping nested array in file input`)
+      continue
+    }
+
+    const userFile = convertToUserFile(file, requestId, logger)
+    if (userFile) {
       userFiles.push(userFile)
-    } catch (error) {
-      logger.warn(
-        `[${requestId}] Skipping file: ${error instanceof Error ? error.message : 'Unknown error'}`
-      )
+    } else {
+      logger.warn(`[${requestId}] Skipping file without storage key: ${file.name || 'unknown'}`)
     }
   }
 
@@ -538,11 +724,9 @@ export function extractCleanFilename(urlOrPath: string): string {
 export function extractWorkspaceIdFromExecutionKey(key: string): string | null {
   const segments = key.split('/')
 
-  const UUID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
-
   if (segments[0] === 'execution' && segments.length >= 5) {
     const workspaceId = segments[1]
-    if (workspaceId && UUID_PATTERN.test(workspaceId)) {
+    if (workspaceId && isUuid(workspaceId)) {
       return workspaceId
     }
   }
@@ -565,4 +749,25 @@ export function getViewerUrl(fileKey: string, workspaceId?: string): string | nu
   }
 
   return `/workspace/${resolvedWorkspaceId}/files/${fileKey}/view`
+}
+
+/**
+ * Downloads a workspace file to the user's device via the serve API.
+ * Fetches the file as a blob and triggers a browser download.
+ */
+export async function downloadWorkspaceFile(file: { key: string; name: string }): Promise<void> {
+  const serveUrl = `/api/files/serve/${encodeURIComponent(file.key)}?context=workspace&t=${Date.now()}`
+  const response = await fetch(serveUrl, { cache: 'no-store' })
+  if (!response.ok) {
+    throw new Error(`Failed to download file: ${response.statusText}`)
+  }
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = file.name
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }

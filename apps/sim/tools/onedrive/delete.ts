@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type { OneDriveDeleteResponse, OneDriveToolParams } from '@/tools/onedrive/types'
 import type { ToolConfig } from '@/tools/types'
 
@@ -26,7 +26,8 @@ export const deleteTool: ToolConfig<OneDriveToolParams, OneDriveDeleteResponse> 
       type: 'string',
       required: true,
       visibility: 'user-or-llm',
-      description: 'The ID of the file or folder to delete',
+      description:
+        'The ID of the file or folder to delete (e.g., "01BYE5RZ6QN3ZWBTUFOFD3GSPGOHDJD36M")',
     },
   },
 

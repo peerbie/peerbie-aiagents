@@ -1,12 +1,18 @@
 import { Sandbox } from '@e2b/code-interpreter'
-import { env } from '@/lib/env'
+import { createLogger } from '@sim/logger'
+import { env } from '@/lib/core/config/env'
 import { CodeLanguage } from '@/lib/execution/languages'
-import { createLogger } from '@/lib/logs/console/logger'
+
+export interface SandboxFile {
+  path: string
+  content: string
+}
 
 export interface E2BExecutionRequest {
   code: string
   language: CodeLanguage
   timeoutMs: number
+  sandboxFiles?: SandboxFile[]
 }
 
 export interface E2BExecutionResult {
@@ -28,6 +34,17 @@ export async function executeInE2B(req: E2BExecutionRequest): Promise<E2BExecuti
 
   const sandbox = await Sandbox.create({ apiKey })
   const sandboxId = sandbox.sandboxId
+
+  if (req.sandboxFiles?.length) {
+    for (const file of req.sandboxFiles) {
+      await sandbox.files.write(file.path, file.content)
+    }
+    logger.info('Wrote sandbox input files', {
+      sandboxId,
+      fileCount: req.sandboxFiles.length,
+      paths: req.sandboxFiles.map((f) => f.path),
+    })
+  }
 
   const stdoutChunks = []
 

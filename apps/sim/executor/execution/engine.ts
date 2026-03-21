@@ -1,8 +1,10 @@
-import { createLogger } from '@/lib/logs/console/logger'
-import { BlockType } from '@/executor/consts'
+import { createLogger } from '@sim/logger'
+import { isExecutionCancelled, isRedisCancellationEnabled } from '@/lib/execution/cancellation'
+import { BlockType } from '@/executor/constants'
 import type { DAG } from '@/executor/dag/builder'
 import type { EdgeManager } from '@/executor/execution/edge-manager'
 import { serializePauseSnapshot } from '@/executor/execution/snapshot-serializer'
+import type { SerializableExecutionState } from '@/executor/execution/types'
 import type { NodeExecutionOrchestrator } from '@/executor/orchestrators/node'
 import type {
   ExecutionContext,
@@ -12,7 +14,7 @@ import type {
   PausePoint,
   ResumeStatus,
 } from '@/executor/types'
-import { normalizeError } from '@/executor/utils/errors'
+import { attachExecutionResult, normalizeError } from '@/executor/utils/errors'
 
 const logger = createLogger('ExecutionEngine')
 
@@ -23,6 +25,15 @@ export class ExecutionEngine {
   private finalOutput: NormalizedBlockOutput = {}
   private pausedBlocks: Map<string, PauseMetadata> = new Map()
   private allowResumeTriggers: boolean
+  private cancelledFlag = false
+  private errorFlag = false
+  private stoppedEarlyFlag = false
+  private executionError: Error | null = null
+  private lastCancellationCheck = 0
+  private readonly useRedisCancellation: boolean
+  private readonly CANCELLATION_CHECK_INTERVAL_MS = 500
+  private abortPromise: Promise<void> | null = null
+  private abortResolve: (() => void) | null = null
 
   constructor(
     private context: ExecutionContext,
@@ -31,36 +42,131 @@ export class ExecutionEngine {
     private nodeOrchestrator: NodeExecutionOrchestrator
   ) {
     this.allowResumeTriggers = this.context.metadata.resumeFromSnapshot === true
+    this.useRedisCancellation = isRedisCancellationEnabled() && !!this.context.executionId
+    this.initializeAbortHandler()
+  }
+
+  /**
+   * Sets up a single abort promise that can be reused throughout execution.
+   * This avoids creating multiple event listeners and potential memory leaks.
+   */
+  private initializeAbortHandler(): void {
+    if (!this.context.abortSignal) return
+
+    if (this.context.abortSignal.aborted) {
+      this.cancelledFlag = true
+      this.abortPromise = Promise.resolve()
+      return
+    }
+
+    this.abortPromise = new Promise<void>((resolve) => {
+      this.abortResolve = resolve
+    })
+
+    this.context.abortSignal.addEventListener(
+      'abort',
+      () => {
+        this.cancelledFlag = true
+        this.abortResolve?.()
+      },
+      { once: true }
+    )
+  }
+
+  private async checkCancellation(): Promise<boolean> {
+    if (this.cancelledFlag) {
+      return true
+    }
+
+    if (this.useRedisCancellation) {
+      const now = Date.now()
+      if (now - this.lastCancellationCheck < this.CANCELLATION_CHECK_INTERVAL_MS) {
+        return false
+      }
+      this.lastCancellationCheck = now
+
+      const cancelled = await isExecutionCancelled(this.context.executionId!)
+      if (cancelled) {
+        this.cancelledFlag = true
+        logger.info('Execution cancelled via Redis', { executionId: this.context.executionId })
+      }
+      return cancelled
+    }
+
+    if (this.context.abortSignal?.aborted) {
+      this.cancelledFlag = true
+      return true
+    }
+
+    return false
   }
 
   async run(triggerBlockId?: string): Promise<ExecutionResult> {
-    const startTime = Date.now()
+    const startTime = performance.now()
     try {
       this.initializeQueue(triggerBlockId)
 
       while (this.hasWork()) {
+        if ((await this.checkCancellation()) || this.errorFlag || this.stoppedEarlyFlag) {
+          break
+        }
         await this.processQueue()
       }
-      await this.waitForAllExecutions()
+
+      if (!this.cancelledFlag) {
+        await this.waitForAllExecutions()
+      }
+
+      // Rethrow the captured error so it's handled by the catch block
+      if (this.errorFlag && this.executionError) {
+        throw this.executionError
+      }
 
       if (this.pausedBlocks.size > 0) {
         return this.buildPausedResult(startTime)
       }
 
-      const endTime = Date.now()
-      this.context.metadata.endTime = new Date(endTime).toISOString()
+      const endTime = performance.now()
+      this.context.metadata.endTime = new Date().toISOString()
       this.context.metadata.duration = endTime - startTime
+
+      if (this.cancelledFlag) {
+        this.finalizeIncompleteLogs()
+        return {
+          success: false,
+          output: this.finalOutput,
+          logs: this.context.blockLogs,
+          executionState: this.getSerializableExecutionState(),
+          metadata: this.context.metadata,
+          status: 'cancelled',
+        }
+      }
 
       return {
         success: true,
         output: this.finalOutput,
         logs: this.context.blockLogs,
+        executionState: this.getSerializableExecutionState(),
         metadata: this.context.metadata,
       }
     } catch (error) {
-      const endTime = Date.now()
-      this.context.metadata.endTime = new Date(endTime).toISOString()
+      const endTime = performance.now()
+      this.context.metadata.endTime = new Date().toISOString()
       this.context.metadata.duration = endTime - startTime
+
+      if (this.cancelledFlag) {
+        this.finalizeIncompleteLogs()
+        return {
+          success: false,
+          output: this.finalOutput,
+          logs: this.context.blockLogs,
+          executionState: this.getSerializableExecutionState(),
+          metadata: this.context.metadata,
+          status: 'cancelled',
+        }
+      }
+
+      this.finalizeIncompleteLogs()
 
       const errorMessage = normalizeError(error)
       logger.error('Execution failed', { error: errorMessage })
@@ -73,10 +179,8 @@ export class ExecutionEngine {
         metadata: this.context.metadata,
       }
 
-      // Attach executionResult to the original error instead of creating a new one
-      // This preserves block error metadata (blockId, blockName, blockType, etc.)
-      if (error && typeof error === 'object') {
-        ;(error as any).executionResult = executionResult
+      if (error instanceof Error) {
+        attachExecutionResult(error, executionResult)
       }
       throw error
     }
@@ -108,25 +212,45 @@ export class ExecutionEngine {
   }
 
   private trackExecution(promise: Promise<void>): void {
-    this.executing.add(promise)
-    // Attach error handler to prevent unhandled rejection warnings
-    // The actual error handling happens in waitForAllExecutions/waitForAnyExecution
-    promise.catch(() => {
-      // Error will be properly handled by Promise.all/Promise.race in wait methods
-    })
-    promise.finally(() => {
-      this.executing.delete(promise)
-    })
+    const trackedPromise = promise
+      .catch((error) => {
+        if (!this.errorFlag) {
+          this.errorFlag = true
+          this.executionError = error instanceof Error ? error : new Error(String(error))
+        }
+      })
+      .finally(() => {
+        this.executing.delete(trackedPromise)
+      })
+    this.executing.add(trackedPromise)
   }
 
   private async waitForAnyExecution(): Promise<void> {
     if (this.executing.size > 0) {
-      await Promise.race(this.executing)
+      const abortPromise = this.getAbortPromise()
+      if (abortPromise) {
+        await Promise.race([...this.executing, abortPromise])
+      } else {
+        await Promise.race(this.executing)
+      }
     }
   }
 
   private async waitForAllExecutions(): Promise<void> {
-    await Promise.all(Array.from(this.executing))
+    const abortPromise = this.getAbortPromise()
+    if (abortPromise) {
+      await Promise.race([Promise.all(this.executing), abortPromise])
+    } else {
+      await Promise.all(this.executing)
+    }
+  }
+
+  /**
+   * Returns the cached abort promise. This is safe to call multiple times
+   * as it reuses the same promise instance created during initialization.
+   */
+  private getAbortPromise(): Promise<void> | null {
+    return this.abortPromise
   }
 
   private async withQueueLock<T>(fn: () => Promise<T> | T): Promise<T> {
@@ -144,6 +268,16 @@ export class ExecutionEngine {
   }
 
   private initializeQueue(triggerBlockId?: string): void {
+    if (this.context.runFromBlockContext) {
+      const { startBlockId } = this.context.runFromBlockContext
+      logger.info('Initializing queue for run-from-block mode', {
+        startBlockId,
+        dirtySetSize: this.context.runFromBlockContext.dirtySet.size,
+      })
+      this.addToQueue(startBlockId)
+      return
+    }
+
     const pendingBlocks = this.context.metadata.pendingBlocks
     const remainingEdges = (this.context.metadata as any).remainingEdges
 
@@ -213,13 +347,16 @@ export class ExecutionEngine {
 
   private async processQueue(): Promise<void> {
     while (this.readyQueue.length > 0) {
+      if ((await this.checkCancellation()) || this.errorFlag) {
+        break
+      }
       const nodeId = this.dequeue()
       if (!nodeId) continue
       const promise = this.executeNodeAsync(nodeId)
       this.trackExecution(promise)
     }
 
-    if (this.executing.size > 0) {
+    if (this.executing.size > 0 && !this.cancelledFlag && !this.errorFlag) {
       await this.waitForAnyExecution()
     }
   }
@@ -227,8 +364,6 @@ export class ExecutionEngine {
   private async executeNodeAsync(nodeId: string): Promise<void> {
     try {
       const wasAlreadyExecuted = this.context.executedBlocks.has(nodeId)
-      const node = this.dag.nodes.get(nodeId)
-
       const result = await this.nodeOrchestrator.executeNode(this.context, nodeId)
 
       if (!wasAlreadyExecuted) {
@@ -269,21 +404,45 @@ export class ExecutionEngine {
       this.finalOutput = output
     }
 
+    if (this.context.stopAfterBlockId === nodeId) {
+      // For loop/parallel sentinels, only stop if the subflow has fully exited (all iterations done)
+      // shouldContinue: true means more iterations, shouldExit: true means loop is done
+      const shouldContinueLoop = output.shouldContinue === true
+      if (!shouldContinueLoop) {
+        logger.info('Stopping execution after target block', { nodeId })
+        this.stoppedEarlyFlag = true
+        return
+      }
+    }
+
     const readyNodes = this.edgeManager.processOutgoingEdges(node, output, false)
 
     logger.info('Processing outgoing edges', {
       nodeId,
       outgoingEdgesCount: node.outgoingEdges.size,
+      outgoingEdges: Array.from(node.outgoingEdges.entries()).map(([id, e]) => ({
+        id,
+        target: e.target,
+        sourceHandle: e.sourceHandle,
+      })),
+      output,
       readyNodesCount: readyNodes.length,
       readyNodes,
     })
 
     this.addMultipleToQueue(readyNodes)
+
+    if (this.context.pendingDynamicNodes && this.context.pendingDynamicNodes.length > 0) {
+      const dynamicNodes = this.context.pendingDynamicNodes
+      this.context.pendingDynamicNodes = []
+      logger.info('Adding dynamically expanded parallel nodes', { dynamicNodes })
+      this.addMultipleToQueue(dynamicNodes)
+    }
   }
 
   private buildPausedResult(startTime: number): ExecutionResult {
-    const endTime = Date.now()
-    this.context.metadata.endTime = new Date(endTime).toISOString()
+    const endTime = performance.now()
+    this.context.metadata.endTime = new Date().toISOString()
     this.context.metadata.duration = endTime - startTime
     this.context.metadata.status = 'paused'
 
@@ -304,10 +463,29 @@ export class ExecutionEngine {
       success: true,
       output: this.collectPauseResponses(),
       logs: this.context.blockLogs,
+      executionState: this.getSerializableExecutionState(snapshotSeed),
       metadata: this.context.metadata,
       status: 'paused',
       pausePoints,
       snapshotSeed,
+    }
+  }
+
+  private getSerializableExecutionState(snapshotSeed?: {
+    snapshot: string
+  }): SerializableExecutionState | undefined {
+    try {
+      const serializedSnapshot =
+        snapshotSeed?.snapshot ?? serializePauseSnapshot(this.context, [], this.dag).snapshot
+      const parsedSnapshot = JSON.parse(serializedSnapshot) as {
+        state?: SerializableExecutionState
+      }
+      return parsedSnapshot.state
+    } catch (error) {
+      logger.warn('Failed to serialize execution state', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return undefined
     }
   }
 
@@ -321,6 +499,22 @@ export class ExecutionEngine {
     return {
       pausedBlocks: responses,
       pauseCount: responses.length,
+    }
+  }
+
+  /**
+   * Finalizes any block logs that were still running when execution was cancelled.
+   * Sets their endedAt to now and calculates the actual elapsed duration.
+   */
+  private finalizeIncompleteLogs(): void {
+    const now = new Date()
+    const nowIso = now.toISOString()
+
+    for (const log of this.context.blockLogs) {
+      if (!log.endedAt) {
+        log.endedAt = nowIso
+        log.durationMs = now.getTime() - new Date(log.startedAt).getTime()
+      }
     }
   }
 }

@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
-import { validateNumericId } from '@/lib/security/input-validation'
+import { createLogger } from '@sim/logger'
+import { type NextRequest, NextResponse } from 'next/server'
+import { checkInternalAuth } from '@/lib/auth/hybrid'
+import { validateNumericId } from '@/lib/core/security/input-validation'
 
 interface DiscordChannel {
   id: string
@@ -13,7 +14,12 @@ export const dynamic = 'force-dynamic'
 
 const logger = createLogger('DiscordChannelsAPI')
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  const auth = await checkInternalAuth(request)
+  if (!auth.success || !auth.userId) {
+    return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 })
+  }
+
   try {
     const { botToken, serverId, channelId } = await request.json()
 

@@ -2,9 +2,11 @@ export type StorageContext =
   | 'knowledge-base'
   | 'chat'
   | 'copilot'
+  | 'mothership'
   | 'execution'
   | 'workspace'
   | 'profile-pictures'
+  | 'og-images'
   | 'logs'
 
 export interface FileInfo {

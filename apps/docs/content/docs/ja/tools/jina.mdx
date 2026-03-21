@@ -60,9 +60,7 @@ Jina AI Readerを使用してウェブコンテンツを抽出し、LLMフレン
 
 | パラメータ | 型 | 説明 |
 | --------- | ---- | ----------- |
-| `content` | string | URLから抽出されたコンテンツで、クリーンでLLMフレンドリーなテキストに処理されたもの |
-| `links` | array | ページで見つかったリンクのリスト（gatherLinksまたはwithLinksummaryが有効な場合） |
-| `images` | array | ページで見つかった画像のリスト（withImagesummaryが有効な場合） |
+| `content` | string | URLから抽出されたコンテンツ。クリーンでLLMフレンドリーなテキストに処理されています |
 
 ### `jina_search`
 
@@ -90,8 +88,3 @@ Jina AI Readerを使用してウェブコンテンツを抽出し、LLMフレン
 | パラメータ | 型 | 説明 |
 | --------- | ---- | ----------- |
 | `results` | array | 検索結果の配列。各結果にはタイトル、説明、URL、LLMフレンドリーなコンテンツが含まれます |
-
-## 注意事項
-
-- カテゴリー: `tools`
-- タイプ: `jina`

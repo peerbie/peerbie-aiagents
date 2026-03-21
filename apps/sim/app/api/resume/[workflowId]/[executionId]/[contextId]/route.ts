@@ -1,9 +1,11 @@
 import { randomUUID } from 'crypto'
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
+import { AuthType } from '@/lib/auth/hybrid'
+import { generateRequestId } from '@/lib/core/utils/request'
 import { preprocessExecution } from '@/lib/execution/preprocessing'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
 import { PauseResumeManager } from '@/lib/workflows/executor/human-in-the-loop-manager'
+import { getWorkspaceBilledAccountUserId } from '@/lib/workspaces/utils'
 import { validateWorkflowAccess } from '@/app/api/workflows/middleware'
 
 const logger = createLogger('WorkflowResumeAPI')
@@ -21,14 +23,15 @@ export async function POST(
 ) {
   const { workflowId, executionId, contextId } = await params
 
+  // Allow resume from dashboard without requiring deployment
   const access = await validateWorkflowAccess(request, workflowId, false)
   if (access.error) {
     return NextResponse.json({ error: access.error.message }, { status: access.error.status })
   }
 
-  const workflow = access.workflow!
+  const workflow = access.workflow
 
-  let payload: any = {}
+  let payload: Record<string, unknown> = {}
   try {
     payload = await request.json()
   } catch {
@@ -36,7 +39,26 @@ export async function POST(
   }
 
   const resumeInput = payload?.input ?? payload ?? {}
-  const userId = workflow.userId ?? ''
+  const isPersonalApiKeyCaller =
+    access.auth?.authType === AuthType.API_KEY && access.auth?.apiKeyType === 'personal'
+
+  let userId: string
+  if (isPersonalApiKeyCaller && access.auth?.userId) {
+    userId = access.auth.userId
+  } else {
+    const billedAccountUserId = await getWorkspaceBilledAccountUserId(workflow.workspaceId)
+    if (!billedAccountUserId) {
+      logger.error('Unable to resolve workspace billed account for resume execution', {
+        workflowId,
+        workspaceId: workflow.workspaceId,
+      })
+      return NextResponse.json(
+        { error: 'Unable to resolve billing account for this workspace' },
+        { status: 500 }
+      )
+    }
+    userId = billedAccountUserId
+  }
 
   const resumeExecutionId = randomUUID()
   const requestId = generateRequestId()
@@ -57,8 +79,8 @@ export async function POST(
     checkRateLimit: false, // Manual triggers bypass rate limits
     checkDeployment: false, // Resuming existing execution, deployment already checked
     skipUsageLimits: true, // Resume is continuation of authorized execution - don't recheck limits
+    useAuthenticatedUserAsActor: isPersonalApiKeyCaller,
     workspaceId: workflow.workspaceId || undefined,
-    isResumeContext: true, // Enable billing fallback for paused workflow resumes
   })
 
   if (!preprocessResult.success) {
@@ -148,6 +170,7 @@ export async function GET(
 ) {
   const { workflowId, executionId, contextId } = await params
 
+  // Allow access without API key for browser-based UI (same as parent execution endpoint)
   const access = await validateWorkflowAccess(request, workflowId, false)
   if (access.error) {
     return NextResponse.json({ error: access.error.message }, { status: access.error.status })

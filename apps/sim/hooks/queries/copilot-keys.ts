@@ -1,6 +1,6 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { isHosted } from '@/lib/environment'
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { isHosted } from '@/lib/core/config/feature-flags'
 
 const logger = createLogger('CopilotKeysQuery')
 
@@ -18,6 +18,9 @@ export const copilotKeysKeys = {
 export interface CopilotKey {
   id: string
   displayKey: string // "•••••{last6}"
+  name: string | null
+  createdAt: string | null
+  lastUsed: string | null
 }
 
 /**
@@ -34,8 +37,8 @@ export interface GenerateKeyResponse {
 /**
  * Fetch Copilot API keys
  */
-async function fetchCopilotKeys(): Promise<CopilotKey[]> {
-  const response = await fetch('/api/copilot/api-keys')
+async function fetchCopilotKeys(signal?: AbortSignal): Promise<CopilotKey[]> {
+  const response = await fetch('/api/copilot/api-keys', { signal })
 
   if (!response.ok) {
     throw new Error('Failed to fetch Copilot API keys')
@@ -51,11 +54,17 @@ async function fetchCopilotKeys(): Promise<CopilotKey[]> {
 export function useCopilotKeys() {
   return useQuery({
     queryKey: copilotKeysKeys.keys(),
-    queryFn: fetchCopilotKeys,
+    queryFn: ({ signal }) => fetchCopilotKeys(signal),
     enabled: isHosted,
     staleTime: 30 * 1000, // 30 seconds
-    placeholderData: keepPreviousData,
   })
+}
+
+/**
+ * Generate key params
+ */
+interface GenerateKeyParams {
+  name: string
 }
 
 /**
@@ -65,12 +74,13 @@ export function useGenerateCopilotKey() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (): Promise<GenerateKeyResponse> => {
+    mutationFn: async ({ name }: GenerateKeyParams): Promise<GenerateKeyResponse> => {
       const response = await fetch('/api/copilot/api-keys/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
+        body: JSON.stringify({ name }),
       })
 
       if (!response.ok) {
@@ -81,9 +91,8 @@ export function useGenerateCopilotKey() {
       return response.json()
     },
     onSuccess: () => {
-      queryClient.refetchQueries({
+      queryClient.invalidateQueries({
         queryKey: copilotKeysKeys.keys(),
-        type: 'active',
       })
     },
     onError: (error) => {

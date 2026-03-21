@@ -1,7 +1,8 @@
+import { createLogger } from '@sim/logger'
 import { jwtVerify, SignJWT } from 'jose'
 import { type NextRequest, NextResponse } from 'next/server'
-import { env } from '@/lib/env'
-import { createLogger } from '@/lib/logs/console/logger'
+import { env } from '@/lib/core/config/env'
+import { safeCompare } from '@/lib/core/security/encryption'
 
 const logger = createLogger('CronAuth')
 
@@ -69,9 +70,20 @@ export async function verifyInternalToken(
  * Returns null if authorized, or a NextResponse with error if unauthorized
  */
 export function verifyCronAuth(request: NextRequest, context?: string): NextResponse | null {
+  if (!env.CRON_SECRET) {
+    const contextInfo = context ? ` for ${context}` : ''
+    logger.warn(`CRON endpoint accessed but CRON_SECRET is not configured${contextInfo}`, {
+      ip: request.headers.get('x-forwarded-for') ?? request.headers.get('x-real-ip') ?? 'unknown',
+      userAgent: request.headers.get('user-agent') ?? 'unknown',
+      context,
+    })
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   const authHeader = request.headers.get('authorization')
   const expectedAuth = `Bearer ${env.CRON_SECRET}`
-  if (authHeader !== expectedAuth) {
+  const isValid = authHeader !== null && safeCompare(authHeader, expectedAuth)
+  if (!isValid) {
     const contextInfo = context ? ` for ${context}` : ''
     logger.warn(`Unauthorized CRON access attempt${contextInfo}`, {
       providedAuth: authHeader,

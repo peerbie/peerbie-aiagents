@@ -1,11 +1,12 @@
 import { db } from '@sim/db'
 import { subscription as subscriptionTable, user } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq, or } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth'
+import { isOrganizationOwnerOrAdmin } from '@/lib/billing/core/organization'
 import { requireStripeClient } from '@/lib/billing/stripe-client'
-import { createLogger } from '@/lib/logs/console/logger'
-import { getBaseUrl } from '@/lib/urls/utils'
+import { getBaseUrl } from '@/lib/core/utils/urls'
 
 const logger = createLogger('BillingPortal')
 
@@ -30,6 +31,11 @@ export async function POST(request: NextRequest) {
     if (context === 'organization') {
       if (!organizationId) {
         return NextResponse.json({ error: 'organizationId is required' }, { status: 400 })
+      }
+
+      const hasPermission = await isOrganizationOwnerOrAdmin(session.user.id, organizationId)
+      if (!hasPermission) {
+        return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
       }
 
       const rows = await db

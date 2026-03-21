@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 
 const logger = createLogger('useCopilotInitialization')
 
@@ -11,9 +11,11 @@ interface UseCopilotInitializationProps {
   chatsLoadedForWorkflow: string | null
   setCopilotWorkflowId: (workflowId: string | null) => Promise<void>
   loadChats: (forceRefresh?: boolean) => Promise<void>
-  fetchContextUsage: () => Promise<void>
+  loadAvailableModels: () => Promise<void>
+  loadAutoAllowedTools: () => Promise<void>
   currentChat: any
   isSendingMessage: boolean
+  resumeActiveStream: () => Promise<boolean>
 }
 
 /**
@@ -29,20 +31,19 @@ export function useCopilotInitialization(props: UseCopilotInitializationProps) {
     chatsLoadedForWorkflow,
     setCopilotWorkflowId,
     loadChats,
-    fetchContextUsage,
+    loadAvailableModels,
+    loadAutoAllowedTools,
     currentChat,
     isSendingMessage,
+    resumeActiveStream,
   } = props
 
   const [isInitialized, setIsInitialized] = useState(false)
   const lastWorkflowIdRef = useRef<string | null>(null)
   const hasMountedRef = useRef(false)
+  const hasResumedRef = useRef(false)
 
-  /**
-   * Initialize on mount - only load chats if needed, don't force refresh
-   * This prevents unnecessary reloads when the component remounts (e.g., hot reload)
-   * Never loads during message streaming to prevent interrupting active conversations
-   */
+  /** Initialize on mount - loads chats if needed. Never loads during streaming */
   useEffect(() => {
     if (activeWorkflowId && !hasMountedRef.current && !isSendingMessage) {
       hasMountedRef.current = true
@@ -50,19 +51,12 @@ export function useCopilotInitialization(props: UseCopilotInitializationProps) {
       lastWorkflowIdRef.current = null
 
       setCopilotWorkflowId(activeWorkflowId)
-      // Use false to let the store decide if a reload is needed based on cache
       loadChats(false)
     }
   }, [activeWorkflowId, setCopilotWorkflowId, loadChats, isSendingMessage])
 
-  /**
-   * Initialize the component - only on mount and genuine workflow changes
-   * Prevents re-initialization on every render or tab switch
-   * Never reloads during message streaming to preserve active conversations
-   */
+  /** Handles genuine workflow changes, preventing re-init on every render */
   useEffect(() => {
-    // Handle genuine workflow changes (not initial mount, not same workflow)
-    // Only reload if not currently streaming to avoid interrupting conversations
     if (
       activeWorkflowId &&
       activeWorkflowId !== lastWorkflowIdRef.current &&
@@ -80,7 +74,23 @@ export function useCopilotInitialization(props: UseCopilotInitializationProps) {
       loadChats(false)
     }
 
-    // Mark as initialized when chats are loaded for the active workflow
+    if (
+      activeWorkflowId &&
+      !isLoadingChats &&
+      chatsLoadedForWorkflow !== null &&
+      chatsLoadedForWorkflow !== activeWorkflowId &&
+      !isSendingMessage
+    ) {
+      logger.info('Chats loaded for wrong workflow, reloading', {
+        loaded: chatsLoadedForWorkflow,
+        active: activeWorkflowId,
+      })
+      setIsInitialized(false)
+      lastWorkflowIdRef.current = activeWorkflowId
+      setCopilotWorkflowId(activeWorkflowId)
+      loadChats(false)
+    }
+
     if (
       activeWorkflowId &&
       !isLoadingChats &&
@@ -100,17 +110,37 @@ export function useCopilotInitialization(props: UseCopilotInitializationProps) {
     isSendingMessage,
   ])
 
-  /**
-   * Fetch context usage when component is initialized and has a current chat
-   */
+  /** Try to resume active stream on mount - runs early, before waiting for chats */
   useEffect(() => {
-    if (isInitialized && currentChat?.id && activeWorkflowId) {
-      logger.info('[Copilot] Component initialized, fetching context usage')
-      fetchContextUsage().catch((err) => {
-        logger.warn('[Copilot] Failed to fetch context usage on mount', err)
+    if (hasResumedRef.current || isSendingMessage) return
+    hasResumedRef.current = true
+    // Resume immediately on mount - don't wait for isInitialized
+    resumeActiveStream().catch((err) => {
+      logger.warn('[Copilot] Failed to resume active stream', err)
+    })
+  }, [isSendingMessage, resumeActiveStream])
+
+  /** Load auto-allowed tools once on mount - runs immediately, independent of workflow */
+  const hasLoadedAutoAllowedToolsRef = useRef(false)
+  useEffect(() => {
+    if (!hasLoadedAutoAllowedToolsRef.current) {
+      hasLoadedAutoAllowedToolsRef.current = true
+      loadAutoAllowedTools().catch((err) => {
+        logger.warn('[Copilot] Failed to load auto-allowed tools', err)
       })
     }
-  }, [isInitialized, currentChat?.id, activeWorkflowId, fetchContextUsage])
+  }, [loadAutoAllowedTools])
+
+  /** Load available models once on mount */
+  const hasLoadedModelsRef = useRef(false)
+  useEffect(() => {
+    if (!hasLoadedModelsRef.current) {
+      hasLoadedModelsRef.current = true
+      loadAvailableModels().catch((err) => {
+        logger.warn('[Copilot] Failed to load available models', err)
+      })
+    }
+  }, [loadAvailableModels])
 
   return {
     isInitialized,

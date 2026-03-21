@@ -1,4 +1,5 @@
 import { SalesforceIcon } from '@/components/icons'
+import { getScopesForService } from '@/lib/oauth/utils'
 import type { BlockConfig } from '@/blocks/types'
 import { AuthMode } from '@/blocks/types'
 import type { SalesforceResponse } from '@/tools/salesforce/types'
@@ -44,6 +45,17 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
         { label: 'Create Task', id: 'create_task' },
         { label: 'Update Task', id: 'update_task' },
         { label: 'Delete Task', id: 'delete_task' },
+        { label: 'List Reports', id: 'list_reports' },
+        { label: 'Get Report', id: 'get_report' },
+        { label: 'Run Report', id: 'run_report' },
+        { label: 'List Report Types', id: 'list_report_types' },
+        { label: 'List Dashboards', id: 'list_dashboards' },
+        { label: 'Get Dashboard', id: 'get_dashboard' },
+        { label: 'Refresh Dashboard', id: 'refresh_dashboard' },
+        { label: 'Run SOQL Query', id: 'query' },
+        { label: 'Get More Query Results', id: 'query_more' },
+        { label: 'Describe Object', id: 'describe_object' },
+        { label: 'List Objects', id: 'list_objects' },
       ],
       value: () => 'get_accounts',
     },
@@ -51,10 +63,20 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
       id: 'credential',
       title: 'Salesforce Account',
       type: 'oauth-input',
-      provider: 'salesforce',
+      canonicalParamId: 'oauthCredential',
+      mode: 'basic',
       serviceId: 'salesforce',
-      requiredScopes: ['api', 'refresh_token', 'openid'],
+      requiredScopes: getScopesForService('salesforce'),
       placeholder: 'Select Salesforce account',
+      required: true,
+    },
+    {
+      id: 'manualCredential',
+      title: 'Salesforce Account',
+      type: 'short-input',
+      canonicalParamId: 'oauthCredential',
+      mode: 'advanced',
+      placeholder: 'Enter credential ID',
       required: true,
     },
     // Common fields for GET operations
@@ -289,6 +311,18 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
       placeholder: 'YYYY-MM-DD (required for create)',
       condition: { field: 'operation', value: ['create_opportunity', 'update_opportunity'] },
       required: true,
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date in YYYY-MM-DD format based on the user's description.
+Examples:
+- "end of quarter" -> Calculate the last day of the current quarter
+- "next month" -> Calculate the last day of next month
+- "in 90 days" -> Calculate the date 90 days from now
+
+Return ONLY the date string in YYYY-MM-DD format - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the close date (e.g., "end of quarter", "in 90 days")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'amount',
@@ -353,6 +387,18 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
       type: 'short-input',
       placeholder: 'YYYY-MM-DD',
       condition: { field: 'operation', value: ['create_task', 'update_task'] },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date in YYYY-MM-DD format based on the user's description.
+Examples:
+- "tomorrow" -> Calculate tomorrow's date
+- "next Friday" -> Calculate the next Friday's date
+- "in 3 days" -> Calculate the date 3 days from now
+
+Return ONLY the date string in YYYY-MM-DD format - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the due date (e.g., "tomorrow", "next Friday")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'whoId',
@@ -367,6 +413,77 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
       type: 'short-input',
       placeholder: 'Account or Opportunity ID',
       condition: { field: 'operation', value: ['create_task'] },
+    },
+    // Report fields
+    {
+      id: 'reportId',
+      title: 'Report ID',
+      type: 'short-input',
+      placeholder: 'Report ID',
+      condition: { field: 'operation', value: ['get_report', 'run_report'] },
+      required: true,
+    },
+    {
+      id: 'folderName',
+      title: 'Folder Name',
+      type: 'short-input',
+      placeholder: 'Filter by folder name',
+      condition: { field: 'operation', value: ['list_reports', 'list_dashboards'] },
+    },
+    {
+      id: 'searchTerm',
+      title: 'Search Term',
+      type: 'short-input',
+      placeholder: 'Search reports by name',
+      condition: { field: 'operation', value: ['list_reports'] },
+    },
+    {
+      id: 'includeDetails',
+      title: 'Include Details',
+      type: 'short-input',
+      placeholder: 'Include detail rows (true/false)',
+      condition: { field: 'operation', value: ['run_report'] },
+    },
+    {
+      id: 'filters',
+      title: 'Report Filters',
+      type: 'long-input',
+      placeholder: 'JSON array of report filters',
+      condition: { field: 'operation', value: ['run_report'] },
+    },
+    // Dashboard fields
+    {
+      id: 'dashboardId',
+      title: 'Dashboard ID',
+      type: 'short-input',
+      placeholder: 'Dashboard ID',
+      condition: { field: 'operation', value: ['get_dashboard', 'refresh_dashboard'] },
+      required: true,
+    },
+    // Query fields
+    {
+      id: 'query',
+      title: 'SOQL Query',
+      type: 'long-input',
+      placeholder: 'SELECT Id, Name FROM Account LIMIT 10',
+      condition: { field: 'operation', value: ['query'] },
+      required: true,
+    },
+    {
+      id: 'nextRecordsUrl',
+      title: 'Next Records URL',
+      type: 'short-input',
+      placeholder: 'URL from previous query response',
+      condition: { field: 'operation', value: ['query_more'] },
+      required: true,
+    },
+    {
+      id: 'objectName',
+      title: 'Object Name',
+      type: 'short-input',
+      placeholder: 'API name (e.g., Account, Lead, Custom_Object__c)',
+      condition: { field: 'operation', value: ['describe_object'] },
+      required: true,
     },
     // Long-input fields at the bottom
     {
@@ -419,6 +536,17 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
       'salesforce_create_task',
       'salesforce_update_task',
       'salesforce_delete_task',
+      'salesforce_list_reports',
+      'salesforce_get_report',
+      'salesforce_run_report',
+      'salesforce_list_report_types',
+      'salesforce_list_dashboards',
+      'salesforce_get_dashboard',
+      'salesforce_refresh_dashboard',
+      'salesforce_query',
+      'salesforce_query_more',
+      'salesforce_describe_object',
+      'salesforce_list_objects',
     ],
     config: {
       tool: (params) => {
@@ -471,13 +599,35 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
             return 'salesforce_update_task'
           case 'delete_task':
             return 'salesforce_delete_task'
+          case 'list_reports':
+            return 'salesforce_list_reports'
+          case 'get_report':
+            return 'salesforce_get_report'
+          case 'run_report':
+            return 'salesforce_run_report'
+          case 'list_report_types':
+            return 'salesforce_list_report_types'
+          case 'list_dashboards':
+            return 'salesforce_list_dashboards'
+          case 'get_dashboard':
+            return 'salesforce_get_dashboard'
+          case 'refresh_dashboard':
+            return 'salesforce_refresh_dashboard'
+          case 'query':
+            return 'salesforce_query'
+          case 'query_more':
+            return 'salesforce_query_more'
+          case 'describe_object':
+            return 'salesforce_describe_object'
+          case 'list_objects':
+            return 'salesforce_list_objects'
           default:
             throw new Error(`Unknown operation: ${params.operation}`)
         }
       },
       params: (params) => {
-        const { credential, operation, ...rest } = params
-        const cleanParams: Record<string, any> = { credential }
+        const { oauthCredential, operation, ...rest } = params
+        const cleanParams: Record<string, any> = { oauthCredential }
         Object.entries(rest).forEach(([key, value]) => {
           if (value !== undefined && value !== null && value !== '') {
             cleanParams[key] = value
@@ -489,7 +639,7 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
   },
   inputs: {
     operation: { type: 'string', description: 'Operation to perform' },
-    credential: { type: 'string', description: 'Salesforce credential' },
+    oauthCredential: { type: 'string', description: 'Salesforce credential' },
   },
   outputs: {
     success: { type: 'boolean', description: 'Operation success status' },

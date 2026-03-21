@@ -1,18 +1,20 @@
+import { createLogger } from '@sim/logger'
 import type { NextRequest } from 'next/server'
 import {
   type ApiKeyAuthResult,
   authenticateApiKeyFromHeader,
   updateApiKeyLastUsed,
 } from '@/lib/api-key/service'
-import { env } from '@/lib/env'
-import { createLogger } from '@/lib/logs/console/logger'
-import { getWorkflowById } from '@/lib/workflows/utils'
+import { type AuthResult, checkHybridAuth } from '@/lib/auth/hybrid'
+import { env } from '@/lib/core/config/env'
+import { authorizeWorkflowByWorkspacePermission, getWorkflowById } from '@/lib/workflows/utils'
 
 const logger = createLogger('WorkflowMiddleware')
 
 export interface ValidationResult {
   error?: { message: string; status: number }
   workflow?: any
+  auth?: AuthResult
 }
 
 export async function validateWorkflowAccess(
@@ -31,6 +33,44 @@ export async function validateWorkflowAccess(
       }
     }
 
+    if (!workflow.workspaceId) {
+      return {
+        error: {
+          message:
+            'This workflow is not attached to a workspace. Personal workflows are deprecated and cannot be accessed.',
+          status: 403,
+        },
+      }
+    }
+
+    if (!requireDeployment) {
+      const auth = await checkHybridAuth(request, { requireWorkflowId: false })
+      if (!auth.success || !auth.userId) {
+        return {
+          error: {
+            message: auth.error || 'Unauthorized',
+            status: 401,
+          },
+        }
+      }
+
+      const authorization = await authorizeWorkflowByWorkspacePermission({
+        workflowId,
+        userId: auth.userId,
+        action: 'read',
+      })
+      if (!authorization.allowed) {
+        return {
+          error: {
+            message: authorization.message || 'Access denied',
+            status: authorization.status,
+          },
+        }
+      }
+
+      return { workflow, auth }
+    }
+
     if (requireDeployment) {
       if (!workflow.isDeployed) {
         return {
@@ -42,7 +82,7 @@ export async function validateWorkflowAccess(
       }
 
       const internalSecret = request.headers.get('X-Internal-Secret')
-      if (internalSecret === env.INTERNAL_API_SECRET) {
+      if (env.INTERNAL_API_SECRET && internalSecret === env.INTERNAL_API_SECRET) {
         return { workflow }
       }
 
@@ -65,24 +105,13 @@ export async function validateWorkflowAccess(
 
       let validResult: ApiKeyAuthResult | null = null
 
-      if (workflow.workspaceId) {
-        const workspaceResult = await authenticateApiKeyFromHeader(apiKeyHeader, {
-          workspaceId: workflow.workspaceId as string,
-          keyTypes: ['workspace', 'personal'],
-        })
+      const workspaceResult = await authenticateApiKeyFromHeader(apiKeyHeader, {
+        workspaceId: workflow.workspaceId as string,
+        keyTypes: ['workspace', 'personal'],
+      })
 
-        if (workspaceResult.success) {
-          validResult = workspaceResult
-        }
-      } else {
-        const personalResult = await authenticateApiKeyFromHeader(apiKeyHeader, {
-          userId: workflow.userId as string,
-          keyTypes: ['personal'],
-        })
-
-        if (personalResult.success) {
-          validResult = personalResult
-        }
+      if (workspaceResult.success) {
+        validResult = workspaceResult
       }
 
       if (!validResult) {

@@ -27,33 +27,50 @@ export const getMessageTool: ToolConfig<
     teamId: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'The ID of the team (for channel messages)',
+      visibility: 'user-or-llm',
+      description:
+        'The ID of the team for channel messages (e.g., "12345678-abcd-1234-efgh-123456789012" - a GUID)',
     },
     channelId: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'The ID of the channel (for channel messages)',
+      visibility: 'user-or-llm',
+      description:
+        'The ID of the channel for channel messages (e.g., "19:abc123def456@thread.tacv2")',
     },
     chatId: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'The ID of the chat (for chat messages)',
+      visibility: 'user-or-llm',
+      description: 'The ID of the chat for chat messages (e.g., "19:abc123def456@thread.v2")',
     },
     messageId: {
       type: 'string',
       required: true,
       visibility: 'user-or-llm',
-      description: 'The ID of the message to retrieve',
+      description:
+        'The ID of the message to retrieve (e.g., "1234567890123" - a numeric string from message responses)',
     },
   },
 
   outputs: {
     success: { type: 'boolean', description: 'Whether the retrieval was successful' },
     content: { type: 'string', description: 'The message content' },
-    metadata: { type: 'object', description: 'Message metadata including sender, timestamp, etc.' },
+    metadata: {
+      type: 'object',
+      description: 'Message metadata including sender, timestamp, etc.',
+      properties: {
+        messageId: { type: 'string', description: 'Message ID' },
+        content: { type: 'string', description: 'Message content' },
+        createdTime: { type: 'string', description: 'Message creation timestamp' },
+        url: { type: 'string', description: 'Web URL to the message' },
+        teamId: { type: 'string', description: 'Team ID' },
+        channelId: { type: 'string', description: 'Channel ID' },
+        chatId: { type: 'string', description: 'Chat ID' },
+        messages: { type: 'array', description: 'Array of message details' },
+        messageCount: { type: 'number', description: 'Number of messages' },
+      },
+    },
   },
 
   request: {

@@ -1,4 +1,5 @@
 import type { BranchProtectionResponse, GetBranchProtectionParams } from '@/tools/github/types'
+import { BRANCH_PROTECTION_OUTPUT_PROPERTIES } from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const getBranchProtectionTool: ToolConfig<
@@ -180,4 +181,35 @@ Enforce Admins: ${protection.enforce_admins?.enabled ? 'Yes' : 'No'}`
       },
     },
   },
+}
+
+export const getBranchProtectionV2Tool: ToolConfig<GetBranchProtectionParams, any> = {
+  id: 'github_get_branch_protection_v2',
+  name: getBranchProtectionTool.name,
+  description: getBranchProtectionTool.description,
+  version: '2.0.0',
+  params: getBranchProtectionTool.params,
+  request: getBranchProtectionTool.request,
+
+  transformResponse: async (response: Response) => {
+    const protection = await response.json()
+    return {
+      success: true,
+      output: {
+        url: protection.url,
+        required_status_checks: protection.required_status_checks ?? null,
+        enforce_admins: protection.enforce_admins,
+        required_pull_request_reviews: protection.required_pull_request_reviews ?? null,
+        restrictions: protection.restrictions ?? null,
+        required_linear_history: protection.required_linear_history ?? null,
+        allow_force_pushes: protection.allow_force_pushes ?? null,
+        allow_deletions: protection.allow_deletions ?? null,
+        block_creations: protection.block_creations ?? null,
+        required_conversation_resolution: protection.required_conversation_resolution ?? null,
+        required_signatures: protection.required_signatures ?? null,
+      },
+    }
+  },
+
+  outputs: BRANCH_PROTECTION_OUTPUT_PROPERTIES,
 }

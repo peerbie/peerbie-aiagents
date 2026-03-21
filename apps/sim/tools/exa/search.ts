@@ -18,39 +18,41 @@ export const searchTool: ToolConfig<ExaSearchParams, ExaSearchResponse> = {
     numResults: {
       type: 'number',
       required: false,
-      visibility: 'user-only',
-      description: 'Number of results to return (default: 10, max: 25)',
+      visibility: 'user-or-llm',
+      description: 'Number of results to return (e.g., 5, 10, 25). Default: 10, max: 25',
     },
     useAutoprompt: {
       type: 'boolean',
       required: false,
-      visibility: 'user-only',
-      description: 'Whether to use autoprompt to improve the query (default: false)',
+      visibility: 'user-or-llm',
+      description: 'Whether to use autoprompt to improve the query (true or false). Default: false',
     },
     type: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Search type: neural, keyword, auto or fast (default: auto)',
+      visibility: 'user-or-llm',
+      description: 'Search type: "neural", "keyword", "auto", or "fast". Default: "auto"',
     },
     includeDomains: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Comma-separated list of domains to include in results',
+      visibility: 'user-or-llm',
+      description:
+        'Comma-separated list of domains to include in results (e.g., "github.com, stackoverflow.com")',
     },
     excludeDomains: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Comma-separated list of domains to exclude from results',
+      visibility: 'user-or-llm',
+      description:
+        'Comma-separated list of domains to exclude from results (e.g., "reddit.com, pinterest.com")',
     },
     category: {
       type: 'string',
       required: false,
       visibility: 'user-only',
       description:
-        'Filter by category: company, research_paper, news_article, pdf, github, tweet, movie, song, personal_site',
+        'Filter by category: company, research paper, news, pdf, github, tweet, personal site, linkedin profile, financial report',
     },
     text: {
       type: 'boolean',
@@ -74,13 +76,33 @@ export const searchTool: ToolConfig<ExaSearchParams, ExaSearchResponse> = {
       type: 'string',
       required: false,
       visibility: 'user-only',
-      description: 'Live crawling mode: always, fallback, or never (default: never)',
+      description:
+        'Live crawling mode: never (default), fallback, always, or preferred (always try livecrawl, fall back to cache if fails)',
     },
     apiKey: {
       type: 'string',
       required: true,
       visibility: 'user-only',
       description: 'Exa AI API Key',
+    },
+  },
+  hosting: {
+    envKeyPrefix: 'EXA_API_KEY',
+    apiKeyParam: 'apiKey',
+    byokProviderId: 'exa',
+    pricing: {
+      type: 'custom',
+      getCost: (_params, output) => {
+        const costDollars = output.__costDollars as { total?: number } | undefined
+        if (costDollars?.total == null) {
+          throw new Error('Exa search response missing costDollars field')
+        }
+        return { cost: costDollars.total, metadata: { costDollars } }
+      },
+    },
+    rateLimit: {
+      mode: 'per_request',
+      requestsPerMinute: 5,
     },
   },
 
@@ -164,6 +186,7 @@ export const searchTool: ToolConfig<ExaSearchParams, ExaSearchResponse> = {
           highlights: result.highlights,
           score: result.score,
         })),
+        __costDollars: data.costDollars,
       },
     }
   },

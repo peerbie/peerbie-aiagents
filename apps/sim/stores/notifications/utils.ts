@@ -1,8 +1,21 @@
-import { createLogger } from '@/lib/logs/console/logger'
-import { useCopilotStore } from '@/stores/panel/copilot/store'
-import { usePanelStore } from '@/stores/panel/store'
+import { createLogger } from '@sim/logger'
+import { useCopilotStore, usePanelStore } from '@/stores/panel'
 
 const logger = createLogger('NotificationUtils')
+
+/**
+ * Dispatches a message to the mothership chat via a custom window event.
+ * The mothership `Home` component listens for this event and calls `sendMessage`.
+ */
+export function sendMothershipMessage(message: string): void {
+  const trimmed = message.trim()
+  if (!trimmed) {
+    logger.warn('sendMothershipMessage called with empty message')
+    return
+  }
+  window.dispatchEvent(new CustomEvent('mothership-send-message', { detail: { message: trimmed } }))
+  logger.info('Dispatched mothership message event', { messageLength: trimmed.length })
+}
 
 /**
  * Opens the copilot panel and directly sends the message.
@@ -42,9 +55,7 @@ export function openCopilotWithMessage(message: string): void {
       return
     }
 
-    const messageWithInstructions = `${trimmedMessage}\n\nPlease fix this.`
-
-    void copilotStore.sendMessage(messageWithInstructions, { stream: true }).catch((error) => {
+    void copilotStore.sendMessage(trimmedMessage, { stream: true }).catch((error) => {
       logger.error('Failed to send message to copilot', { error })
     })
 

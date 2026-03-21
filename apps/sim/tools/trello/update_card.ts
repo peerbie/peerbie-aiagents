@@ -1,4 +1,4 @@
-import { env } from '@/lib/env'
+import { env } from '@/lib/core/config/env'
 import type { TrelloUpdateCardParams, TrelloUpdateCardResponse } from '@/tools/trello/types'
 import type { ToolConfig } from '@/tools/types'
 
@@ -24,7 +24,7 @@ export const trelloUpdateCardTool: ToolConfig<TrelloUpdateCardParams, TrelloUpda
       type: 'string',
       required: true,
       visibility: 'user-or-llm',
-      description: 'ID of the card to update',
+      description: 'Trello card ID (24-character hex string)',
     },
     name: {
       type: 'string',
@@ -48,7 +48,7 @@ export const trelloUpdateCardTool: ToolConfig<TrelloUpdateCardParams, TrelloUpda
       type: 'string',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Move card to a different list',
+      description: 'Trello list ID to move card to (24-character hex string)',
     },
     due: {
       type: 'string',
@@ -118,11 +118,9 @@ export const trelloUpdateCardTool: ToolConfig<TrelloUpdateCardParams, TrelloUpda
   },
 
   outputs: {
-    success: { type: 'boolean', description: 'Whether the card was updated successfully' },
     card: {
       type: 'object',
       description: 'The updated card object with id, name, desc, url, and other properties',
     },
-    error: { type: 'string', description: 'Error message if operation failed' },
   },
 }

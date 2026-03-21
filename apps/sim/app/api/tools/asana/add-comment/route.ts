@@ -1,13 +1,19 @@
-import { NextResponse } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
-import { validateAlphanumericId } from '@/lib/security/input-validation'
+import { createLogger } from '@sim/logger'
+import { type NextRequest, NextResponse } from 'next/server'
+import { checkInternalAuth } from '@/lib/auth/hybrid'
+import { validateAlphanumericId } from '@/lib/core/security/input-validation'
 
 export const dynamic = 'force-dynamic'
 
 const logger = createLogger('AsanaAddCommentAPI')
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
+    const auth = await checkInternalAuth(request)
+    if (!auth.success || !auth.userId) {
+      return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 })
+    }
+
     const { accessToken, taskGid, text } = await request.json()
 
     if (!accessToken) {
@@ -86,18 +92,16 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      output: {
-        ts: new Date().toISOString(),
-        gid: story.gid,
-        text: story.text || '',
-        created_at: story.created_at,
-        created_by: story.created_by
-          ? {
-              gid: story.created_by.gid,
-              name: story.created_by.name,
-            }
-          : undefined,
-      },
+      ts: new Date().toISOString(),
+      gid: story.gid,
+      text: story.text || '',
+      created_at: story.created_at,
+      created_by: story.created_by
+        ? {
+            gid: story.created_by.gid,
+            name: story.created_by.name,
+          }
+        : undefined,
     })
   } catch (error) {
     logger.error('Error processing request:', error)

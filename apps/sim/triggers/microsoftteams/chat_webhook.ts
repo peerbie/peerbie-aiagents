@@ -16,7 +16,7 @@ export const microsoftTeamsChatSubscriptionTrigger: TriggerConfig = {
       title: 'Credentials',
       type: 'oauth-input',
       description: 'This trigger requires microsoft teams credentials to access your account.',
-      provider: 'microsoft-teams',
+      serviceId: 'microsoft-teams',
       requiredScopes: [
         'openid',
         'profile',
@@ -47,7 +47,7 @@ export const microsoftTeamsChatSubscriptionTrigger: TriggerConfig = {
       },
     },
     {
-      id: 'chatId',
+      id: 'triggerChatId',
       title: 'Chat ID',
       type: 'short-input',
       placeholder: 'Enter chat ID',
@@ -73,6 +73,18 @@ export const microsoftTeamsChatSubscriptionTrigger: TriggerConfig = {
       },
     },
     {
+      id: 'triggerSave',
+      title: '',
+      type: 'trigger-save',
+      hideFromPreview: true,
+      mode: 'trigger',
+      triggerId: 'microsoftteams_chat_subscription',
+      condition: {
+        field: 'selectedTriggerId',
+        value: 'microsoftteams_chat_subscription',
+      },
+    },
+    {
       id: 'triggerInstructions',
       title: 'Setup Instructions',
       hideFromPreview: true,
@@ -88,18 +100,6 @@ export const microsoftTeamsChatSubscriptionTrigger: TriggerConfig = {
         )
         .join(''),
       mode: 'trigger',
-      condition: {
-        field: 'selectedTriggerId',
-        value: 'microsoftteams_chat_subscription',
-      },
-    },
-    {
-      id: 'triggerSave',
-      title: '',
-      type: 'trigger-save',
-      hideFromPreview: true,
-      mode: 'trigger',
-      triggerId: 'microsoftteams_chat_subscription',
       condition: {
         field: 'selectedTriggerId',
         value: 'microsoftteams_chat_subscription',

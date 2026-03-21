@@ -1,24 +1,25 @@
 import { db } from '@sim/db'
 import {
-  member,
   templateCreators,
   templateStars,
   templates,
-  user,
   workflow,
   workflowDeploymentVersion,
 } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
+import { AuditAction, AuditResourceType, recordAudit } from '@/lib/audit/log'
 import { getSession } from '@/lib/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { canAccessTemplate, verifyEffectiveSuperUser } from '@/lib/templates/permissions'
 import {
   extractRequiredCredentials,
   sanitizeCredentials,
-} from '@/lib/workflows/credential-extractor'
+} from '@/lib/workflows/credentials/credential-extractor'
+import { authorizeWorkflowByWorkspacePermission } from '@/lib/workflows/utils'
 
 const logger = createLogger('TemplatesAPI')
 
@@ -40,7 +41,7 @@ const CreateTemplateSchema = z.object({
       about: z.string().optional(), // Markdown long description
     })
     .optional(),
-  creatorId: z.string().optional(), // Creator profile ID
+  creatorId: z.string().min(1, 'Creator profile is required'),
   tags: z.array(z.string()).max(10, 'Maximum 10 tags allowed').optional().default([]),
 })
 
@@ -68,11 +69,9 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const params = QueryParamsSchema.parse(Object.fromEntries(searchParams.entries()))
 
-    logger.debug(`[${requestId}] Fetching templates with params:`, params)
-
     // Check if user is a super user
-    const currentUser = await db.select().from(user).where(eq(user.id, session.user.id)).limit(1)
-    const isSuperUser = currentUser[0]?.isSuperUser || false
+    const { effectiveSuperUser } = await verifyEffectiveSuperUser(session.user.id)
+    const isSuperUser = effectiveSuperUser
 
     // Build query conditions
     const conditions = []
@@ -81,12 +80,45 @@ export async function GET(request: NextRequest) {
     // When fetching by workflowId, we want to get the template regardless of status
     // This is used by the deploy modal to check if a template exists
     if (params.workflowId) {
+      const authorization = await authorizeWorkflowByWorkspacePermission({
+        workflowId: params.workflowId,
+        userId: session.user.id,
+        action: 'write',
+      })
+      if (!authorization.allowed) {
+        return NextResponse.json(
+          {
+            data: [],
+            pagination: {
+              total: 0,
+              limit: params.limit,
+              offset: params.offset,
+              page: 1,
+              totalPages: 0,
+            },
+          },
+          { status: 200 }
+        )
+      }
       conditions.push(eq(templates.workflowId, params.workflowId))
-      // Don't apply status filter when fetching by workflowId - we want to show
-      // the template to its owner even if it's pending
     } else {
       // Apply status filter - only approved templates for non-super users
       if (params.status) {
+        if (!isSuperUser && params.status !== 'approved') {
+          return NextResponse.json(
+            {
+              data: [],
+              pagination: {
+                total: 0,
+                limit: params.limit,
+                offset: params.offset,
+                page: 1,
+                totalPages: 0,
+              },
+            },
+            { status: 200 }
+          )
+        }
         conditions.push(eq(templates.status, params.status))
       } else if (!isSuperUser || !params.includeAllStatuses) {
         // Non-super users and super users without includeAllStatuses flag see only approved templates
@@ -147,16 +179,33 @@ export async function GET(request: NextRequest) {
 
     const total = totalCount[0]?.count || 0
 
-    logger.info(`[${requestId}] Successfully retrieved ${results.length} templates`)
+    const visibleResults =
+      params.workflowId && !isSuperUser
+        ? (
+            await Promise.all(
+              results.map(async (template) => {
+                if (template.status === 'approved') {
+                  return template
+                }
+                const access = await canAccessTemplate(template.id, session.user.id)
+                return access.allowed ? template : null
+              })
+            )
+          ).filter((template): template is (typeof results)[number] => template !== null)
+        : results
+
+    logger.info(`[${requestId}] Successfully retrieved ${visibleResults.length} templates`)
 
     return NextResponse.json({
-      data: results,
+      data: visibleResults,
       pagination: {
-        total,
+        total: params.workflowId && !isSuperUser ? visibleResults.length : total,
         limit: params.limit,
         offset: params.offset,
         page: Math.floor(params.offset / params.limit) + 1,
-        totalPages: Math.ceil(total / params.limit),
+        totalPages: Math.ceil(
+          (params.workflowId && !isSuperUser ? visibleResults.length : total) / params.limit
+        ),
       },
     })
   } catch (error: any) {
@@ -187,71 +236,37 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const data = CreateTemplateSchema.parse(body)
 
-    logger.debug(`[${requestId}] Creating template:`, {
-      name: data.name,
+    const workflowAuthorization = await authorizeWorkflowByWorkspacePermission({
       workflowId: data.workflowId,
+      userId: session.user.id,
+      action: 'write',
     })
 
-    // Verify the workflow exists and belongs to the user
-    const workflowExists = await db
-      .select({ id: workflow.id })
-      .from(workflow)
-      .where(eq(workflow.id, data.workflowId))
-      .limit(1)
-
-    if (workflowExists.length === 0) {
+    if (!workflowAuthorization.workflow) {
       logger.warn(`[${requestId}] Workflow not found: ${data.workflowId}`)
       return NextResponse.json({ error: 'Workflow not found' }, { status: 404 })
     }
 
-    // Validate creator profile if provided
-    if (data.creatorId) {
-      // Verify the creator profile exists and user has access
-      const creatorProfile = await db
-        .select()
-        .from(templateCreators)
-        .where(eq(templateCreators.id, data.creatorId))
-        .limit(1)
-
-      if (creatorProfile.length === 0) {
-        logger.warn(`[${requestId}] Creator profile not found: ${data.creatorId}`)
-        return NextResponse.json({ error: 'Creator profile not found' }, { status: 404 })
-      }
-
-      const creator = creatorProfile[0]
-
-      // Verify user has permission to use this creator profile
-      if (creator.referenceType === 'user') {
-        if (creator.referenceId !== session.user.id) {
-          logger.warn(`[${requestId}] User cannot use creator profile: ${data.creatorId}`)
-          return NextResponse.json(
-            { error: 'You do not have permission to use this creator profile' },
-            { status: 403 }
-          )
-        }
-      } else if (creator.referenceType === 'organization') {
-        // Verify user is a member of the organization
-        const membership = await db
-          .select()
-          .from(member)
-          .where(
-            and(eq(member.userId, session.user.id), eq(member.organizationId, creator.referenceId))
-          )
-          .limit(1)
-
-        if (membership.length === 0) {
-          logger.warn(
-            `[${requestId}] User not a member of organization for creator: ${data.creatorId}`
-          )
-          return NextResponse.json(
-            { error: 'You must be a member of the organization to use its creator profile' },
-            { status: 403 }
-          )
-        }
-      }
+    if (!workflowAuthorization.allowed) {
+      logger.warn(`[${requestId}] User denied permission to template workflow ${data.workflowId}`)
+      return NextResponse.json(
+        { error: workflowAuthorization.message || 'Access denied' },
+        { status: workflowAuthorization.status || 403 }
+      )
     }
 
-    // Create the template
+    const { verifyCreatorPermission } = await import('@/lib/templates/permissions')
+    const { hasPermission, error: permissionError } = await verifyCreatorPermission(
+      session.user.id,
+      data.creatorId,
+      'member'
+    )
+
+    if (!hasPermission) {
+      logger.warn(`[${requestId}] User cannot use creator profile: ${data.creatorId}`)
+      return NextResponse.json({ error: permissionError || 'Access denied' }, { status: 403 })
+    }
+
     const templateId = uuidv4()
     const now = new Date()
 
@@ -307,7 +322,7 @@ export async function POST(request: NextRequest) {
       workflowId: data.workflowId,
       name: data.name,
       details: data.details || null,
-      creatorId: data.creatorId || null,
+      creatorId: data.creatorId,
       views: 0,
       stars: 0,
       status: 'pending' as const, // All new templates start as pending
@@ -321,6 +336,18 @@ export async function POST(request: NextRequest) {
     await db.insert(templates).values(newTemplate)
 
     logger.info(`[${requestId}] Successfully created template: ${templateId}`)
+
+    recordAudit({
+      actorId: session.user.id,
+      actorName: session.user.name,
+      actorEmail: session.user.email,
+      action: AuditAction.TEMPLATE_CREATED,
+      resourceType: AuditResourceType.TEMPLATE,
+      resourceId: templateId,
+      resourceName: data.name,
+      description: `Created template "${data.name}"`,
+      request,
+    })
 
     return NextResponse.json(
       {

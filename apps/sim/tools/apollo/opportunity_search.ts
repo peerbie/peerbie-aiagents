@@ -29,8 +29,8 @@ export const apolloOpportunitySearchTool: ToolConfig<
     account_ids: {
       type: 'array',
       required: false,
-      visibility: 'user-only',
-      description: 'Filter by specific account IDs',
+      visibility: 'user-or-llm',
+      description: 'Filter by specific account IDs (e.g., ["acc_123", "acc_456"])',
     },
     stage_ids: {
       type: 'array',
@@ -48,13 +48,13 @@ export const apolloOpportunitySearchTool: ToolConfig<
       type: 'number',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Page number for pagination',
+      description: 'Page number for pagination (e.g., 1, 2, 3)',
     },
     per_page: {
       type: 'number',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Results per page (max: 100)',
+      description: 'Results per page, max 100 (e.g., 25, 50, 100)',
     },
   },
 
@@ -91,11 +91,9 @@ export const apolloOpportunitySearchTool: ToolConfig<
       success: true,
       output: {
         opportunities: data.opportunities || [],
-        metadata: {
-          page: data.pagination?.page || 1,
-          per_page: data.pagination?.per_page || 25,
-          total_entries: data.pagination?.total_entries || 0,
-        },
+        page: data.pagination?.page || 1,
+        per_page: data.pagination?.per_page || 25,
+        total_entries: data.pagination?.total_entries || 0,
       },
     }
   },
@@ -105,9 +103,8 @@ export const apolloOpportunitySearchTool: ToolConfig<
       type: 'json',
       description: 'Array of opportunities matching the search criteria',
     },
-    metadata: {
-      type: 'json',
-      description: 'Pagination information including page, per_page, and total_entries',
-    },
+    page: { type: 'number', description: 'Current page number' },
+    per_page: { type: 'number', description: 'Results per page' },
+    total_entries: { type: 'number', description: 'Total matching entries' },
   },
 }

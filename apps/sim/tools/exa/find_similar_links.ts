@@ -21,8 +21,8 @@ export const findSimilarLinksTool: ToolConfig<
     numResults: {
       type: 'number',
       required: false,
-      visibility: 'user-only',
-      description: 'Number of similar links to return (default: 10, max: 25)',
+      visibility: 'user-or-llm',
+      description: 'Number of similar links to return (e.g., 5, 10, 25). Default: 10, max: 25',
     },
     text: {
       type: 'boolean',
@@ -33,27 +33,22 @@ export const findSimilarLinksTool: ToolConfig<
     includeDomains: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Comma-separated list of domains to include in results',
+      visibility: 'user-or-llm',
+      description:
+        'Comma-separated list of domains to include in results (e.g., "github.com, stackoverflow.com")',
     },
     excludeDomains: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Comma-separated list of domains to exclude from results',
+      visibility: 'user-or-llm',
+      description:
+        'Comma-separated list of domains to exclude from results (e.g., "reddit.com, pinterest.com")',
     },
     excludeSourceDomain: {
       type: 'boolean',
       required: false,
       visibility: 'user-only',
       description: 'Exclude the source domain from results (default: false)',
-    },
-    category: {
-      type: 'string',
-      required: false,
-      visibility: 'user-only',
-      description:
-        'Filter by category: company, research_paper, news_article, pdf, github, tweet, movie, song, personal_site',
     },
     highlights: {
       type: 'boolean',
@@ -71,13 +66,33 @@ export const findSimilarLinksTool: ToolConfig<
       type: 'string',
       required: false,
       visibility: 'user-only',
-      description: 'Live crawling mode: always, fallback, or never (default: never)',
+      description:
+        'Live crawling mode: never (default), fallback, always, or preferred (always try livecrawl, fall back to cache if fails)',
     },
     apiKey: {
       type: 'string',
       required: true,
       visibility: 'user-only',
       description: 'Exa AI API Key',
+    },
+  },
+  hosting: {
+    envKeyPrefix: 'EXA_API_KEY',
+    apiKeyParam: 'apiKey',
+    byokProviderId: 'exa',
+    pricing: {
+      type: 'custom',
+      getCost: (_params, output) => {
+        const costDollars = output.__costDollars as { total?: number } | undefined
+        if (costDollars?.total == null) {
+          throw new Error('Exa find_similar_links response missing costDollars field')
+        }
+        return { cost: costDollars.total, metadata: { costDollars } }
+      },
+    },
+    rateLimit: {
+      mode: 'per_request',
+      requestsPerMinute: 10,
     },
   },
 
@@ -113,9 +128,6 @@ export const findSimilarLinksTool: ToolConfig<
         body.excludeSourceDomain = params.excludeSourceDomain
       }
 
-      // Category filtering
-      if (params.category) body.category = params.category
-
       // Content options - build contents object
       const contents: Record<string, any> = {}
       if (params.text !== undefined) contents.text = params.text
@@ -147,6 +159,7 @@ export const findSimilarLinksTool: ToolConfig<
           highlights: result.highlights,
           score: result.score || 0,
         })),
+        __costDollars: data.costDollars,
       },
     }
   },

@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { createLogger } from '@sim/logger'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { client, useSession } from '@/lib/auth-client'
-import { createLogger } from '@/lib/logs/console/logger'
+import { client, useSession } from '@/lib/auth/auth-client'
 
 const logger = createLogger('useVerification')
 
@@ -93,7 +93,7 @@ export function useVerification({
 
     try {
       const normalizedEmail = email.trim().toLowerCase()
-      const response = await client.signIn.emailOtp({
+      const response = await client.emailOtp.verifyEmail({
         email: normalizedEmail,
         otp,
       })
@@ -169,7 +169,7 @@ export function useVerification({
     client.emailOtp
       .sendVerificationOtp({
         email: normalizedEmail,
-        type: 'sign-in',
+        type: 'email-verification',
       })
       .then(() => {})
       .catch(() => {

@@ -1,8 +1,9 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   HubSpotUpdateCompanyParams,
   HubSpotUpdateCompanyResponse,
 } from '@/tools/hubspot/types'
+import { COMPANY_OBJECT_OUTPUT } from '@/tools/hubspot/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('HubSpotUpdateCompany')
@@ -31,21 +32,22 @@ export const hubspotUpdateCompanyTool: ToolConfig<
     companyId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID or domain of the company to update',
+      visibility: 'user-or-llm',
+      description: 'The HubSpot company ID (numeric string) or domain of the company to update',
     },
     idProperty: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description:
         'Property to use as unique identifier (e.g., "domain"). If not specified, uses record ID',
     },
     properties: {
       type: 'object',
       required: true,
-      visibility: 'user-only',
-      description: 'Company properties to update as JSON object',
+      visibility: 'user-or-llm',
+      description:
+        'Company properties to update as JSON object (e.g., {"name": "New Name", "industry": "Finance"})',
     },
   },
 
@@ -69,8 +71,17 @@ export const hubspotUpdateCompanyTool: ToolConfig<
       }
     },
     body: (params) => {
+      let properties = params.properties
+      if (typeof properties === 'string') {
+        try {
+          properties = JSON.parse(properties)
+        } catch (e) {
+          throw new Error('Invalid JSON format for properties. Please provide a valid JSON object.')
+        }
+      }
+
       return {
-        properties: params.properties,
+        properties,
       }
     },
   },
@@ -87,31 +98,15 @@ export const hubspotUpdateCompanyTool: ToolConfig<
       success: true,
       output: {
         company: data,
-        metadata: {
-          operation: 'update_company' as const,
-          companyId: data.id,
-        },
+        companyId: data.id,
         success: true,
       },
     }
   },
 
   outputs: {
+    company: COMPANY_OBJECT_OUTPUT,
+    companyId: { type: 'string', description: 'The updated company ID' },
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Updated company data',
-      properties: {
-        company: {
-          type: 'object',
-          description: 'Updated company object with properties',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

@@ -10,9 +10,13 @@ import {
   getCodeEditorProps,
   highlight,
   languages,
-} from '@/components/emcn/components/code/code'
+} from '@/components/emcn'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import { cn } from '@/lib/core/utils/cn'
+import {
+  createEnvVarPattern,
+  createWorkflowVariablePattern,
+} from '@/executor/utils/reference-validation'
 
 interface CodeEditorProps {
   value: string
@@ -20,6 +24,7 @@ interface CodeEditorProps {
   language: 'javascript' | 'json'
   placeholder?: string
   className?: string
+  gutterClassName?: string
   minHeight?: string
   highlightVariables?: boolean
   onKeyDown?: (e: React.KeyboardEvent) => void
@@ -36,7 +41,8 @@ export function CodeEditor({
   language,
   placeholder = '',
   className = '',
-  minHeight = '360px',
+  gutterClassName = '',
+  minHeight,
   highlightVariables = true,
   onKeyDown,
   disabled = false,
@@ -97,11 +103,9 @@ export function CodeEditor({
     return () => resizeObserver.disconnect()
   }, [code])
 
-  // Calculate the number of lines to determine gutter width
   const lineCount = code.split('\n').length
   const gutterWidth = calculateGutterWidth(lineCount)
 
-  // Render helpers
   const renderLineNumbers = () => {
     const numbers: ReactElement[] = []
     let lineNumber = 1
@@ -127,95 +131,62 @@ export function CodeEditor({
     return numbers
   }
 
-  // Custom highlighter that highlights environment variables and tags
   const customHighlight = (code: string) => {
     if (!highlightVariables || language !== 'javascript') {
-      // Use default Prism highlighting for non-JS or when variable highlighting is off
       return highlight(code, languages[language], language)
     }
 
-    // First, get the default Prism highlighting
-    let highlighted = highlight(code, languages[language], language)
+    const escapeHtml = (text: string) =>
+      text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-    // Collect all syntax highlights to apply in a single pass
-    type SyntaxHighlight = {
-      start: number
-      end: number
-      replacement: string
-    }
-    const highlights: SyntaxHighlight[] = []
+    const placeholders: Array<{
+      placeholder: string
+      original: string
+      type: 'env' | 'param' | 'variable'
+    }> = []
+    let processedCode = code
 
-    // Find environment variables with {{var_name}} syntax
-    let match
-    const envVarRegex = /\{\{([^}]+)\}\}/g
-    while ((match = envVarRegex.exec(highlighted)) !== null) {
-      highlights.push({
-        start: match.index,
-        end: match.index + match[0].length,
-        replacement: `<span class="text-[#34B5FF] dark:text-[#34B5FF]">${match[0]}</span>`,
-      })
-    }
+    processedCode = processedCode.replace(createEnvVarPattern(), (match) => {
+      const placeholder = `__ENV_VAR_${placeholders.length}__`
+      placeholders.push({ placeholder, original: match, type: 'env' })
+      return placeholder
+    })
 
-    // Find tags with <tag_name> syntax (not in HTML context)
-    if (!language.includes('html')) {
-      const tagRegex = /<([^>\s/]+)>/g
-      while ((match = tagRegex.exec(highlighted)) !== null) {
-        // Skip HTML comments and closing tags
-        if (!match[0].startsWith('<!--') && !match[0].includes('</')) {
-          const escaped = `&lt;${match[1]}&gt;`
-          highlights.push({
-            start: match.index,
-            end: match.index + match[0].length,
-            replacement: `<span class="text-[#34B5FF] dark:text-[#34B5FF]">${escaped}</span>`,
-          })
-        }
-      }
-    }
+    processedCode = processedCode.replace(createWorkflowVariablePattern(), (match) => {
+      const placeholder = `__VARIABLE_${placeholders.length}__`
+      placeholders.push({ placeholder, original: match, type: 'variable' })
+      return placeholder
+    })
 
-    // Find schema parameters as whole words
     if (schemaParameters.length > 0) {
       schemaParameters.forEach((param) => {
-        // Escape special regex characters in parameter name
         const escapedName = param.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
         const paramRegex = new RegExp(`\\b(${escapedName})\\b`, 'g')
-        while ((match = paramRegex.exec(highlighted)) !== null) {
-          // Check if this position is already inside an HTML tag
-          // by looking for unclosed < before this position
-          let insideTag = false
-          let pos = match.index - 1
-          while (pos >= 0) {
-            if (highlighted[pos] === '>') break
-            if (highlighted[pos] === '<') {
-              insideTag = true
-              break
-            }
-            pos--
-          }
-
-          if (!insideTag) {
-            highlights.push({
-              start: match.index,
-              end: match.index + match[0].length,
-              replacement: `<span class="text-[#34B5FF] dark:text-[#34B5FF] font-medium">${match[0]}</span>`,
-            })
-          }
-        }
+        processedCode = processedCode.replace(paramRegex, (match) => {
+          const placeholder = `__PARAM_${placeholders.length}__`
+          placeholders.push({ placeholder, original: match, type: 'param' })
+          return placeholder
+        })
       })
     }
 
-    // Sort highlights by start position (reverse order to maintain positions)
-    highlights.sort((a, b) => b.start - a.start)
+    let highlighted = highlight(processedCode, languages[language], language)
 
-    // Apply all highlights
-    highlights.forEach(({ start, end, replacement }) => {
-      highlighted = highlighted.slice(0, start) + replacement + highlighted.slice(end)
+    placeholders.forEach(({ placeholder, original, type }) => {
+      const escapedOriginal = type === 'variable' ? escapeHtml(original) : original
+      const replacement =
+        type === 'env' || type === 'variable'
+          ? `<span style="color: var(--brand-secondary);">${escapedOriginal}</span>`
+          : `<span style="color: var(--brand-secondary); font-weight: 500;">${original}</span>`
+
+      highlighted = highlighted.replace(placeholder, replacement)
     })
 
     return highlighted
   }
 
   return (
-    <Code.Container className={className} style={{ minHeight }}>
+    <Code.Container className={className} style={minHeight ? { minHeight } : undefined}>
       {showWandButton && onWandClick && (
         <Button
           variant='ghost'
@@ -229,7 +200,9 @@ export function CodeEditor({
         </Button>
       )}
 
-      <Code.Gutter width={gutterWidth}>{renderLineNumbers()}</Code.Gutter>
+      <Code.Gutter width={gutterWidth} className={gutterClassName}>
+        {renderLineNumbers()}
+      </Code.Gutter>
 
       <Code.Content paddingLeft={`${gutterWidth}px`} editorRef={editorRef}>
         <Code.Placeholder gutterWidth={gutterWidth} show={code.length === 0 && !!placeholder}>
@@ -247,7 +220,7 @@ export function CodeEditor({
           disabled={disabled}
           {...getCodeEditorProps({ disabled })}
           className={cn(getCodeEditorProps({ disabled }).className, 'h-full')}
-          style={{ minHeight }}
+          style={minHeight ? { minHeight } : undefined}
           textareaClassName={cn(
             getCodeEditorProps({ disabled }).textareaClassName,
             '!block !h-full !min-h-full'

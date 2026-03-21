@@ -1,1 +1,5 @@
-export { PrettierOutput } from './prettier-output'
+export { FilterPopover, type FilterPopoverProps } from './filter-popover'
+export { LogRowContextMenu, type LogRowContextMenuProps } from './log-row-context-menu'
+export { OutputPanel, type OutputPanelProps } from './output-panel'
+export { RunningBadge, StatusDisplay, type StatusDisplayProps } from './status-display'
+export { ToggleButton, type ToggleButtonProps } from './toggle-button'

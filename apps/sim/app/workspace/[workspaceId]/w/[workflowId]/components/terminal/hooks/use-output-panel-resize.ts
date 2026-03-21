@@ -1,55 +1,27 @@
 import { useCallback, useEffect, useState } from 'react'
+import { OUTPUT_PANEL_WIDTH, TERMINAL_BLOCK_COLUMN_WIDTH } from '@/stores/constants'
 import { useTerminalStore } from '@/stores/terminal'
 
-/**
- * Constants for output panel sizing
- * Must match MIN_OUTPUT_PANEL_WIDTH_PX and BLOCK_COLUMN_WIDTH_PX in terminal.tsx
- */
-const MIN_WIDTH = 300
-const BLOCK_COLUMN_WIDTH = 240
-
-/**
- * Custom hook to handle output panel horizontal resize functionality.
- * Manages mouse events for resizing and enforces min/max width constraints.
- *
- * @returns Resize state and handlers
- */
 export function useOutputPanelResize() {
-  const { setOutputPanelWidth } = useTerminalStore()
+  const setOutputPanelWidth = useTerminalStore((state) => state.setOutputPanelWidth)
   const [isResizing, setIsResizing] = useState(false)
 
-  /**
-   * Handles mouse down on resize handle
-   */
   const handleMouseDown = useCallback(() => {
     setIsResizing(true)
   }, [])
 
-  /**
-   * Setup resize event listeners and body styles when resizing.
-   * Cleanup is handled automatically by the effect's return function.
-   */
   useEffect(() => {
     if (!isResizing) return
 
     const handleMouseMove = (e: MouseEvent) => {
-      // Calculate width from the right edge of the viewport
-      // Account for panel width on the right side
-      const panelWidth = Number.parseInt(
-        getComputedStyle(document.documentElement).getPropertyValue('--panel-width') || '0'
-      )
-      const sidebarWidth = Number.parseInt(
-        getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width') || '0'
-      )
+      const terminalEl = document.querySelector('[aria-label="Terminal"]')
+      if (!terminalEl) return
 
-      const newWidth = window.innerWidth - e.clientX - panelWidth
+      const terminalRect = terminalEl.getBoundingClientRect()
+      const newWidth = terminalRect.right - e.clientX
+      const maxWidth = terminalRect.width - TERMINAL_BLOCK_COLUMN_WIDTH
+      const clampedWidth = Math.max(OUTPUT_PANEL_WIDTH.MIN, Math.min(newWidth, maxWidth))
 
-      // Calculate max width: total terminal width minus block column width
-      const terminalWidth = window.innerWidth - sidebarWidth - panelWidth
-      const maxWidth = terminalWidth - BLOCK_COLUMN_WIDTH
-
-      // Clamp between min and max width
-      const clampedWidth = Math.max(MIN_WIDTH, Math.min(newWidth, maxWidth))
       setOutputPanelWidth(clampedWidth)
     }
 

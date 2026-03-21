@@ -1,10 +1,10 @@
 'use client'
 
 import { type RefObject, useCallback, useEffect, useRef, useState } from 'react'
+import { createLogger } from '@sim/logger'
 import { Mic, MicOff, Phone } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { createLogger } from '@/lib/logs/console/logger'
-import { cn } from '@/lib/utils'
+import { cn } from '@/lib/core/utils/cn'
 import { ParticlesVisualization } from '@/app/chat/components/voice-interface/components/particles'
 
 const logger = createLogger('VoiceInterface')
@@ -36,11 +36,9 @@ interface SpeechRecognitionStatic {
   new (): SpeechRecognition
 }
 
-declare global {
-  interface Window {
-    SpeechRecognition?: SpeechRecognitionStatic
-    webkitSpeechRecognition?: SpeechRecognitionStatic
-  }
+type WindowWithSpeech = Window & {
+  SpeechRecognition?: SpeechRecognitionStatic
+  webkitSpeechRecognition?: SpeechRecognitionStatic
 }
 
 interface VoiceInterfaceProps {
@@ -68,24 +66,22 @@ export function VoiceInterface({
   messages = [],
   className,
 }: VoiceInterfaceProps) {
-  // Simple state machine
   const [state, setState] = useState<'idle' | 'listening' | 'agent_speaking'>('idle')
   const [isInitialized, setIsInitialized] = useState(false)
   const [isMuted, setIsMuted] = useState(false)
-  const [audioLevels, setAudioLevels] = useState<number[]>(new Array(200).fill(0))
+  const [audioLevels, setAudioLevels] = useState<number[]>(() => new Array(200).fill(0))
   const [permissionStatus, setPermissionStatus] = useState<'prompt' | 'granted' | 'denied'>(
     'prompt'
   )
-
-  // Current turn transcript (subtitle)
   const [currentTranscript, setCurrentTranscript] = useState('')
 
-  // State tracking
   const currentStateRef = useRef<'idle' | 'listening' | 'agent_speaking'>('idle')
+  const isCallEndedRef = useRef(false)
 
-  useEffect(() => {
-    currentStateRef.current = state
-  }, [state])
+  const updateState = useCallback((next: 'idle' | 'listening' | 'agent_speaking') => {
+    setState(next)
+    currentStateRef.current = next
+  }, [])
 
   const recognitionRef = useRef<SpeechRecognition | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
@@ -96,14 +92,17 @@ export function VoiceInterface({
   const responseTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   const isSupported =
-    typeof window !== 'undefined' && !!(window.SpeechRecognition || window.webkitSpeechRecognition)
+    typeof window !== 'undefined' &&
+    !!(
+      (window as WindowWithSpeech).SpeechRecognition ||
+      (window as WindowWithSpeech).webkitSpeechRecognition
+    )
 
-  // Update muted ref
-  useEffect(() => {
-    isMutedRef.current = isMuted
-  }, [isMuted])
+  const updateIsMuted = useCallback((next: boolean) => {
+    setIsMuted(next)
+    isMutedRef.current = next
+  }, [])
 
-  // Timeout to handle cases where agent doesn't provide audio response
   const setResponseTimeout = useCallback(() => {
     if (responseTimeoutRef.current) {
       clearTimeout(responseTimeoutRef.current)
@@ -111,9 +110,9 @@ export function VoiceInterface({
 
     responseTimeoutRef.current = setTimeout(() => {
       if (currentStateRef.current === 'listening') {
-        setState('idle')
+        updateState('idle')
       }
-    }, 5000) // 5 second timeout (increased from 3)
+    }, 5000)
   }, [])
 
   const clearResponseTimeout = useCallback(() => {
@@ -123,22 +122,19 @@ export function VoiceInterface({
     }
   }, [])
 
-  // Sync with external state
   useEffect(() => {
     if (isPlayingAudio && state !== 'agent_speaking') {
-      clearResponseTimeout() // Clear timeout since agent is responding
-      setState('agent_speaking')
+      clearResponseTimeout()
+      updateState('agent_speaking')
       setCurrentTranscript('')
 
-      // Mute microphone immediately
-      setIsMuted(true)
+      updateIsMuted(true)
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getAudioTracks().forEach((track) => {
           track.enabled = false
         })
       }
 
-      // Stop speech recognition completely
       if (recognitionRef.current) {
         try {
           recognitionRef.current.abort()
@@ -147,20 +143,18 @@ export function VoiceInterface({
         }
       }
     } else if (!isPlayingAudio && state === 'agent_speaking') {
-      setState('idle')
+      updateState('idle')
       setCurrentTranscript('')
 
-      // Re-enable microphone
-      setIsMuted(false)
+      updateIsMuted(false)
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getAudioTracks().forEach((track) => {
           track.enabled = true
         })
       }
     }
-  }, [isPlayingAudio, state, clearResponseTimeout])
+  }, [isPlayingAudio, state, clearResponseTimeout, updateState, updateIsMuted])
 
-  // Audio setup
   const setupAudio = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -175,7 +169,6 @@ export function VoiceInterface({
       setPermissionStatus('granted')
       mediaStreamRef.current = stream
 
-      // Setup audio context for visualization
       if (!audioContextRef.current) {
         const AudioContext = window.AudioContext || window.webkitAudioContext
         audioContextRef.current = new AudioContext()
@@ -194,7 +187,6 @@ export function VoiceInterface({
       source.connect(analyser)
       analyserRef.current = analyser
 
-      // Start visualization
       const updateVisualization = () => {
         if (!analyserRef.current) return
 
@@ -223,11 +215,11 @@ export function VoiceInterface({
     }
   }, [])
 
-  // Speech recognition setup
   const setupSpeechRecognition = useCallback(() => {
     if (!isSupported) return
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    const w = window as WindowWithSpeech
+    const SpeechRecognition = w.SpeechRecognition || w.webkitSpeechRecognition
     if (!SpeechRecognition) return
 
     const recognition = new SpeechRecognition()
@@ -259,14 +251,11 @@ export function VoiceInterface({
         }
       }
 
-      // Update live transcript
       setCurrentTranscript(interimTranscript || finalTranscript)
 
-      // Send final transcript (but keep listening state until agent responds)
       if (finalTranscript.trim()) {
-        setCurrentTranscript('') // Clear transcript
+        setCurrentTranscript('')
 
-        // Stop recognition to avoid interference while waiting for response
         if (recognitionRef.current) {
           try {
             recognitionRef.current.stop()
@@ -275,7 +264,6 @@ export function VoiceInterface({
           }
         }
 
-        // Start timeout in case agent doesn't provide audio response
         setResponseTimeout()
 
         onVoiceTranscript?.(finalTranscript)
@@ -283,13 +271,14 @@ export function VoiceInterface({
     }
 
     recognition.onend = () => {
+      if (isCallEndedRef.current) return
+
       const currentState = currentStateRef.current
 
-      // Only restart recognition if we're in listening state and not muted
       if (currentState === 'listening' && !isMutedRef.current) {
-        // Add a delay to avoid immediate restart after sending transcript
         setTimeout(() => {
-          // Double-check state hasn't changed during delay
+          if (isCallEndedRef.current) return
+
           if (
             recognitionRef.current &&
             currentStateRef.current === 'listening' &&
@@ -301,14 +290,12 @@ export function VoiceInterface({
               logger.debug('Error restarting speech recognition:', error)
             }
           }
-        }, 1000) // Longer delay to give agent time to respond
+        }, 1000)
       }
     }
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      // Filter out "aborted" errors - these are expected when we intentionally stop recognition
       if (event.error === 'aborted') {
-        // Ignore
         return
       }
 
@@ -320,13 +307,12 @@ export function VoiceInterface({
     recognitionRef.current = recognition
   }, [isSupported, onVoiceTranscript, setResponseTimeout])
 
-  // Start/stop listening
   const startListening = useCallback(() => {
     if (!isInitialized || isMuted || state !== 'idle') {
       return
     }
 
-    setState('listening')
+    updateState('listening')
     setCurrentTranscript('')
 
     if (recognitionRef.current) {
@@ -336,10 +322,10 @@ export function VoiceInterface({
         logger.error('Error starting recognition:', error)
       }
     }
-  }, [isInitialized, isMuted, state])
+  }, [isInitialized, isMuted, state, updateState])
 
   const stopListening = useCallback(() => {
-    setState('idle')
+    updateState('idle')
     setCurrentTranscript('')
 
     if (recognitionRef.current) {
@@ -349,27 +335,21 @@ export function VoiceInterface({
         // Ignore
       }
     }
-  }, [])
+  }, [updateState])
 
-  // Handle interrupt
   const handleInterrupt = useCallback(() => {
     if (state === 'agent_speaking') {
-      // Clear any subtitle timeouts and text
-      // (No longer needed after removing subtitle system)
-
       onInterrupt?.()
-      setState('listening')
+      updateState('listening')
       setCurrentTranscript('')
 
-      // Unmute microphone for user input
-      setIsMuted(false)
+      updateIsMuted(false)
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getAudioTracks().forEach((track) => {
           track.enabled = true
         })
       }
 
-      // Start listening immediately
       if (recognitionRef.current) {
         try {
           recognitionRef.current.start()
@@ -378,16 +358,15 @@ export function VoiceInterface({
         }
       }
     }
-  }, [state, onInterrupt])
+  }, [state, onInterrupt, updateState, updateIsMuted])
 
-  // Handle call end with proper cleanup
   const handleCallEnd = useCallback(() => {
-    // Stop everything immediately
-    setState('idle')
-    setCurrentTranscript('')
-    setIsMuted(false)
+    isCallEndedRef.current = true
 
-    // Stop speech recognition
+    updateState('idle')
+    setCurrentTranscript('')
+    updateIsMuted(false)
+
     if (recognitionRef.current) {
       try {
         recognitionRef.current.abort()
@@ -396,17 +375,11 @@ export function VoiceInterface({
       }
     }
 
-    // Clear timeouts
     clearResponseTimeout()
-
-    // Stop audio playback and streaming immediately
     onInterrupt?.()
-
-    // Call the original onCallEnd
     onCallEnd?.()
-  }, [onCallEnd, onInterrupt, clearResponseTimeout])
+  }, [onCallEnd, onInterrupt, clearResponseTimeout, updateState, updateIsMuted])
 
-  // Keyboard handler
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.code === 'Space') {
@@ -419,7 +392,6 @@ export function VoiceInterface({
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [handleInterrupt])
 
-  // Mute toggle
   const toggleMute = useCallback(() => {
     if (state === 'agent_speaking') {
       handleInterrupt()
@@ -427,7 +399,7 @@ export function VoiceInterface({
     }
 
     const newMutedState = !isMuted
-    setIsMuted(newMutedState)
+    updateIsMuted(newMutedState)
 
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getAudioTracks().forEach((track) => {
@@ -440,9 +412,8 @@ export function VoiceInterface({
     } else if (state === 'idle') {
       startListening()
     }
-  }, [isMuted, state, handleInterrupt, stopListening, startListening])
+  }, [isMuted, state, handleInterrupt, stopListening, startListening, updateIsMuted])
 
-  // Initialize
   useEffect(() => {
     if (isSupported) {
       setupSpeechRecognition()
@@ -450,47 +421,40 @@ export function VoiceInterface({
     }
   }, [isSupported, setupSpeechRecognition, setupAudio])
 
-  // Auto-start listening when ready
   useEffect(() => {
     if (isInitialized && !isMuted && state === 'idle') {
       startListening()
     }
   }, [isInitialized, isMuted, state, startListening])
 
-  // Cleanup when call ends or component unmounts
   useEffect(() => {
     return () => {
-      // Stop speech recognition
+      isCallEndedRef.current = true
+
       if (recognitionRef.current) {
         try {
           recognitionRef.current.abort()
-        } catch (error) {
+        } catch (_e) {
           // Ignore
         }
         recognitionRef.current = null
       }
 
-      // Stop media stream
       if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((track) => {
-          track.stop()
-        })
+        mediaStreamRef.current.getTracks().forEach((track) => track.stop())
         mediaStreamRef.current = null
       }
 
-      // Stop audio context
       if (audioContextRef.current) {
         audioContextRef.current.close()
         audioContextRef.current = null
       }
 
-      // Cancel animation frame
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current)
         animationFrameRef.current = null
       }
 
-      // Clear timeouts
       if (responseTimeoutRef.current) {
         clearTimeout(responseTimeoutRef.current)
         responseTimeoutRef.current = null
@@ -498,7 +462,6 @@ export function VoiceInterface({
     }
   }, [])
 
-  // Get status text
   const getStatusText = () => {
     switch (state) {
       case 'listening':
@@ -510,7 +473,6 @@ export function VoiceInterface({
     }
   }
 
-  // Get button content
   const getButtonContent = () => {
     if (state === 'agent_speaking') {
       return (
@@ -524,9 +486,7 @@ export function VoiceInterface({
 
   return (
     <div className={cn('fixed inset-0 z-[100] flex flex-col bg-white text-gray-900', className)}>
-      {/* Main content */}
       <div className='flex flex-1 flex-col items-center justify-center px-8'>
-        {/* Voice visualization */}
         <div className='relative mb-16'>
           <ParticlesVisualization
             audioLevels={audioLevels}
@@ -538,7 +498,6 @@ export function VoiceInterface({
           />
         </div>
 
-        {/* Live transcript - subtitle style */}
         <div className='mb-16 flex h-24 items-center justify-center'>
           {currentTranscript && (
             <div className='max-w-2xl px-8'>
@@ -549,17 +508,14 @@ export function VoiceInterface({
           )}
         </div>
 
-        {/* Status */}
         <p className='mb-8 text-center text-gray-600 text-lg'>
           {getStatusText()}
           {isMuted && <span className='ml-2 text-gray-400 text-sm'>(Muted)</span>}
         </p>
       </div>
 
-      {/* Controls */}
       <div className='px-8 pb-12'>
         <div className='flex items-center justify-center space-x-12'>
-          {/* End call */}
           <Button
             onClick={handleCallEnd}
             variant='outline'
@@ -569,7 +525,6 @@ export function VoiceInterface({
             <Phone className='h-6 w-6 rotate-[135deg]' />
           </Button>
 
-          {/* Mic/Stop button */}
           <Button
             onClick={toggleMute}
             variant='outline'

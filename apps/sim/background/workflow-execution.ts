@@ -1,21 +1,48 @@
+import { createLogger } from '@sim/logger'
 import { task } from '@trigger.dev/sdk'
 import { v4 as uuidv4 } from 'uuid'
+import type { AsyncExecutionCorrelation } from '@/lib/core/async-jobs/types'
+import { createTimeoutAbortController, getTimeoutErrorMessage } from '@/lib/core/execution-limits'
 import { preprocessExecution } from '@/lib/execution/preprocessing'
-import { createLogger } from '@/lib/logs/console/logger'
 import { LoggingSession } from '@/lib/logs/execution/logging-session'
-import { executeWorkflowCore } from '@/lib/workflows/executor/execution-core'
+import { buildTraceSpans } from '@/lib/logs/execution/trace-spans/trace-spans'
+import {
+  executeWorkflowCore,
+  wasExecutionFinalizedByCore,
+} from '@/lib/workflows/executor/execution-core'
 import { PauseResumeManager } from '@/lib/workflows/executor/human-in-the-loop-manager'
-import { getWorkflowById } from '@/lib/workflows/utils'
-import { type ExecutionMetadata, ExecutionSnapshot } from '@/executor/execution/snapshot'
+import { ExecutionSnapshot } from '@/executor/execution/snapshot'
+import type { ExecutionMetadata } from '@/executor/execution/types'
+import { hasExecutionResult } from '@/executor/utils/errors'
+import type { CoreTriggerType } from '@/stores/logs/filters/types'
 
 const logger = createLogger('TriggerWorkflowExecution')
+
+export function buildWorkflowCorrelation(
+  payload: WorkflowExecutionPayload
+): AsyncExecutionCorrelation {
+  const executionId = payload.executionId || uuidv4()
+  const requestId = payload.requestId || payload.correlation?.requestId || executionId.slice(0, 8)
+
+  return {
+    executionId,
+    requestId,
+    source: 'workflow',
+    workflowId: payload.workflowId,
+    triggerType: payload.triggerType || payload.correlation?.triggerType || 'api',
+  }
+}
 
 export type WorkflowExecutionPayload = {
   workflowId: string
   userId: string
   input?: any
-  triggerType?: 'api' | 'webhook' | 'schedule' | 'manual' | 'chat'
+  triggerType?: CoreTriggerType
+  executionId?: string
+  requestId?: string
+  correlation?: AsyncExecutionCorrelation
   metadata?: Record<string, any>
+  callChain?: string[]
 }
 
 /**
@@ -25,8 +52,9 @@ export type WorkflowExecutionPayload = {
  */
 export async function executeWorkflowJob(payload: WorkflowExecutionPayload) {
   const workflowId = payload.workflowId
-  const executionId = uuidv4()
-  const requestId = executionId.slice(0, 8)
+  const correlation = buildWorkflowCorrelation(payload)
+  const executionId = correlation.executionId
+  const requestId = correlation.requestId
 
   logger.info(`[${requestId}] Starting workflow execution job: ${workflowId}`, {
     userId: payload.userId,
@@ -34,7 +62,7 @@ export async function executeWorkflowJob(payload: WorkflowExecutionPayload) {
     executionId,
   })
 
-  const triggerType = payload.triggerType || 'api'
+  const triggerType = (correlation.triggerType || 'api') as CoreTriggerType
   const loggingSession = new LoggingSession(workflowId, executionId, triggerType, requestId)
 
   try {
@@ -47,6 +75,7 @@ export async function executeWorkflowJob(payload: WorkflowExecutionPayload) {
       checkRateLimit: true,
       checkDeployment: true,
       loggingSession: loggingSession,
+      triggerData: { correlation },
     })
 
     if (!preprocessResult.success) {
@@ -59,14 +88,14 @@ export async function executeWorkflowJob(payload: WorkflowExecutionPayload) {
     }
 
     const actorUserId = preprocessResult.actorUserId!
-    const workspaceId = preprocessResult.workflowRecord?.workspaceId || undefined
+    const workspaceId = preprocessResult.workflowRecord?.workspaceId
+    if (!workspaceId) {
+      throw new Error(`Workflow ${workflowId} has no associated workspace`)
+    }
 
     logger.info(`[${requestId}] Preprocessing passed. Using actor: ${actorUserId}`)
 
-    const workflow = await getWorkflowById(workflowId)
-    if (!workflow) {
-      throw new Error(`Workflow ${workflowId} not found after preprocessing`)
-    }
+    const workflow = preprocessResult.workflowRecord!
 
     const metadata: ExecutionMetadata = {
       requestId,
@@ -74,43 +103,80 @@ export async function executeWorkflowJob(payload: WorkflowExecutionPayload) {
       workflowId,
       workspaceId,
       userId: actorUserId,
+      sessionUserId: undefined,
+      workflowUserId: workflow.userId,
       triggerType: payload.triggerType || 'api',
       useDraftState: false,
       startTime: new Date().toISOString(),
+      isClientSession: false,
+      callChain: payload.callChain,
+      correlation,
     }
 
     const snapshot = new ExecutionSnapshot(
       metadata,
       workflow,
       payload.input,
-      {},
       workflow.variables || {},
       []
     )
 
-    const result = await executeWorkflowCore({
-      snapshot,
-      callbacks: {},
-      loggingSession,
-    })
+    const timeoutController = createTimeoutAbortController(preprocessResult.executionTimeout?.async)
 
-    if (result.status === 'paused') {
+    let result
+    try {
+      result = await executeWorkflowCore({
+        snapshot,
+        callbacks: {},
+        loggingSession,
+        includeFileBase64: true,
+        base64MaxBytes: undefined,
+        abortSignal: timeoutController.signal,
+      })
+    } finally {
+      timeoutController.cleanup()
+    }
+
+    if (
+      result.status === 'cancelled' &&
+      timeoutController.isTimedOut() &&
+      timeoutController.timeoutMs
+    ) {
+      const timeoutErrorMessage = getTimeoutErrorMessage(null, timeoutController.timeoutMs)
+      logger.info(`[${requestId}] Workflow execution timed out`, {
+        timeoutMs: timeoutController.timeoutMs,
+      })
+      await loggingSession.markAsFailed(timeoutErrorMessage)
+    } else if (result.status === 'paused') {
       if (!result.snapshotSeed) {
         logger.error(`[${requestId}] Missing snapshot seed for paused execution`, {
           executionId,
         })
+        await loggingSession.markAsFailed('Missing snapshot seed for paused execution')
       } else {
-        await PauseResumeManager.persistPauseResult({
-          workflowId,
-          executionId,
-          pausePoints: result.pausePoints || [],
-          snapshotSeed: result.snapshotSeed,
-          executorUserId: result.metadata?.userId,
-        })
+        try {
+          await PauseResumeManager.persistPauseResult({
+            workflowId,
+            executionId,
+            pausePoints: result.pausePoints || [],
+            snapshotSeed: result.snapshotSeed,
+            executorUserId: result.metadata?.userId,
+          })
+        } catch (pauseError) {
+          logger.error(`[${requestId}] Failed to persist pause result`, {
+            executionId,
+            error: pauseError instanceof Error ? pauseError.message : String(pauseError),
+          })
+          await loggingSession.markAsFailed(
+            `Failed to persist pause state: ${pauseError instanceof Error ? pauseError.message : String(pauseError)}`
+          )
+        }
       }
     } else {
       await PauseResumeManager.processQueuedResumes(executionId)
     }
+
+    await loggingSession.waitForPostExecution()
 
     logger.info(`[${requestId}] Workflow execution completed: ${workflowId}`, {
       success: result.success,
@@ -126,16 +192,33 @@ export async function executeWorkflowJob(payload: WorkflowExecutionPayload) {
       executedAt: new Date().toISOString(),
       metadata: payload.metadata,
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     logger.error(`[${requestId}] Workflow execution failed: ${workflowId}`, {
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
       executionId,
     })
+
+    if (wasExecutionFinalizedByCore(error, executionId)) {
+      throw error
+    }
+
+    const executionResult = hasExecutionResult(error) ? error.executionResult : undefined
+    const { traceSpans } = executionResult ? buildTraceSpans(executionResult) : { traceSpans: [] }
+
+    await loggingSession.safeCompleteWithError({
+      error: {
+        message: error instanceof Error ? error.message : String(error),
+        stackTrace: error instanceof Error ? error.stack : undefined,
+      },
+      traceSpans,
+    })
+
     throw error
   }
 }
 
 export const workflowExecutionTask = task({
   id: 'workflow-execution',
+  machine: 'medium-1x',
   run: executeWorkflowJob,
 })

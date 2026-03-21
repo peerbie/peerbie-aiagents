@@ -1,9 +1,11 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type { BlockOutput } from '@/blocks/types'
-import { BlockType, DEFAULTS, EVALUATOR, HTTP } from '@/executor/consts'
+import { validateModelProvider } from '@/ee/access-control/utils/permission-check'
+import { BlockType, DEFAULTS, EVALUATOR } from '@/executor/constants'
 import type { BlockHandler, ExecutionContext } from '@/executor/types'
-import { buildAPIUrl, extractAPIErrorMessage } from '@/executor/utils/http'
+import { buildAPIUrl, buildAuthHeaders, extractAPIErrorMessage } from '@/executor/utils/http'
 import { isJSONString, parseJSON, stringifyJSON } from '@/executor/utils/json'
+import { resolveVertexCredential } from '@/executor/utils/vertex-credential'
 import { calculateCost, getProviderFromModel } from '@/providers/utils'
 import type { SerializedBlock } from '@/serializer/types'
 
@@ -25,8 +27,25 @@ export class EvaluatorBlockHandler implements BlockHandler {
     const evaluatorConfig = {
       model: inputs.model || EVALUATOR.DEFAULT_MODEL,
       apiKey: inputs.apiKey,
+      vertexProject: inputs.vertexProject,
+      vertexLocation: inputs.vertexLocation,
+      vertexCredential: inputs.vertexCredential,
+      bedrockAccessKeyId: inputs.bedrockAccessKeyId,
+      bedrockSecretKey: inputs.bedrockSecretKey,
+      bedrockRegion: inputs.bedrockRegion,
     }
+
+    await validateModelProvider(ctx.userId, evaluatorConfig.model, ctx)
+
     const providerId = getProviderFromModel(evaluatorConfig.model)
+
+    let finalApiKey: string | undefined = evaluatorConfig.apiKey
+    if (providerId === 'vertex' && evaluatorConfig.vertexCredential) {
+      finalApiKey = await resolveVertexCredential(
+        evaluatorConfig.vertexCredential,
+        'vertex-evaluator'
+      )
+    }
 
     const processedContent = this.processContent(inputs.content)
 
@@ -85,9 +104,9 @@ export class EvaluatorBlockHandler implements BlockHandler {
     }
 
     try {
-      const url = buildAPIUrl('/api/providers')
+      const url = buildAPIUrl('/api/providers', ctx.userId ? { userId: ctx.userId } : {})
 
-      const providerRequest = {
+      const providerRequest: Record<string, any> = {
         provider: providerId,
         model: evaluatorConfig.model,
         systemPrompt: systemPromptObj.systemPrompt,
@@ -101,15 +120,21 @@ export class EvaluatorBlockHandler implements BlockHandler {
         ]),
 
         temperature: EVALUATOR.DEFAULT_TEMPERATURE,
-        apiKey: evaluatorConfig.apiKey,
+        apiKey: finalApiKey,
+        azureEndpoint: inputs.azureEndpoint,
+        azureApiVersion: inputs.azureApiVersion,
+        vertexProject: evaluatorConfig.vertexProject,
+        vertexLocation: evaluatorConfig.vertexLocation,
+        bedrockAccessKeyId: evaluatorConfig.bedrockAccessKeyId,
+        bedrockSecretKey: evaluatorConfig.bedrockSecretKey,
+        bedrockRegion: evaluatorConfig.bedrockRegion,
         workflowId: ctx.workflowId,
+        workspaceId: ctx.workspaceId,
       }
 
       const response = await fetch(url.toString(), {
         method: 'POST',
-        headers: {
-          'Content-Type': HTTP.CONTENT_TYPE.JSON,
-        },
+        headers: await buildAuthHeaders(),
         body: stringifyJSON(providerRequest),
       })
 
@@ -124,19 +149,18 @@ export class EvaluatorBlockHandler implements BlockHandler {
 
       const metricScores = this.extractMetricScores(parsedContent, inputs.metrics)
 
-      const costCalculation = calculateCost(
-        result.model,
-        result.tokens?.prompt || DEFAULTS.TOKENS.PROMPT,
-        result.tokens?.completion || DEFAULTS.TOKENS.COMPLETION,
-        false
-      )
+      const inputTokens = result.tokens?.input || result.tokens?.prompt || DEFAULTS.TOKENS.PROMPT
+      const outputTokens =
+        result.tokens?.output || result.tokens?.completion || DEFAULTS.TOKENS.COMPLETION
+
+      const costCalculation = calculateCost(result.model, inputTokens, outputTokens, false)
 
       return {
         content: inputs.content,
         model: result.model,
         tokens: {
-          prompt: result.tokens?.prompt || DEFAULTS.TOKENS.PROMPT,
-          completion: result.tokens?.completion || DEFAULTS.TOKENS.COMPLETION,
+          input: inputTokens,
+          output: outputTokens,
           total: result.tokens?.total || DEFAULTS.TOKENS.TOTAL,
         },
         cost: {
@@ -210,7 +234,7 @@ export class EvaluatorBlockHandler implements BlockHandler {
     if (Object.keys(parsedContent).length === 0) {
       validMetrics.forEach((metric: any) => {
         if (metric?.name) {
-          metricScores[metric.name.toLowerCase()] = DEFAULTS.EXECUTION_TIME
+          metricScores[metric.name.toLowerCase()] = 0
         }
       })
       return metricScores
@@ -249,6 +273,6 @@ export class EvaluatorBlockHandler implements BlockHandler {
     }
 
     logger.warn(`Metric "${metricName}" not found in LLM response`)
-    return DEFAULTS.EXECUTION_TIME
+    return 0
   }
 }

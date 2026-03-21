@@ -1,3 +1,4 @@
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getSession } from '@/lib/auth'
@@ -6,7 +7,7 @@ import {
   getOrganizationBillingData,
   isOrganizationOwnerOrAdmin,
 } from '@/lib/billing/core/organization'
-import { createLogger } from '@/lib/logs/console/logger'
+import { isUserMemberOfOrganization } from '@/lib/billing/organizations/membership'
 
 const logger = createLogger('UnifiedUsageAPI')
 
@@ -61,6 +62,12 @@ export async function GET(request: NextRequest) {
           { status: 400 }
         )
       }
+
+      const membership = await isUserMemberOfOrganization(session.user.id, organizationId)
+      if (!membership.isMember) {
+        return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
+      }
+
       const org = await getOrganizationBillingData(organizationId)
       return NextResponse.json({
         success: true,
@@ -111,7 +118,10 @@ export async function PUT(request: NextRequest) {
     const userId = session.user.id
 
     if (context === 'user') {
-      await updateUserUsageLimit(userId, limit)
+      const result = await updateUserUsageLimit(userId, limit)
+      if (!result.success) {
+        return NextResponse.json({ error: result.error }, { status: 400 })
+      }
     } else if (context === 'organization') {
       // organizationId is guaranteed to exist by Zod refinement
       const hasPermission = await isOrganizationOwnerOrAdmin(session.user.id, organizationId!)

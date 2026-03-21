@@ -24,13 +24,13 @@ export const apolloTaskCreateTool: ToolConfig<ApolloTaskCreateParams, ApolloTask
       type: 'string',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Contact ID to associate with',
+      description: 'Contact ID to associate with (e.g., "con_abc123")',
     },
     account_id: {
       type: 'string',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Account ID to associate with',
+      description: 'Account ID to associate with (e.g., "acc_abc123")',
     },
     due_at: {
       type: 'string',
@@ -84,20 +84,14 @@ export const apolloTaskCreateTool: ToolConfig<ApolloTaskCreateParams, ApolloTask
     return {
       success: true,
       output: {
-        task: data.task || {
-          note: '',
-          created: true,
-          message: 'Task created successfully. Apollo API does not return task details.',
-        },
-        metadata: {
-          created: data === true || !!data.task,
-        },
+        task: data.task ?? null,
+        created: data === true || !!data.task,
       },
     }
   },
 
   outputs: {
-    task: { type: 'json', description: 'Created task data from Apollo' },
-    metadata: { type: 'json', description: 'Creation metadata including created status' },
+    task: { type: 'json', description: 'Created task data from Apollo', optional: true },
+    created: { type: 'boolean', description: 'Whether the task was successfully created' },
   },
 }

@@ -1,4 +1,5 @@
 import type { GetPRFilesParams, PRFilesListResponse } from '@/tools/github/types'
+import { PR_FILE_OUTPUT_PROPERTIES } from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const getPRFilesTool: ToolConfig<GetPRFilesParams, PRFilesListResponse> = {
@@ -134,5 +135,37 @@ ${files
         total_count: { type: 'number', description: 'Total number of files changed' },
       },
     },
+  },
+}
+
+export const getPRFilesV2Tool: ToolConfig<GetPRFilesParams, any> = {
+  id: 'github_get_pr_files_v2',
+  name: getPRFilesTool.name,
+  description: getPRFilesTool.description,
+  version: '2.0.0',
+  params: getPRFilesTool.params,
+  request: getPRFilesTool.request,
+
+  transformResponse: async (response: Response) => {
+    const files = await response.json()
+    return {
+      success: true,
+      output: {
+        items: files ?? [],
+        count: files?.length ?? 0,
+      },
+    }
+  },
+
+  outputs: {
+    items: {
+      type: 'array',
+      description: 'Array of changed file objects',
+      items: {
+        type: 'object',
+        properties: PR_FILE_OUTPUT_PROPERTIES,
+      },
+    },
+    count: { type: 'number', description: 'Total number of files' },
   },
 }

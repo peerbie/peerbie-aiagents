@@ -1,41 +1,58 @@
-import type * as React from 'react'
+import { type ButtonHTMLAttributes, forwardRef } from 'react'
 import { cva, type VariantProps } from 'class-variance-authority'
-import { cn } from '@/lib/utils'
+import { cn } from '@/lib/core/utils/cn'
 
 const buttonVariants = cva(
-  'inline-flex items-center text-[var(--text-secondary)] hover:text-[var(--text-primary)] dark:hover:text-[var(--text-primary)] dark:text-[var(--text-secondary)] justify-center font-medium transition-colors disabled:pointer-events-none disabled:opacity-50 outline-none focus:outline-none focus-visible:outline-none rounded-[4px] px-[8px] py-[6px] text-[12px]',
+  'inline-flex items-center text-[var(--text-secondary)] hover:text-[var(--text-primary)] justify-center font-medium transition-colors disabled:pointer-events-none disabled:opacity-70 outline-none focus:outline-none focus-visible:outline-none rounded-[5px]',
   {
     variants: {
       variant: {
         default:
-          'bg-[var(--surface-5)] dark:bg-[var(--surface-5)] hover:bg-[var(--surface-9)] dark:hover:bg-[var(--surface-9)]',
+          'bg-[var(--surface-4)] hover:bg-[var(--surface-6)] border border-[var(--border)] hover:border-[var(--border-1)] dark:hover:bg-[var(--surface-5)]',
         active:
-          'bg-[var(--surface-9)] dark:bg-[var(--surface-9)] hover:bg-[var(--surface-11)] dark:hover:bg-[var(--surface-11)] dark:text-[var(--text-primary)] text-[var(--text-primary)]',
-        '3d': 'text-[var(--text-tertiary)] dark:text-[var(--text-tertiary)] border-t border-l border-r border-[#303030] dark:border-[#303030] shadow-[0_2px_0_0_rgba(48,48,48,1)] hover:shadow-[0_4px_0_0_rgba(48,48,48,1)] transition-all hover:-translate-y-0.5 hover:text-[var(--text-primary)] hover:dark:text-[var(--text-primary)]',
+          'bg-[var(--surface-5)] hover:bg-[var(--surface-7)] text-[var(--text-primary)] border border-[var(--border-1)] dark:hover:bg-[var(--border-1)]',
+        '3d': 'text-[var(--text-tertiary)] border-t border-l border-r border-[var(--border-1)] shadow-[0_2px_0_0_var(--border-1)] hover:shadow-[0_4px_0_0_var(--border-1)] transition-all hover:-translate-y-0.5 hover:text-[var(--text-primary)]',
         outline:
-          'border border-[#727272] bg-[var(--border-strong)] hover:bg-[var(--surface-11)] dark:border-[#727272] dark:bg-[var(--border-strong)] dark:hover:bg-[var(--surface-11)]',
+          'border border-[var(--text-muted)] bg-transparent hover:border-[var(--text-secondary)]',
         primary:
-          'bg-[var(--brand-400)] dark:bg-[var(--brand-400)] dark:text-[var(--text-primary)] text-[var(--text-primary)] hover:brightness-110 hover:text-[var(--text-primary)] hover:dark:text-[var(--text-primary)]',
-        secondary:
-          'bg-[var(--brand-secondary)] dark:bg-[var(--brand-secondary)] dark:text-[var(--text-primary)] text-[var(--text-primary)] hover:bg-[var(--brand-secondary)] hover:dark:bg-[var(--brand-secondary)] hover:text-[var(--text-primary)] hover:dark:text-[var(--text-primary)]',
+          'bg-[#1D1D1D] text-[var(--text-inverse)] hover:text-[var(--text-inverse)] hover:bg-[#2A2A2A] dark:bg-white dark:hover:bg-[#E0E0E0]',
+        destructive: 'bg-[var(--text-error)] text-white hover:text-white hover:brightness-106',
+        secondary: 'bg-[var(--brand-secondary)] text-[var(--text-primary)]',
         tertiary:
-          'bg-[var(--brand-tertiary)] dark:bg-[var(--brand-tertiary)] dark:text-[var(--text-primary)] text-[var(--text-primary)] hover:bg-[var(--brand-tertiary)] hover:dark:bg-[var(--brand-tertiary)] hover:text-[var(--text-primary)] hover:dark:text-[var(--text-primary)]',
+          '!bg-[var(--brand-tertiary-2)] !text-[var(--text-inverse)] hover:!text-[var(--text-inverse)] hover:!bg-[#2DAC72] dark:!bg-[var(--brand-tertiary-2)] dark:hover:!bg-[#2DAC72] dark:!text-[var(--text-inverse)] dark:hover:!text-[var(--text-inverse)]',
         ghost: '',
-        'ghost-secondary': 'text-[var(--text-muted)] dark:text-[var(--text-muted)]',
+        subtle: 'text-[var(--text-body)] hover:text-[var(--text-body)] hover:bg-[var(--surface-4)]',
+        'ghost-secondary': 'text-[var(--text-muted)]',
+        /** Branded button - requires branded-button-gradient or branded-button-custom class for colors */
+        branded:
+          'rounded-[10px] border text-white hover:text-white text-[15px] transition-all duration-200',
+      },
+      size: {
+        sm: 'px-[6px] py-[4px] text-[11px]',
+        md: 'px-[8px] py-[6px] text-[12px]',
+        /** Branded size - matches login form button padding */
+        branded: 'py-[6px] pr-[10px] pl-[12px]',
       },
     },
     defaultVariants: {
       variant: 'default',
+      size: 'md',
     },
   }
 )
 
 export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
+  extends ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {}
 
-function Button({ className, variant, ...props }: ButtonProps) {
-  return <button className={cn(buttonVariants({ variant }), className)} {...props} />
-}
+const Button = forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant, size, ...props }, ref) => {
+    return (
+      <button ref={ref} className={cn(buttonVariants({ variant, size }), className)} {...props} />
+    )
+  }
+)
+
+Button.displayName = 'Button'
 
 export { Button, buttonVariants }

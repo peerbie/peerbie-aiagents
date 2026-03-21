@@ -1,4 +1,5 @@
 import type { BranchListResponse, ListBranchesParams } from '@/tools/github/types'
+import { BRANCH_OUTPUT_PROPERTIES } from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const listBranchesTool: ToolConfig<ListBranchesParams, BranchListResponse> = {
@@ -133,5 +134,37 @@ ${branchList}`
         total_count: { type: 'number', description: 'Total number of branches' },
       },
     },
+  },
+}
+
+export const listBranchesV2Tool: ToolConfig<ListBranchesParams, any> = {
+  id: 'github_list_branches_v2',
+  name: listBranchesTool.name,
+  description: listBranchesTool.description,
+  version: '2.0.0',
+  params: listBranchesTool.params,
+  request: listBranchesTool.request,
+
+  transformResponse: async (response: Response) => {
+    const branches = await response.json()
+    return {
+      success: true,
+      output: {
+        items: branches ?? [],
+        count: branches?.length ?? 0,
+      },
+    }
+  },
+
+  outputs: {
+    items: {
+      type: 'array',
+      description: 'Array of branch objects',
+      items: {
+        type: 'object',
+        properties: BRANCH_OUTPUT_PROPERTIES,
+      },
+    },
+    count: { type: 'number', description: 'Number of branches returned' },
   },
 }

@@ -1,10 +1,10 @@
+import { createLogger } from '@sim/logger'
 import type { NextRequest } from 'next/server'
-import { getEffectiveDecryptedEnv } from '@/lib/environment/utils'
-import { createLogger } from '@/lib/logs/console/logger'
 import { McpClient } from '@/lib/mcp/client'
+import { McpDomainNotAllowedError, validateMcpDomain } from '@/lib/mcp/domain-check'
 import { getParsedBody, withMcpAuth } from '@/lib/mcp/middleware'
-import type { McpServerConfig, McpTransport } from '@/lib/mcp/types'
-import { validateMcpServerUrl } from '@/lib/mcp/url-validator'
+import { resolveMcpConfigEnvVars } from '@/lib/mcp/resolve-config'
+import type { McpTransport } from '@/lib/mcp/types'
 import { createMcpErrorResponse, createMcpSuccessResponse } from '@/lib/mcp/utils'
 
 const logger = createLogger('McpServerTestAPI')
@@ -17,28 +17,6 @@ export const dynamic = 'force-dynamic'
  */
 function isUrlBasedTransport(transport: McpTransport): boolean {
   return transport === 'streamable-http'
-}
-
-/**
- * Resolve environment variables in strings
- */
-function resolveEnvVars(value: string, envVars: Record<string, string>): string {
-  const envMatches = value.match(/\{\{([^}]+)\}\}/g)
-  if (!envMatches) return value
-
-  let resolvedValue = value
-  for (const match of envMatches) {
-    const envKey = match.slice(2, -2).trim()
-    const envValue = envVars[envKey]
-
-    if (envValue === undefined) {
-      logger.warn(`Environment variable "${envKey}" not found in MCP server test`)
-      continue
-    }
-
-    resolvedValue = resolvedValue.replace(match, envValue)
-  }
-  return resolvedValue
 }
 
 interface TestConnectionRequest {
@@ -64,6 +42,20 @@ interface TestConnectionResult {
 }
 
 /**
+ * Extracts a user-friendly error message from connection errors.
+ * Keeps diagnostic info (timeout, DNS, HTTP status) but strips
+ * verbose internals (Zod details, full response bodies, stack traces).
+ */
+function sanitizeConnectionError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return 'Unknown connection error'
+  }
+
+  const firstLine = error.message.split('\n')[0]
+  return firstLine.length > 200 ? `${firstLine.slice(0, 200)}...` : firstLine
+}
+
+/**
  * POST - Test connection to an MCP server before registering it
  */
 export const POST = withMcpAuth('write')(
@@ -86,57 +78,55 @@ export const POST = withMcpAuth('write')(
         )
       }
 
-      if (isUrlBasedTransport(body.transport)) {
-        if (!body.url) {
-          return createMcpErrorResponse(
-            new Error('URL is required for HTTP-based transports'),
-            'Missing required URL',
-            400
-          )
-        }
-
-        const urlValidation = validateMcpServerUrl(body.url)
-        if (!urlValidation.isValid) {
-          return createMcpErrorResponse(
-            new Error(`Invalid MCP server URL: ${urlValidation.error}`),
-            'Invalid server URL',
-            400
-          )
-        }
-        body.url = urlValidation.normalizedUrl
-      }
-
-      let resolvedUrl = body.url
-      let resolvedHeaders = body.headers || {}
-
-      try {
-        const envVars = await getEffectiveDecryptedEnv(userId, workspaceId)
-
-        if (resolvedUrl) {
-          resolvedUrl = resolveEnvVars(resolvedUrl, envVars)
-        }
-
-        const resolvedHeadersObj: Record<string, string> = {}
-        for (const [key, value] of Object.entries(resolvedHeaders)) {
-          resolvedHeadersObj[key] = resolveEnvVars(value, envVars)
-        }
-        resolvedHeaders = resolvedHeadersObj
-      } catch (envError) {
-        logger.warn(
-          `[${requestId}] Failed to resolve environment variables, using raw values:`,
-          envError
+      if (isUrlBasedTransport(body.transport) && !body.url) {
+        return createMcpErrorResponse(
+          new Error('URL is required for HTTP-based transports'),
+          'Missing required URL',
+          400
         )
       }
 
-      const testConfig: McpServerConfig = {
+      try {
+        validateMcpDomain(body.url)
+      } catch (e) {
+        if (e instanceof McpDomainNotAllowedError) {
+          return createMcpErrorResponse(e, e.message, 403)
+        }
+        throw e
+      }
+
+      // Build initial config for resolution
+      const initialConfig = {
         id: `test-${requestId}`,
         name: body.name,
         transport: body.transport,
-        url: resolvedUrl,
-        headers: resolvedHeaders,
+        url: body.url,
+        headers: body.headers || {},
         timeout: body.timeout || 10000,
         retries: 1, // Only one retry for tests
         enabled: true,
+      }
+
+      // Resolve env vars using shared utility (non-strict mode for testing)
+      const { config: testConfig, missingVars } = await resolveMcpConfigEnvVars(
+        initialConfig,
+        userId,
+        workspaceId,
+        { strict: false }
+      )
+
+      if (missingVars.length > 0) {
+        logger.warn(`[${requestId}] Some environment variables not found:`, { missingVars })
+      }
+
+      // Re-validate domain after env var resolution
+      try {
+        validateMcpDomain(testConfig.url)
+      } catch (e) {
+        if (e instanceof McpDomainNotAllowedError) {
+          return createMcpErrorResponse(e, e.message, 403)
+        }
+        throw e
       }
 
       const testSecurityPolicy = {
@@ -161,8 +151,7 @@ export const POST = withMcpAuth('write')(
         } catch (toolError) {
           logger.warn(`[${requestId}] Connection established but could not list tools:`, toolError)
           result.success = false
-          const errorMessage = toolError instanceof Error ? toolError.message : 'Unknown error'
-          result.error = `Connection established but could not list tools: ${errorMessage}`
+          result.error = 'Connection established but could not list tools'
           result.warnings = result.warnings || []
           result.warnings.push(
             'Server connected but tool listing failed - connection may be incomplete'
@@ -187,11 +176,7 @@ export const POST = withMcpAuth('write')(
         logger.warn(`[${requestId}] MCP server test failed:`, error)
 
         result.success = false
-        if (error instanceof Error) {
-          result.error = error.message
-        } else {
-          result.error = 'Unknown connection error'
-        }
+        result.error = sanitizeConnectionError(error)
       } finally {
         if (client) {
           try {

@@ -1,8 +1,9 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   HubSpotUpdateContactParams,
   HubSpotUpdateContactResponse,
 } from '@/tools/hubspot/types'
+import { CONTACT_OBJECT_OUTPUT } from '@/tools/hubspot/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('HubSpotUpdateContact')
@@ -31,21 +32,22 @@ export const hubspotUpdateContactTool: ToolConfig<
     contactId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID or email of the contact to update',
+      visibility: 'user-or-llm',
+      description: 'The HubSpot contact ID (numeric string) or email of the contact to update',
     },
     idProperty: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description:
         'Property to use as unique identifier (e.g., "email"). If not specified, uses record ID',
     },
     properties: {
       type: 'object',
       required: true,
-      visibility: 'user-only',
-      description: 'Contact properties to update as JSON object',
+      visibility: 'user-or-llm',
+      description:
+        'Contact properties to update as JSON object (e.g., {"firstname": "John", "phone": "+1234567890"})',
     },
   },
 
@@ -69,8 +71,17 @@ export const hubspotUpdateContactTool: ToolConfig<
       }
     },
     body: (params) => {
+      let properties = params.properties
+      if (typeof properties === 'string') {
+        try {
+          properties = JSON.parse(properties)
+        } catch (e) {
+          throw new Error('Invalid JSON format for properties. Please provide a valid JSON object.')
+        }
+      }
+
       return {
-        properties: params.properties,
+        properties,
       }
     },
   },
@@ -87,31 +98,15 @@ export const hubspotUpdateContactTool: ToolConfig<
       success: true,
       output: {
         contact: data,
-        metadata: {
-          operation: 'update_contact' as const,
-          contactId: data.id,
-        },
+        contactId: data.id,
         success: true,
       },
     }
   },
 
   outputs: {
+    contact: CONTACT_OBJECT_OUTPUT,
+    contactId: { type: 'string', description: 'The updated contact ID' },
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Updated contact data',
-      properties: {
-        contact: {
-          type: 'object',
-          description: 'Updated contact object with properties',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

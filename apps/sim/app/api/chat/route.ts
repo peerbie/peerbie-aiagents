@@ -1,15 +1,16 @@
 import { db } from '@sim/db'
 import { chat } from '@sim/db/schema'
-import { eq } from 'drizzle-orm'
+import { createLogger } from '@sim/logger'
+import { and, eq, isNull } from 'drizzle-orm'
 import type { NextRequest } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
+import { AuditAction, AuditResourceType, recordAudit } from '@/lib/audit/log'
 import { getSession } from '@/lib/auth'
-import { isDev } from '@/lib/environment'
-import { createLogger } from '@/lib/logs/console/logger'
-import { getBaseUrl } from '@/lib/urls/utils'
-import { encryptSecret } from '@/lib/utils'
-import { deployWorkflow } from '@/lib/workflows/db-helpers'
+import { isDev } from '@/lib/core/config/feature-flags'
+import { encryptSecret } from '@/lib/core/security/encryption'
+import { getBaseUrl } from '@/lib/core/utils/urls'
+import { deployWorkflow } from '@/lib/workflows/persistence/utils'
 import { checkWorkflowAccessForChatCreation } from '@/app/api/chat/utils'
 import { createErrorResponse, createSuccessResponse } from '@/app/api/workflows/utils'
 
@@ -42,7 +43,7 @@ const chatSchema = z.object({
     .default([]),
 })
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const session = await getSession()
 
@@ -51,7 +52,10 @@ export async function GET(request: NextRequest) {
     }
 
     // Get the user's chat deployments
-    const deployments = await db.select().from(chat).where(eq(chat.userId, session.user.id))
+    const deployments = await db
+      .select()
+      .from(chat)
+      .where(and(eq(chat.userId, session.user.id), isNull(chat.archivedAt)))
 
     return createSuccessResponse({ deployments })
   } catch (error: any) {
@@ -105,22 +109,19 @@ export async function POST(request: NextRequest) {
         )
       }
 
-      // Check if identifier is available
-      const existingIdentifier = await db
-        .select()
-        .from(chat)
-        .where(eq(chat.identifier, identifier))
-        .limit(1)
+      // Check identifier availability and workflow access in parallel
+      const [existingIdentifier, { hasAccess, workflow: workflowRecord }] = await Promise.all([
+        db
+          .select()
+          .from(chat)
+          .where(and(eq(chat.identifier, identifier), isNull(chat.archivedAt)))
+          .limit(1),
+        checkWorkflowAccessForChatCreation(workflowId, session.user.id),
+      ])
 
       if (existingIdentifier.length > 0) {
         return createErrorResponse('Identifier already in use', 400)
       }
-
-      // Check if user has permission to create chat for this workflow
-      const { hasAccess, workflow: workflowRecord } = await checkWorkflowAccessForChatCreation(
-        workflowId,
-        session.user.id
-      )
 
       if (!hasAccess || !workflowRecord) {
         return createErrorResponse('Workflow not found or access denied', 404)
@@ -174,7 +175,7 @@ export async function POST(request: NextRequest) {
         userId: session.user.id,
         identifier,
         title,
-        description: description || '',
+        description: description || null,
         customizations: mergedCustomizations,
         isActive: true,
         authType,
@@ -211,6 +212,32 @@ export async function POST(request: NextRequest) {
       }
 
       logger.info(`Chat "${title}" deployed successfully at ${chatUrl}`)
+
+      try {
+        const { PlatformEvents } = await import('@/lib/core/telemetry')
+        PlatformEvents.chatDeployed({
+          chatId: id,
+          workflowId,
+          authType,
+          hasOutputConfigs: outputConfigs.length > 0,
+        })
+      } catch (_e) {
+        // Silently fail
+      }
+
+      recordAudit({
+        workspaceId: workflowRecord.workspaceId || null,
+        actorId: session.user.id,
+        actorName: session.user.name,
+        actorEmail: session.user.email,
+        action: AuditAction.CHAT_DEPLOYED,
+        resourceType: AuditResourceType.CHAT,
+        resourceId: id,
+        resourceName: title,
+        description: `Deployed chat "${title}"`,
+        metadata: { workflowId, identifier, authType },
+        request,
+      })
 
       return createSuccessResponse({
         id,

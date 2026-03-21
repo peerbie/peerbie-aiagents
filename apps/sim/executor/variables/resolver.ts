@@ -1,13 +1,17 @@
-import { createLogger } from '@/lib/logs/console/logger'
-import { BlockType, REFERENCE } from '@/executor/consts'
+import { createLogger } from '@sim/logger'
+import { BlockType } from '@/executor/constants'
 import type { ExecutionState, LoopScope } from '@/executor/execution/state'
 import type { ExecutionContext } from '@/executor/types'
-import { replaceValidReferences } from '@/executor/utils/reference-validation'
+import { createEnvVarPattern, replaceValidReferences } from '@/executor/utils/reference-validation'
 import { BlockResolver } from '@/executor/variables/resolvers/block'
 import { EnvResolver } from '@/executor/variables/resolvers/env'
 import { LoopResolver } from '@/executor/variables/resolvers/loop'
 import { ParallelResolver } from '@/executor/variables/resolvers/parallel'
-import type { ResolutionContext, Resolver } from '@/executor/variables/resolvers/reference'
+import {
+  RESOLVED_EMPTY,
+  type ResolutionContext,
+  type Resolver,
+} from '@/executor/variables/resolvers/reference'
 import { WorkflowResolver } from '@/executor/variables/resolvers/workflow'
 import type { SerializedBlock, SerializedWorkflow } from '@/serializer/types'
 
@@ -104,7 +108,11 @@ export class VariableResolver {
           loopScope,
         }
 
-        return this.resolveReference(trimmed, resolutionContext)
+        const result = this.resolveReference(trimmed, resolutionContext)
+        if (result === RESOLVED_EMPTY) {
+          return null
+        }
+        return result
       }
     }
 
@@ -157,7 +165,14 @@ export class VariableResolver {
 
     let replacementError: Error | null = null
 
-    // Use generic utility for smart variable reference replacement
+    const blockType = block?.metadata?.id
+    const language =
+      blockType === BlockType.FUNCTION
+        ? ((block?.config?.params as Record<string, unknown> | undefined)?.language as
+            | string
+            | undefined)
+        : undefined
+
     let result = replaceValidReferences(template, (match) => {
       if (replacementError) return match
 
@@ -167,14 +182,14 @@ export class VariableResolver {
           return match
         }
 
-        const blockType = block?.metadata?.id
-        const isInTemplateLiteral =
-          blockType === BlockType.FUNCTION &&
-          template.includes('${') &&
-          template.includes('}') &&
-          template.includes('`')
+        if (resolved === RESOLVED_EMPTY) {
+          if (blockType === BlockType.FUNCTION) {
+            return this.blockResolver.formatValueForBlock(null, blockType, language)
+          }
+          return ''
+        }
 
-        return this.blockResolver.formatValueForBlock(resolved, blockType, isInTemplateLiteral)
+        return this.blockResolver.formatValueForBlock(resolved, blockType, language)
       } catch (error) {
         replacementError = error instanceof Error ? error : new Error(String(error))
         return match
@@ -185,8 +200,7 @@ export class VariableResolver {
       throw replacementError
     }
 
-    const envRegex = new RegExp(`${REFERENCE.ENV_VAR_START}([^}]+)${REFERENCE.ENV_VAR_END}`, 'g')
-    result = result.replace(envRegex, (match) => {
+    result = result.replace(createEnvVarPattern(), (match) => {
       const resolved = this.resolveReference(match, resolutionContext)
       return typeof resolved === 'string' ? resolved : match
     })
@@ -208,7 +222,6 @@ export class VariableResolver {
 
     let replacementError: Error | null = null
 
-    // Use generic utility for smart variable reference replacement
     let result = replaceValidReferences(template, (match) => {
       if (replacementError) return match
 
@@ -216,6 +229,10 @@ export class VariableResolver {
         const resolved = this.resolveReference(match, resolutionContext)
         if (resolved === undefined) {
           return match
+        }
+
+        if (resolved === RESOLVED_EMPTY) {
+          return 'null'
         }
 
         if (typeof resolved === 'string') {
@@ -236,8 +253,7 @@ export class VariableResolver {
       throw replacementError
     }
 
-    const envRegex = new RegExp(`${REFERENCE.ENV_VAR_START}([^}]+)${REFERENCE.ENV_VAR_END}`, 'g')
-    result = result.replace(envRegex, (match) => {
+    result = result.replace(createEnvVarPattern(), (match) => {
       const resolved = this.resolveReference(match, resolutionContext)
       return typeof resolved === 'string' ? resolved : match
     })

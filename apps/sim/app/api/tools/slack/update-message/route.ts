@@ -1,8 +1,8 @@
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { checkHybridAuth } from '@/lib/auth/hybrid'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
+import { checkInternalAuth } from '@/lib/auth/hybrid'
+import { generateRequestId } from '@/lib/core/utils/request'
 
 export const dynamic = 'force-dynamic'
 
@@ -10,16 +10,17 @@ const logger = createLogger('SlackUpdateMessageAPI')
 
 const SlackUpdateMessageSchema = z.object({
   accessToken: z.string().min(1, 'Access token is required'),
-  channel: z.string().min(1, 'Channel ID is required'),
+  channel: z.string().min(1, 'Channel is required'),
   timestamp: z.string().min(1, 'Message timestamp is required'),
   text: z.string().min(1, 'Message text is required'),
+  blocks: z.array(z.record(z.unknown())).optional().nullable(),
 })
 
 export async function POST(request: NextRequest) {
   const requestId = generateRequestId()
 
   try {
-    const authResult = await checkHybridAuth(request, { requireWorkflowId: false })
+    const authResult = await checkInternalAuth(request, { requireWorkflowId: false })
 
     if (!authResult.success) {
       logger.warn(`[${requestId}] Unauthorized Slack update message attempt: ${authResult.error}`)
@@ -57,6 +58,8 @@ export async function POST(request: NextRequest) {
         channel: validatedData.channel,
         ts: validatedData.timestamp,
         text: validatedData.text,
+        ...(validatedData.blocks &&
+          validatedData.blocks.length > 0 && { blocks: validatedData.blocks }),
       }),
     })
 

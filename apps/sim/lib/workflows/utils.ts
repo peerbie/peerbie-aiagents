@@ -1,88 +1,178 @@
+import crypto from 'crypto'
 import { db } from '@sim/db'
-import { permissions, workflow as workflowTable, workspace } from '@sim/db/schema'
-import type { InferSelectModel } from 'drizzle-orm'
-import { and, eq } from 'drizzle-orm'
+import { permissions, userStats, workflowFolder, workflow as workflowTable } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
+import { and, asc, eq, inArray, isNull, max, min, sql } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import type { PermissionType } from '@/lib/permissions/utils'
-import { getBaseUrl } from '@/lib/urls/utils'
+import { getActiveWorkflowContext } from '@/lib/workflows/active-context'
+import { getNextWorkflowColor } from '@/lib/workflows/colors'
+import { buildDefaultWorkflowArtifacts } from '@/lib/workflows/defaults'
+import { saveWorkflowToNormalizedTables } from '@/lib/workflows/persistence/utils'
+import type { PermissionType } from '@/lib/workspaces/permissions/utils'
+import { getWorkspaceBilledAccountUserId } from '@/lib/workspaces/utils'
 import type { ExecutionResult } from '@/executor/types'
-import type { WorkflowState } from '@/stores/workflows/workflow/types'
 
 const logger = createLogger('WorkflowUtils')
 
-type WorkflowSelection = InferSelectModel<typeof workflowTable>
+export type WorkflowScope = 'active' | 'archived' | 'all'
 
-export async function getWorkflowById(id: string) {
-  const rows = await db.select().from(workflowTable).where(eq(workflowTable.id, id)).limit(1)
+export async function getWorkflowById(id: string, options?: { includeArchived?: boolean }) {
+  const { includeArchived = false } = options ?? {}
+  const rows = await db
+    .select()
+    .from(workflowTable)
+    .where(
+      includeArchived
+        ? eq(workflowTable.id, id)
+        : and(eq(workflowTable.id, id), isNull(workflowTable.archivedAt))
+    )
+    .limit(1)
 
   return rows[0]
+}
+
+export async function listWorkflows(workspaceId: string, options?: { scope?: WorkflowScope }) {
+  const { scope = 'active' } = options ?? {}
+  return db
+    .select()
+    .from(workflowTable)
+    .where(
+      scope === 'all'
+        ? eq(workflowTable.workspaceId, workspaceId)
+        : scope === 'archived'
+          ? and(
+              eq(workflowTable.workspaceId, workspaceId),
+              sql`${workflowTable.archivedAt} IS NOT NULL`
+            )
+          : and(eq(workflowTable.workspaceId, workspaceId), isNull(workflowTable.archivedAt))
+    )
+    .orderBy(asc(workflowTable.sortOrder), asc(workflowTable.createdAt))
+}
+
+/**
+ * Generates a unique workflow name within a workspace+folder scope.
+ * If the name already exists among active workflows, appends (2), (3), etc.
+ */
+export async function deduplicateWorkflowName(
+  name: string,
+  workspaceId: string,
+  folderId: string | null | undefined
+): Promise<string> {
+  const folderCondition = folderId
+    ? eq(workflowTable.folderId, folderId)
+    : isNull(workflowTable.folderId)
+
+  const [existing] = await db
+    .select({ id: workflowTable.id })
+    .from(workflowTable)
+    .where(
+      and(
+        eq(workflowTable.workspaceId, workspaceId),
+        folderCondition,
+        eq(workflowTable.name, name),
+        isNull(workflowTable.archivedAt)
+      )
+    )
+    .limit(1)
+
+  if (!existing) {
+    return name
+  }
+
+  for (let i = 2; i < 100; i++) {
+    const candidate = `${name} (${i})`
+    const [dup] = await db
+      .select({ id: workflowTable.id })
+      .from(workflowTable)
+      .where(
+        and(
+          eq(workflowTable.workspaceId, workspaceId),
+          folderCondition,
+          eq(workflowTable.name, candidate),
+          isNull(workflowTable.archivedAt)
+        )
+      )
+      .limit(1)
+
+    if (!dup) {
+      return candidate
+    }
+  }
+
+  return `${name} (${crypto.randomUUID().slice(0, 6)})`
+}
+
+export async function resolveWorkflowIdForUser(
+  userId: string,
+  workflowId?: string,
+  workflowName?: string,
+  workspaceId?: string
+): Promise<{ workflowId: string; workflowName?: string } | null> {
+  if (workflowId) {
+    const authorization = await authorizeWorkflowByWorkspacePermission({
+      workflowId,
+      userId,
+      action: 'read',
+    })
+    if (!authorization.allowed) {
+      return null
+    }
+    const wf = await getWorkflowById(workflowId)
+    return { workflowId, workflowName: wf?.name || undefined }
+  }
+
+  const workspaceIds = await db
+    .select({ entityId: permissions.entityId })
+    .from(permissions)
+    .where(and(eq(permissions.userId, userId), eq(permissions.entityType, 'workspace')))
+
+  const workspaceIdList = workspaceIds.map((row) => row.entityId)
+  const allowedWorkspaceIds = workspaceId
+    ? workspaceIdList.filter((candidateWorkspaceId) => candidateWorkspaceId === workspaceId)
+    : workspaceIdList
+  if (allowedWorkspaceIds.length === 0) {
+    return null
+  }
+
+  const workflows = await db
+    .select()
+    .from(workflowTable)
+    .where(
+      and(inArray(workflowTable.workspaceId, allowedWorkspaceIds), isNull(workflowTable.archivedAt))
+    )
+    .orderBy(asc(workflowTable.sortOrder), asc(workflowTable.createdAt), asc(workflowTable.id))
+
+  if (workflows.length === 0) {
+    return null
+  }
+
+  if (workflowName) {
+    const match = workflows.find(
+      (w) =>
+        String(w.name || '')
+          .trim()
+          .toLowerCase() === workflowName.toLowerCase()
+    )
+    if (match) {
+      return { workflowId: match.id, workflowName: match.name || undefined }
+    }
+    return null
+  }
+
+  return { workflowId: workflows[0].id, workflowName: workflows[0].name || undefined }
 }
 
 type WorkflowRecord = ReturnType<typeof getWorkflowById> extends Promise<infer R>
   ? NonNullable<R>
   : never
 
-export interface WorkflowAccessContext {
-  workflow: WorkflowRecord
-  workspaceOwnerId: string | null
+export interface WorkflowWorkspaceAuthorizationResult {
+  allowed: boolean
+  status: number
+  message?: string
+  workflow: WorkflowRecord | null
   workspacePermission: PermissionType | null
-  isOwner: boolean
-  isWorkspaceOwner: boolean
-}
-
-export async function getWorkflowAccessContext(
-  workflowId: string,
-  userId?: string
-): Promise<WorkflowAccessContext | null> {
-  const workflow = await getWorkflowById(workflowId)
-
-  if (!workflow) {
-    return null
-  }
-
-  let workspaceOwnerId: string | null = null
-  let workspacePermission: PermissionType | null = null
-
-  if (workflow.workspaceId) {
-    const [workspaceRow] = await db
-      .select({ ownerId: workspace.ownerId })
-      .from(workspace)
-      .where(eq(workspace.id, workflow.workspaceId))
-      .limit(1)
-
-    workspaceOwnerId = workspaceRow?.ownerId ?? null
-
-    if (userId) {
-      const [permissionRow] = await db
-        .select({ permissionType: permissions.permissionType })
-        .from(permissions)
-        .where(
-          and(
-            eq(permissions.userId, userId),
-            eq(permissions.entityType, 'workspace'),
-            eq(permissions.entityId, workflow.workspaceId)
-          )
-        )
-        .limit(1)
-
-      workspacePermission = permissionRow?.permissionType ?? null
-    }
-  }
-
-  const resolvedUserId = userId ?? null
-
-  const isOwner = resolvedUserId ? workflow.userId === resolvedUserId : false
-  const isWorkspaceOwner = resolvedUserId ? workspaceOwnerId === resolvedUserId : false
-
-  return {
-    workflow,
-    workspaceOwnerId,
-    workspacePermission,
-    isOwner,
-    isWorkspaceOwner,
-  }
 }
 
 export async function updateWorkflowRunCounts(workflowId: string, runs = 1) {
@@ -93,332 +183,74 @@ export async function updateWorkflowRunCounts(workflowId: string, runs = 1) {
       throw new Error(`Workflow ${workflowId} not found`)
     }
 
-    // Use the API to update stats
-    const response = await fetch(`${getBaseUrl()}/api/workflows/${workflowId}/stats?runs=${runs}`, {
-      method: 'POST',
-    })
+    await db
+      .update(workflowTable)
+      .set({
+        runCount: workflow.runCount + runs,
+        lastRunAt: new Date(),
+      })
+      .where(eq(workflowTable.id, workflowId))
 
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error || 'Failed to update workflow stats')
+    let activityUserId: string | null = null
+    if (workflow.workspaceId) {
+      try {
+        activityUserId = await getWorkspaceBilledAccountUserId(workflow.workspaceId)
+      } catch (error) {
+        logger.warn(`Error resolving billed account for workspace ${workflow.workspaceId}`, {
+          workflowId,
+          error,
+        })
+      }
     }
 
-    return response.json()
+    if (activityUserId) {
+      try {
+        const existing = await db
+          .select()
+          .from(userStats)
+          .where(eq(userStats.userId, activityUserId))
+          .limit(1)
+
+        if (existing.length === 0) {
+          logger.warn('User stats record not found - should be created during onboarding', {
+            userId: activityUserId,
+            workflowId,
+          })
+        } else {
+          await db
+            .update(userStats)
+            .set({
+              lastActive: new Date(),
+            })
+            .where(eq(userStats.userId, activityUserId))
+        }
+      } catch (error) {
+        logger.error(`Error updating userStats lastActive for userId ${activityUserId}:`, error)
+        // Don't rethrow - we want to continue even if this fails
+      }
+    } else {
+      logger.warn(
+        'Skipping userStats lastActive update: unable to resolve workspace billed account',
+        {
+          workflowId,
+          workspaceId: workflow.workspaceId,
+        }
+      )
+    }
+
+    return {
+      success: true,
+      runsAdded: runs,
+      newTotal: workflow.runCount + runs,
+    }
   } catch (error) {
     logger.error(`Error updating workflow stats for ${workflowId}`, error)
     throw error
   }
 }
 
-/**
- * Sanitize tools array by removing UI-only fields
- * @param tools - The tools array to sanitize
- * @returns A sanitized tools array
- */
-function sanitizeToolsForComparison(tools: any[] | undefined): any[] {
-  if (!Array.isArray(tools)) {
-    return []
-  }
-
-  return tools.map((tool) => {
-    // Remove UI-only field: isExpanded
-    const { isExpanded, ...cleanTool } = tool
-    return cleanTool
-  })
-}
-
-/**
- * Sanitize inputFormat array by removing test-only value fields
- * @param inputFormat - The inputFormat array to sanitize
- * @returns A sanitized inputFormat array without test values
- */
-function sanitizeInputFormatForComparison(inputFormat: any[] | undefined): any[] {
-  if (!Array.isArray(inputFormat)) {
-    return []
-  }
-
-  return inputFormat.map((field) => {
-    // Remove test-only field: value (used only for manual testing)
-    const { value, collapsed, ...cleanField } = field
-    return cleanField
-  })
-}
-
-/**
- * Normalize a value for consistent comparison by sorting object keys
- * @param value - The value to normalize
- * @returns A normalized version of the value
- */
-function normalizeValue(value: any): any {
-  // If not an object or array, return as is
-  if (value === null || value === undefined || typeof value !== 'object') {
-    return value
-  }
-
-  // Handle arrays by normalizing each element
-  if (Array.isArray(value)) {
-    return value.map(normalizeValue)
-  }
-
-  // For objects, sort keys and normalize each value
-  const sortedObj: Record<string, any> = {}
-
-  // Get all keys and sort them
-  const sortedKeys = Object.keys(value).sort()
-
-  // Reconstruct object with sorted keys and normalized values
-  for (const key of sortedKeys) {
-    sortedObj[key] = normalizeValue(value[key])
-  }
-
-  return sortedObj
-}
-
-/**
- * Generate a normalized JSON string for comparison
- * @param value - The value to normalize and stringify
- * @returns A normalized JSON string
- */
-function normalizedStringify(value: any): string {
-  return JSON.stringify(normalizeValue(value))
-}
-
-/**
- * Compare the current workflow state with the deployed state to detect meaningful changes
- * @param currentState - The current workflow state
- * @param deployedState - The deployed workflow state
- * @returns True if there are meaningful changes, false if only position changes or no changes
- */
-export function hasWorkflowChanged(
-  currentState: WorkflowState,
-  deployedState: WorkflowState | null
-): boolean {
-  // If no deployed state exists, then the workflow has changed
-  if (!deployedState) return true
-
-  // 1. Compare edges (connections between blocks)
-  // First check length
-  const currentEdges = currentState.edges || []
-  const deployedEdges = deployedState.edges || []
-
-  // Create sorted, normalized representations of the edges for more reliable comparison
-  const normalizedCurrentEdges = currentEdges
-    .map((edge) => ({
-      source: edge.source,
-      sourceHandle: edge.sourceHandle,
-      target: edge.target,
-      targetHandle: edge.targetHandle,
-    }))
-    .sort((a, b) =>
-      `${a.source}-${a.sourceHandle}-${a.target}-${a.targetHandle}`.localeCompare(
-        `${b.source}-${b.sourceHandle}-${b.target}-${b.targetHandle}`
-      )
-    )
-
-  const normalizedDeployedEdges = deployedEdges
-    .map((edge) => ({
-      source: edge.source,
-      sourceHandle: edge.sourceHandle,
-      target: edge.target,
-      targetHandle: edge.targetHandle,
-    }))
-    .sort((a, b) =>
-      `${a.source}-${a.sourceHandle}-${a.target}-${a.targetHandle}`.localeCompare(
-        `${b.source}-${b.sourceHandle}-${b.target}-${b.targetHandle}`
-      )
-    )
-
-  // Compare the normalized edge arrays
-  if (
-    normalizedStringify(normalizedCurrentEdges) !== normalizedStringify(normalizedDeployedEdges)
-  ) {
-    return true
-  }
-
-  // 2. Compare blocks and their configurations
-  const currentBlockIds = Object.keys(currentState.blocks || {}).sort()
-  const deployedBlockIds = Object.keys(deployedState.blocks || {}).sort()
-
-  // Check if the block IDs are different
-  if (
-    currentBlockIds.length !== deployedBlockIds.length ||
-    normalizedStringify(currentBlockIds) !== normalizedStringify(deployedBlockIds)
-  ) {
-    return true
-  }
-
-  // 3. Build normalized representations of blocks for comparison
-  const normalizedCurrentBlocks: Record<string, any> = {}
-  const normalizedDeployedBlocks: Record<string, any> = {}
-
-  for (const blockId of currentBlockIds) {
-    const currentBlock = currentState.blocks[blockId]
-    const deployedBlock = deployedState.blocks[blockId]
-
-    // Destructure and exclude non-functional fields
-    const { position: _currentPos, subBlocks: currentSubBlocks = {}, ...currentRest } = currentBlock
-
-    const {
-      position: _deployedPos,
-      subBlocks: deployedSubBlocks = {},
-      ...deployedRest
-    } = deployedBlock
-
-    normalizedCurrentBlocks[blockId] = {
-      ...currentRest,
-      subBlocks: undefined,
-    }
-
-    normalizedDeployedBlocks[blockId] = {
-      ...deployedRest,
-      subBlocks: undefined,
-    }
-
-    // Get all subBlock IDs from both states
-    const allSubBlockIds = [
-      ...new Set([...Object.keys(currentSubBlocks), ...Object.keys(deployedSubBlocks)]),
-    ].sort()
-
-    // Check if any subBlocks are missing in either state
-    if (Object.keys(currentSubBlocks).length !== Object.keys(deployedSubBlocks).length) {
-      return true
-    }
-
-    // Normalize and compare each subBlock
-    for (const subBlockId of allSubBlockIds) {
-      // If the subBlock doesn't exist in either state, there's a difference
-      if (!currentSubBlocks[subBlockId] || !deployedSubBlocks[subBlockId]) {
-        return true
-      }
-
-      // Get values with special handling for null/undefined
-      let currentValue = currentSubBlocks[subBlockId].value ?? null
-      let deployedValue = deployedSubBlocks[subBlockId].value ?? null
-
-      // Special handling for 'tools' subBlock - sanitize UI-only fields
-      if (subBlockId === 'tools' && Array.isArray(currentValue) && Array.isArray(deployedValue)) {
-        currentValue = sanitizeToolsForComparison(currentValue)
-        deployedValue = sanitizeToolsForComparison(deployedValue)
-      }
-
-      // Special handling for 'inputFormat' subBlock - sanitize UI-only fields (collapsed state)
-      if (
-        subBlockId === 'inputFormat' &&
-        Array.isArray(currentValue) &&
-        Array.isArray(deployedValue)
-      ) {
-        currentValue = sanitizeInputFormatForComparison(currentValue)
-        deployedValue = sanitizeInputFormatForComparison(deployedValue)
-      }
-
-      // For string values, compare directly to catch even small text changes
-      if (typeof currentValue === 'string' && typeof deployedValue === 'string') {
-        if (currentValue !== deployedValue) {
-          return true
-        }
-      } else {
-        // For other types, use normalized comparison
-        const normalizedCurrentValue = normalizeValue(currentValue)
-        const normalizedDeployedValue = normalizeValue(deployedValue)
-
-        if (
-          normalizedStringify(normalizedCurrentValue) !==
-          normalizedStringify(normalizedDeployedValue)
-        ) {
-          return true
-        }
-      }
-
-      // Compare type and other properties
-      const currentSubBlockWithoutValue = { ...currentSubBlocks[subBlockId], value: undefined }
-      const deployedSubBlockWithoutValue = { ...deployedSubBlocks[subBlockId], value: undefined }
-
-      if (
-        normalizedStringify(currentSubBlockWithoutValue) !==
-        normalizedStringify(deployedSubBlockWithoutValue)
-      ) {
-        return true
-      }
-    }
-
-    // Skip the normalization of subBlocks since we've already done detailed comparison above
-    const blocksEqual =
-      normalizedStringify(normalizedCurrentBlocks[blockId]) ===
-      normalizedStringify(normalizedDeployedBlocks[blockId])
-
-    // We've already compared subBlocks in detail
-    if (!blocksEqual) {
-      return true
-    }
-  }
-
-  // 4. Compare loops
-  const currentLoops = currentState.loops || {}
-  const deployedLoops = deployedState.loops || {}
-
-  const currentLoopIds = Object.keys(currentLoops).sort()
-  const deployedLoopIds = Object.keys(deployedLoops).sort()
-
-  if (
-    currentLoopIds.length !== deployedLoopIds.length ||
-    normalizedStringify(currentLoopIds) !== normalizedStringify(deployedLoopIds)
-  ) {
-    return true
-  }
-
-  // Compare each loop with normalized values
-  for (const loopId of currentLoopIds) {
-    const normalizedCurrentLoop = normalizeValue(currentLoops[loopId])
-    const normalizedDeployedLoop = normalizeValue(deployedLoops[loopId])
-
-    if (
-      normalizedStringify(normalizedCurrentLoop) !== normalizedStringify(normalizedDeployedLoop)
-    ) {
-      return true
-    }
-  }
-
-  // 5. Compare parallels
-  const currentParallels = currentState.parallels || {}
-  const deployedParallels = deployedState.parallels || {}
-
-  const currentParallelIds = Object.keys(currentParallels).sort()
-  const deployedParallelIds = Object.keys(deployedParallels).sort()
-
-  if (
-    currentParallelIds.length !== deployedParallelIds.length ||
-    normalizedStringify(currentParallelIds) !== normalizedStringify(deployedParallelIds)
-  ) {
-    return true
-  }
-
-  // Compare each parallel with normalized values
-  for (const parallelId of currentParallelIds) {
-    const normalizedCurrentParallel = normalizeValue(currentParallels[parallelId])
-    const normalizedDeployedParallel = normalizeValue(deployedParallels[parallelId])
-
-    if (
-      normalizedStringify(normalizedCurrentParallel) !==
-      normalizedStringify(normalizedDeployedParallel)
-    ) {
-      return true
-    }
-  }
-
-  return false
-}
-
-export function stripCustomToolPrefix(name: string) {
-  return name.startsWith('custom_') ? name.replace('custom_', '') : name
-}
-
 export const workflowHasResponseBlock = (executionResult: ExecutionResult): boolean => {
-  if (
-    !executionResult?.logs ||
-    !Array.isArray(executionResult.logs) ||
-    !executionResult.success ||
-    !executionResult.output.response
-  ) {
+  if (!executionResult?.logs || !Array.isArray(executionResult.logs) || !executionResult.success) {
     return false
   }
 
@@ -429,10 +261,8 @@ export const workflowHasResponseBlock = (executionResult: ExecutionResult): bool
   return responseBlock !== undefined
 }
 
-// Create a HTTP response from response block
 export const createHttpResponseFromBlock = (executionResult: ExecutionResult): NextResponse => {
-  const output = executionResult.output.response
-  const { data = {}, status = 200, headers = {} } = output
+  const { data = {}, status = 200, headers = {} } = executionResult.output
 
   const responseHeaders = new Headers({
     'Content-Type': 'application/json',
@@ -464,8 +294,13 @@ export async function validateWorkflowPermissions(
     }
   }
 
-  const accessContext = await getWorkflowAccessContext(workflowId, session.user.id)
-  if (!accessContext) {
+  const authorization = await authorizeWorkflowByWorkspacePermission({
+    workflowId,
+    userId: session.user.id,
+    action,
+  })
+
+  if (!authorization.workflow) {
     logger.warn(`[${requestId}] Workflow ${workflowId} not found`)
     return {
       error: { message: 'Workflow not found', status: 404 },
@@ -474,46 +309,18 @@ export async function validateWorkflowPermissions(
     }
   }
 
-  const { workflow, workspacePermission, isOwner } = accessContext
-
-  if (isOwner) {
-    return {
-      error: null,
-      session,
-      workflow,
-    }
-  }
-
-  if (workflow.workspaceId) {
-    let hasPermission = false
-
-    if (action === 'read') {
-      // Any workspace permission allows read
-      hasPermission = workspacePermission !== null
-    } else if (action === 'write') {
-      // Write or admin permission allows write
-      hasPermission = workspacePermission === 'write' || workspacePermission === 'admin'
-    } else if (action === 'admin') {
-      // Only admin permission allows admin actions
-      hasPermission = workspacePermission === 'admin'
-    }
-
-    if (!hasPermission) {
-      logger.warn(
-        `[${requestId}] User ${session.user.id} unauthorized to ${action} workflow ${workflowId} in workspace ${workflow.workspaceId}`
-      )
-      return {
-        error: { message: `Unauthorized: Access denied to ${action} this workflow`, status: 403 },
-        session: null,
-        workflow: null,
-      }
-    }
-  } else {
+  if (!authorization.allowed) {
+    const message =
+      authorization.message || `Unauthorized: Access denied to ${action} this workflow`
     logger.warn(
-      `[${requestId}] User ${session.user.id} unauthorized to ${action} workflow ${workflowId} owned by ${workflow.userId}`
+      `[${requestId}] User ${session.user.id} unauthorized to ${action} workflow ${workflowId}`,
+      {
+        action,
+        workflowId,
+      }
     )
     return {
-      error: { message: `Unauthorized: Access denied to ${action} this workflow`, status: 403 },
+      error: { message, status: authorization.status },
       session: null,
       workflow: null,
     }
@@ -522,6 +329,281 @@ export async function validateWorkflowPermissions(
   return {
     error: null,
     session,
-    workflow,
+    workflow: authorization.workflow,
   }
+}
+
+export async function authorizeWorkflowByWorkspacePermission(params: {
+  workflowId: string
+  userId: string
+  action?: 'read' | 'write' | 'admin'
+}): Promise<WorkflowWorkspaceAuthorizationResult> {
+  const { workflowId, userId, action = 'read' } = params
+
+  const activeContext = await getActiveWorkflowContext(workflowId)
+  if (!activeContext) {
+    return {
+      allowed: false,
+      status: 404,
+      message: 'Workflow not found',
+      workflow: null,
+      workspacePermission: null,
+    }
+  }
+
+  const workflow = activeContext.workflow
+
+  if (!workflow.workspaceId) {
+    return {
+      allowed: false,
+      status: 403,
+      message:
+        'This workflow is not attached to a workspace. Personal workflows are deprecated and cannot be accessed.',
+      workflow,
+      workspacePermission: null,
+    }
+  }
+
+  const [permissionRow] = await db
+    .select({ permissionType: permissions.permissionType })
+    .from(permissions)
+    .where(
+      and(
+        eq(permissions.userId, userId),
+        eq(permissions.entityType, 'workspace'),
+        eq(permissions.entityId, workflow.workspaceId)
+      )
+    )
+    .limit(1)
+
+  const workspacePermission = permissionRow?.permissionType ?? null
+
+  if (workspacePermission === null) {
+    return {
+      allowed: false,
+      status: 403,
+      message: `Unauthorized: Access denied to ${action} this workflow`,
+      workflow,
+      workspacePermission,
+    }
+  }
+
+  const permissionSatisfied =
+    action === 'read'
+      ? true
+      : action === 'write'
+        ? workspacePermission === 'write' || workspacePermission === 'admin'
+        : workspacePermission === 'admin'
+
+  if (!permissionSatisfied) {
+    return {
+      allowed: false,
+      status: 403,
+      message: `Unauthorized: Access denied to ${action} this workflow`,
+      workflow,
+      workspacePermission,
+    }
+  }
+
+  return {
+    allowed: true,
+    status: 200,
+    workflow,
+    workspacePermission,
+  }
+}
+
+// ── Workflow CRUD ──
+
+export interface CreateWorkflowInput {
+  userId: string
+  workspaceId: string
+  name: string
+  description?: string | null
+  color?: string
+  folderId?: string | null
+}
+
+export async function createWorkflowRecord(params: CreateWorkflowInput) {
+  const {
+    userId,
+    workspaceId,
+    name,
+    description = null,
+    color = getNextWorkflowColor(),
+    folderId = null,
+  } = params
+  const workflowId = crypto.randomUUID()
+  const now = new Date()
+
+  const workflowParentCondition = folderId
+    ? eq(workflowTable.folderId, folderId)
+    : isNull(workflowTable.folderId)
+  const folderParentCondition = folderId
+    ? eq(workflowFolder.parentId, folderId)
+    : isNull(workflowFolder.parentId)
+
+  const [[workflowMinResult], [folderMinResult]] = await Promise.all([
+    db
+      .select({ minOrder: min(workflowTable.sortOrder) })
+      .from(workflowTable)
+      .where(
+        and(
+          eq(workflowTable.workspaceId, workspaceId),
+          workflowParentCondition,
+          isNull(workflowTable.archivedAt)
+        )
+      ),
+    db
+      .select({ minOrder: min(workflowFolder.sortOrder) })
+      .from(workflowFolder)
+      .where(and(eq(workflowFolder.workspaceId, workspaceId), folderParentCondition)),
+  ])
+
+  const minSortOrder = [workflowMinResult?.minOrder, folderMinResult?.minOrder].reduce<
+    number | null
+  >((currentMin, candidate) => {
+    if (candidate == null) return currentMin
+    if (currentMin == null) return candidate
+    return Math.min(currentMin, candidate)
+  }, null)
+
+  const sortOrder = minSortOrder != null ? minSortOrder - 1 : 0
+
+  await db.insert(workflowTable).values({
+    id: workflowId,
+    userId,
+    workspaceId,
+    folderId,
+    sortOrder,
+    name,
+    description,
+    color,
+    lastSynced: now,
+    createdAt: now,
+    updatedAt: now,
+    isDeployed: false,
+    runCount: 0,
+    variables: {},
+  })
+
+  const { workflowState } = buildDefaultWorkflowArtifacts()
+  const saveResult = await saveWorkflowToNormalizedTables(workflowId, workflowState)
+  if (!saveResult.success) {
+    throw new Error(saveResult.error || 'Failed to save workflow state')
+  }
+
+  return { workflowId, name, workspaceId, folderId, sortOrder, createdAt: now, updatedAt: now }
+}
+
+export async function updateWorkflowRecord(
+  workflowId: string,
+  updates: { name?: string; description?: string; color?: string; folderId?: string | null }
+) {
+  const setData: Record<string, unknown> = { updatedAt: new Date() }
+  if (updates.name !== undefined) setData.name = updates.name
+  if (updates.description !== undefined) setData.description = updates.description
+  if (updates.color !== undefined) setData.color = updates.color
+  if (updates.folderId !== undefined) setData.folderId = updates.folderId
+  await db.update(workflowTable).set(setData).where(eq(workflowTable.id, workflowId))
+}
+
+export async function deleteWorkflowRecord(workflowId: string) {
+  const { archiveWorkflow } = await import('@/lib/workflows/lifecycle')
+  await archiveWorkflow(workflowId, {
+    requestId: `workflow-record-${workflowId}`,
+    notifySocket: false,
+  })
+}
+
+export async function setWorkflowVariables(workflowId: string, variables: Record<string, unknown>) {
+  await db
+    .update(workflowTable)
+    .set({ variables, updatedAt: new Date() })
+    .where(eq(workflowTable.id, workflowId))
+}
+
+// ── Folder CRUD ──
+
+export interface CreateFolderInput {
+  userId: string
+  workspaceId: string
+  name: string
+  parentId?: string | null
+}
+
+export async function createFolderRecord(params: CreateFolderInput) {
+  const { userId, workspaceId, name, parentId = null } = params
+
+  const [maxResult] = await db
+    .select({ maxOrder: max(workflowFolder.sortOrder) })
+    .from(workflowFolder)
+    .where(
+      and(
+        eq(workflowFolder.workspaceId, workspaceId),
+        parentId ? eq(workflowFolder.parentId, parentId) : isNull(workflowFolder.parentId)
+      )
+    )
+  const sortOrder = (maxResult?.maxOrder ?? 0) + 1
+
+  const folderId = crypto.randomUUID()
+  await db.insert(workflowFolder).values({
+    id: folderId,
+    userId,
+    workspaceId,
+    parentId,
+    name,
+    sortOrder,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  })
+
+  return { folderId, name, workspaceId, parentId }
+}
+
+export async function updateFolderRecord(
+  folderId: string,
+  updates: { name?: string; parentId?: string | null }
+) {
+  const setData: Record<string, unknown> = { updatedAt: new Date() }
+  if (updates.name !== undefined) setData.name = updates.name
+  if (updates.parentId !== undefined) setData.parentId = updates.parentId
+  await db.update(workflowFolder).set(setData).where(eq(workflowFolder.id, folderId))
+}
+
+export async function deleteFolderRecord(folderId: string): Promise<boolean> {
+  const [folder] = await db
+    .select({ parentId: workflowFolder.parentId })
+    .from(workflowFolder)
+    .where(eq(workflowFolder.id, folderId))
+    .limit(1)
+
+  if (!folder) return false
+
+  await db
+    .update(workflowTable)
+    .set({ folderId: folder.parentId, updatedAt: new Date() })
+    .where(eq(workflowTable.folderId, folderId))
+
+  await db
+    .update(workflowFolder)
+    .set({ parentId: folder.parentId, updatedAt: new Date() })
+    .where(eq(workflowFolder.parentId, folderId))
+
+  await db.delete(workflowFolder).where(eq(workflowFolder.id, folderId))
+
+  return true
+}
+
+export async function listFolders(workspaceId: string) {
+  return db
+    .select({
+      folderId: workflowFolder.id,
+      folderName: workflowFolder.name,
+      parentId: workflowFolder.parentId,
+      sortOrder: workflowFolder.sortOrder,
+    })
+    .from(workflowFolder)
+    .where(eq(workflowFolder.workspaceId, workspaceId))
+    .orderBy(asc(workflowFolder.sortOrder), asc(workflowFolder.createdAt))
 }

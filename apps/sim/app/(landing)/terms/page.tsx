@@ -1,19 +1,11 @@
-'use client'
-
-import { useEffect } from 'react'
 import Link from 'next/link'
-import { getEnv } from '@/lib/env'
-import { LegalLayout } from '@/app/(landing)/components'
+import { getEnv } from '@/lib/core/config/env'
+import { ExternalRedirect, LegalLayout } from '@/app/(landing)/components'
 
 export default function TermsOfService() {
-  useEffect(() => {
-    const termsUrl = getEnv('NEXT_PUBLIC_TERMS_URL')
-    if (termsUrl?.startsWith('http')) {
-      window.location.href = termsUrl
-    }
-  }, [])
   return (
     <LegalLayout title='Terms of Service'>
+      <ExternalRedirect url={getEnv('NEXT_PUBLIC_TERMS_URL') ?? ''} />
       <section>
         <p className='mb-4'>Last Updated: October 11, 2025</p>
         <p>
@@ -289,7 +281,7 @@ export default function TermsOfService() {
           Agreement. The arbitration will be conducted by JAMS, an established alternative dispute
           resolution provider.
         </p>
-        <p className='mb-4 border-[var(--brand-primary-hex)] border-l-4 bg-[var(--brand-primary-hex)]/10 p-3'>
+        <p className='mb-4 border-[#3d3d3d] border-l-4 bg-[#2A2A2A] p-3 text-[#ECECEC]'>
           YOU AND COMPANY AGREE THAT EACH OF US MAY BRING CLAIMS AGAINST THE OTHER ONLY ON AN
           INDIVIDUAL BASIS AND NOT ON A CLASS, REPRESENTATIVE, OR COLLECTIVE BASIS. ONLY INDIVIDUAL
           RELIEF IS AVAILABLE, AND DISPUTES OF MORE THAN ONE CUSTOMER OR USER CANNOT BE ARBITRATED

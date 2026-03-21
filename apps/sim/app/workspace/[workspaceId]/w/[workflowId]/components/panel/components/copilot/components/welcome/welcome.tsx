@@ -2,9 +2,7 @@
 
 import { Button } from '@/components/emcn'
 
-/**
- * Props for the CopilotWelcome component
- */
+/** Props for the Welcome component */
 interface WelcomeProps {
   /** Callback when a suggested question is clicked */
   onQuestionClick?: (question: string) => void
@@ -12,13 +10,7 @@ interface WelcomeProps {
   mode?: 'ask' | 'build' | 'plan'
 }
 
-/**
- * Welcome screen component for the copilot
- * Displays suggested questions and capabilities based on current mode
- *
- * @param props - Component props
- * @returns Welcome screen UI
- */
+/** Welcome screen displaying suggested questions based on current mode */
 export function Welcome({ onQuestionClick, mode = 'ask' }: WelcomeProps) {
   const capabilities =
     mode === 'build'
@@ -64,16 +56,14 @@ export function Welcome({ onQuestionClick, mode = 'ask' }: WelcomeProps) {
           >
             <div className='flex flex-col items-start'>
               <p className='font-medium'>{title}</p>
-              <p className='text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
-                {question}
-              </p>
+              <p className='text-[var(--text-secondary)]'>{question}</p>
             </div>
           </Button>
         ))}
       </div>
 
       {/* Tips */}
-      <p className='pt-[12px] text-center text-[13px] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
+      <p className='pt-[12px] text-center text-[13px] text-[var(--text-secondary)]'>
         Tip: Use <span className='font-medium'>@</span> to reference chats, workflows, knowledge,
         blocks, or templates
       </p>

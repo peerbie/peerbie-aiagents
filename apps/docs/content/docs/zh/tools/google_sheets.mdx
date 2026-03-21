@@ -88,8 +88,8 @@ import { BlockInfoCard } from "@/components/ui/block-info-card"
 
 | 参数 | 类型 | 必需 | 描述 |
 | --------- | ---- | -------- | ----------- |
-| `spreadsheetId` | string | 是 | 要读取的电子表格的 ID |
-| `range` | string | 否 | 要读取的单元格范围 |
+| `spreadsheetId` | string | 是 | 电子表格的 ID \(可在 URL 中找到：docs.google.com/spreadsheets/d/\{SPREADSHEET_ID\}/edit\)。 |
+| `range` | string | 否 | 要读取的 A1 表示法范围 \(例如 "Sheet1!A1:D10", "A1:B5"\)。如果未指定，默认为第一个工作表 A1:Z1000。 |
 
 #### 输出
 
@@ -106,9 +106,9 @@ import { BlockInfoCard } from "@/components/ui/block-info-card"
 
 | 参数 | 类型 | 必需 | 描述 |
 | --------- | ---- | -------- | ----------- |
-| `spreadsheetId` | string | 是 | 要写入的电子表格的 ID |
-| `range` | string | 否 | 要写入的单元格范围 |
-| `values` | array | 是 | 要写入电子表格的数据 |
+| `spreadsheetId` | string | 是 | 电子表格的 ID |
+| `range` | string | 否 | 要写入的 A1 表示法范围 \(例如 "Sheet1!A1:D10", "A1:B5"\) |
+| `values` | array | 是 | 要写入的数据，格式为二维数组 \(例如 \[\["Name", "Age"\], \["Alice", 30\], \["Bob", 25\]\]\) 或对象数组。 |
 | `valueInputOption` | string | 否 | 要写入数据的格式 |
 | `includeValuesInResponse` | boolean | 否 | 是否在响应中包含写入的值 |
 
@@ -131,10 +131,10 @@ import { BlockInfoCard } from "@/components/ui/block-info-card"
 | 参数 | 类型 | 必需 | 描述 |
 | --------- | ---- | -------- | ----------- |
 | `spreadsheetId` | string | 是 | 要更新的电子表格的 ID |
-| `range` | string | 否 | 要更新的单元格范围 |
-| `values` | array | 是 | 要更新到电子表格中的数据 |
+| `range` | string | 否 | 要更新的 A1 表示法范围 \(例如 "Sheet1!A1:D10", "A1:B5"\) |
+| `values` | array | 是 | 要更新的数据，格式为二维数组 \(例如 \[\["Name", "Age"\], \["Alice", 30\]\]\) 或对象数组。 |
 | `valueInputOption` | string | 否 | 要更新数据的格式 |
-| `includeValuesInResponse` | boolean | 否 | 是否在响应中包含更新后的值 |
+| `includeValuesInResponse` | boolean | 否 | 是否在响应中包含更新的值 |
 
 #### 输出
 
@@ -154,12 +154,12 @@ import { BlockInfoCard } from "@/components/ui/block-info-card"
 
 | 参数 | 类型 | 必需 | 描述 |
 | --------- | ---- | -------- | ----------- |
-| `spreadsheetId` | string | 是 | 要追加的电子表格的 ID |
-| `range` | string | 否 | 要在其后追加的单元格范围 |
-| `values` | array | 是 | 要追加到电子表格的数据 |
+| `spreadsheetId` | string | 是 | 要追加数据的电子表格的 ID |
+| `range` | string | 否 | 要追加数据的单元格范围 \(例如："Sheet1", "Sheet1!A:D"\) |
+| `values` | array | 是 | 要追加的数据，格式为二维数组 \(例如：\[\["Alice", 30\], \["Bob", 25\]\]\) 或对象数组。 |
 | `valueInputOption` | string | 否 | 要追加数据的格式 |
-| `insertDataOption` | string | 否 | 如何插入数据 \(OVERWRITE 或 INSERT_ROWS\) |
-| `includeValuesInResponse` | boolean | 否 | 是否在响应中包含追加的值 |
+| `insertDataOption` | string | 否 | 数据插入方式 \(OVERWRITE 或 INSERT_ROWS\) |
+| `includeValuesInResponse` | boolean | 否 | 是否在响应中包含追加后的值 |
 
 #### 输出
 
@@ -176,3 +176,151 @@ import { BlockInfoCard } from "@/components/ui/block-info-card"
 
 - 类别: `tools`
 - 类型: `google_sheets`
+
+| 参数 | 类型 | 必填 | 描述 |
+| --------- | ---- | ---- | ----------- |
+| `spreadsheetId` | string | 是 | Google Sheets 电子表格 ID |
+| `includeGridData` | boolean | 否 | 是否包含网格数据（单元格值）。默认为 false。|
+
+#### 输出
+
+| 参数 | 类型 | 描述 |
+| --------- | ---- | ----------- |
+| `spreadsheetId` | string | 电子表格 ID |
+| `title` | string | 电子表格标题 |
+| `locale` | string | 电子表格的语言区域 |
+| `timeZone` | string | 电子表格的时区 |
+| `spreadsheetUrl` | string | 电子表格的 URL |
+| `sheets` | array | 电子表格中的工作表列表 |
+|   ↳ `sheetId` | number | 工作表 ID |
+|   ↳ `title` | string | 工作表标题/名称 |
+|   ↳ `index` | number | 工作表索引（位置）|
+|   ↳ `rowCount` | number | 工作表的行数 |
+|   ↳ `columnCount` | number | 工作表的列数 |
+|   ↳ `hidden` | boolean | 工作表是否隐藏 |
+
+### `google_sheets_create_spreadsheet`
+
+创建新的 Google Sheets 电子表格
+
+#### 输入
+
+| 参数 | 类型 | 必填 | 描述 |
+| --------- | ---- | ---- | ----------- |
+| `title` | string | 是 | 新电子表格的标题 |
+| `sheetTitles` | json | 否 | 要创建的工作表名称数组（例如， [ "Sheet1" , "Data" , "Summary" ]）。默认为单个 "Sheet1"。|
+| `locale` | string | 否 | 电子表格的语言区域（例如， "en_US" ）|
+| `timeZone` | string | 否 | 电子表格的时区（例如， "America/New_York" ）|
+
+#### 输出
+
+| 参数 | 类型 | 描述 |
+| --------- | ---- | ----------- |
+| `spreadsheetId` | string | 新建电子表格的 ID |
+| `title` | string | 新建电子表格的标题 |
+| `spreadsheetUrl` | string | 新建电子表格的 URL |
+| `sheets` | array | 电子表格中新建的工作表列表 |
+|   ↳ `sheetId` | number | 工作表 ID |
+|   ↳ `title` | string | 工作表标题/名称 |
+|   ↳ `index` | number | 工作表索引（位置） |
+
+### `google_sheets_batch_get`
+
+在一次请求中从 Google Sheets 电子表格读取多个范围
+
+#### 输入
+
+| 参数 | 类型 | 是否必需 | 描述 |
+| --------- | ---- | -------- | ----------- |
+| `spreadsheetId` | string | 是 | Google Sheets 电子表格 ID |
+| `ranges` | json | 是 | 要读取的范围数组（例如， [ "Sheet1!A1:D10" , "Sheet2!A1:B5" ] ）。每个范围应包含工作表名称。 |
+| `majorDimension` | string | 否 | 值的主维度： "ROWS" （默认）或 "COLUMNS" |
+| `valueRenderOption` | string | 否 | 值的渲染方式： "FORMATTED_VALUE" （默认）、 "UNFORMATTED_VALUE" 或 "FORMULA" |
+
+#### 输出
+
+| 参数 | 类型 | 描述 |
+| --------- | ---- | ----------- |
+| `spreadsheetId` | string | 电子表格 ID |
+| `valueRanges` | array | 从电子表格读取的值范围数组 |
+|   ↳ `range` | string | 读取的范围 |
+|   ↳ `majorDimension` | string | 主维度（ ROWS 或 COLUMNS ） |
+|   ↳ `values` | array | 单元格值（二维数组） |
+| `metadata` | json | 包含 ID 和 URL 的电子表格元数据 |
+|   ↳ `spreadsheetId` | string | Google Sheets 电子表格 ID |
+|   ↳ `spreadsheetUrl` | string | 电子表格 URL |
+
+### `google_sheets_batch_update`
+
+在 Google Sheets 电子表格中通过单个请求更新多个范围
+
+#### 输入
+
+| 参数 | 类型 | 是否必需 | 描述 |
+| --------- | ---- | -------- | ----------- |
+| `spreadsheetId` | string | 是 | Google Sheets 电子表格 ID |
+| `data` | json | 是 | 要更新的数值范围数组。每个项应包含 "range"（如 "Sheet1!A1:D10"）和 "values"（二维数组）。|
+| `valueInputOption` | string | 否 | 输入数据的解释方式："RAW" 或 "USER_ENTERED"（默认）。USER_ENTERED 会解析公式。|
+
+#### 输出
+
+| 参数 | 类型 | 描述 |
+| --------- | ---- | ----------- |
+| `spreadsheetId` | string | 电子表格 ID |
+| `totalUpdatedRows` | number | 更新的总行数 |
+| `totalUpdatedColumns` | number | 更新的总列数 |
+| `totalUpdatedCells` | number | 更新的总单元格数 |
+| `totalUpdatedSheets` | number | 更新的总工作表数 |
+| `responses` | array | 每个范围的更新响应数组 |
+|   ↳ `spreadsheetId` | string | 电子表格 ID |
+|   ↳ `updatedRange` | string | 被更新的范围 |
+|   ↳ `updatedRows` | number | 此范围内更新的行数 |
+|   ↳ `updatedColumns` | number | 此范围内更新的列数 |
+|   ↳ `updatedCells` | number | 此范围内更新的单元格数 |
+| `metadata` | json | 包含 ID 和 URL 的电子表格元数据 |
+|   ↳ `spreadsheetId` | string | Google Sheets 电子表格 ID |
+|   ↳ `spreadsheetUrl` | string | 电子表格 URL |
+
+### `google_sheets_batch_clear`
+
+在一次请求中清除 Google Sheets 电子表格中的多个范围
+
+#### 输入
+
+| 参数 | 类型 | 是否必需 | 描述 |
+| --------- | ---- | -------- | ----------- |
+| `spreadsheetId` | string | 是 | Google Sheets 电子表格 ID |
+| `ranges` | json | 是 | 要清除的范围数组（例如， ["Sheet1!A1:D10", "Sheet2!A1:B5"] ）。每个范围应包含工作表名称。|
+
+#### 输出
+
+| 参数 | 类型 | 描述 |
+| --------- | ---- | ----------- |
+| `spreadsheetId` | string | 电子表格 ID |
+| `clearedRanges` | array | 已清除的范围数组 |
+| `metadata` | json | 包含 ID 和 URL 的电子表格元数据 |
+|   ↳ `spreadsheetId` | string | Google Sheets 电子表格 ID |
+|   ↳ `spreadsheetUrl` | string | 电子表格 URL |
+
+### `google_sheets_copy_sheet`
+
+将一个工作表从一个电子表格复制到另一个电子表格
+
+#### 输入
+
+| 参数 | 类型 | 是否必需 | 描述 |
+| --------- | ---- | -------- | ----------- |
+| `sourceSpreadsheetId` | string | 是 | 源 Google Sheets 电子表格 ID |
+| `sheetId` | number | 是 | 要复制的工作表 ID（数字 ID，不是工作表名称）。可使用“获取电子表格”查找工作表 ID。|
+| `destinationSpreadsheetId` | string | 是 | 目标电子表格的 ID（将复制工作表到此处）|
+
+#### 输出
+
+| 参数 | 类型 | 描述 |
+| --------- | ---- | ----------- |
+| `sheetId` | number | 目标电子表格中新建工作表的 ID |
+| `title` | string | 复制工作表的标题 |
+| `index` | number | 复制工作表的索引（位置）|
+| `sheetType` | string | 工作表类型（GRID、CHART 等）|
+| `destinationSpreadsheetId` | string | 目标电子表格 ID |
+| `destinationSpreadsheetUrl` | string | 目标电子表格的 URL |

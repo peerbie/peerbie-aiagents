@@ -1,6 +1,9 @@
+import { createLogger } from '@sim/logger'
+import JSON5 from 'json5'
 import { create } from 'zustand'
 import { devtools } from 'zustand/middleware'
-import { createLogger } from '@/lib/logs/console/logger'
+import { normalizeName } from '@/executor/constants'
+import { useOperationQueueStore } from '@/stores/operation-queue/store'
 import type { Variable, VariablesStore } from '@/stores/panel/variables/types'
 import { useWorkflowRegistry } from '@/stores/workflows/registry/store'
 import { useSubBlockStore } from '@/stores/workflows/subblock/store'
@@ -28,7 +31,7 @@ function validateVariable(variable: Variable): string | undefined {
             return 'Not a valid object format'
           }
 
-          const parsed = new Function(`return ${valueToEvaluate}`)()
+          const parsed = JSON5.parse(valueToEvaluate)
 
           if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
             return 'Not a valid object'
@@ -41,12 +44,12 @@ function validateVariable(variable: Variable): string | undefined {
         }
       case 'array':
         try {
-          const parsed = JSON.parse(String(variable.value))
+          const parsed = JSON5.parse(String(variable.value))
           if (!Array.isArray(parsed)) {
-            return 'Not a valid JSON array'
+            return 'Not a valid array'
           }
         } catch {
-          return 'Invalid JSON array syntax'
+          return 'Invalid array syntax'
         }
         break
     }
@@ -177,49 +180,72 @@ export const useVariablesStore = create<VariablesStore>()(
             if (activeWorkflowId) {
               const workflowValues = subBlockStore.workflowValues[activeWorkflowId] || {}
               const updatedWorkflowValues = { ...workflowValues }
+              const changedSubBlocks: Array<{ blockId: string; subBlockId: string; value: any }> =
+                []
+
+              const oldVarName = normalizeName(oldVariableName)
+              const newVarName = normalizeName(newName)
+              const regex = new RegExp(`<variable\\.${oldVarName}>`, 'gi')
+
+              const updateReferences = (value: any, pattern: RegExp, replacement: string): any => {
+                if (typeof value === 'string') {
+                  return pattern.test(value) ? value.replace(pattern, replacement) : value
+                }
+
+                if (Array.isArray(value)) {
+                  return value.map((item) => updateReferences(item, pattern, replacement))
+                }
+
+                if (value !== null && typeof value === 'object') {
+                  const result = { ...value }
+                  for (const key in result) {
+                    result[key] = updateReferences(result[key], pattern, replacement)
+                  }
+                  return result
+                }
+
+                return value
+              }
 
               Object.entries(workflowValues).forEach(([blockId, blockValues]) => {
                 Object.entries(blockValues as Record<string, any>).forEach(
                   ([subBlockId, value]) => {
-                    const oldVarName = oldVariableName.replace(/\s+/g, '').toLowerCase()
-                    const newVarName = newName.replace(/\s+/g, '').toLowerCase()
-                    const regex = new RegExp(`<variable\.${oldVarName}>`, 'gi')
+                    const updatedValue = updateReferences(value, regex, `<variable.${newVarName}>`)
 
-                    updatedWorkflowValues[blockId][subBlockId] = updateReferences(
-                      value,
-                      regex,
-                      `<variable.${newVarName}>`
-                    )
-
-                    function updateReferences(value: any, regex: RegExp, replacement: string): any {
-                      if (typeof value === 'string') {
-                        return regex.test(value) ? value.replace(regex, replacement) : value
+                    if (JSON.stringify(updatedValue) !== JSON.stringify(value)) {
+                      if (!updatedWorkflowValues[blockId]) {
+                        updatedWorkflowValues[blockId] = { ...workflowValues[blockId] }
                       }
-
-                      if (Array.isArray(value)) {
-                        return value.map((item) => updateReferences(item, regex, replacement))
-                      }
-
-                      if (value !== null && typeof value === 'object') {
-                        const result = { ...value }
-                        for (const key in result) {
-                          result[key] = updateReferences(result[key], regex, replacement)
-                        }
-                        return result
-                      }
-
-                      return value
+                      updatedWorkflowValues[blockId][subBlockId] = updatedValue
+                      changedSubBlocks.push({ blockId, subBlockId, value: updatedValue })
                     }
                   }
                 )
               })
 
+              // Update local state
               useSubBlockStore.setState({
                 workflowValues: {
                   ...subBlockStore.workflowValues,
                   [activeWorkflowId]: updatedWorkflowValues,
                 },
               })
+
+              // Queue operations for persistence via socket
+              const operationQueue = useOperationQueueStore.getState()
+
+              for (const { blockId, subBlockId, value } of changedSubBlocks) {
+                operationQueue.addToQueue({
+                  id: crypto.randomUUID(),
+                  operation: {
+                    operation: 'subblock-update',
+                    target: 'subblock',
+                    payload: { blockId, subblockId: subBlockId, value },
+                  },
+                  workflowId: activeWorkflowId,
+                  userId: 'system',
+                })
+              }
             }
           }
         }
@@ -256,39 +282,6 @@ export const useVariablesStore = create<VariablesStore>()(
 
         return { variables: rest }
       })
-    },
-
-    duplicateVariable: (id, providedId?: string) => {
-      const state = get()
-      if (!state.variables[id]) return ''
-
-      const variable = state.variables[id]
-      const newId = providedId || crypto.randomUUID()
-
-      const workflowVariables = get().getVariablesByWorkflowId(variable.workflowId)
-      const baseName = `${variable.name} (copy)`
-      let uniqueName = baseName
-      let nameIndex = 1
-
-      while (workflowVariables.some((v) => v.name === uniqueName)) {
-        uniqueName = `${baseName} (${nameIndex})`
-        nameIndex++
-      }
-
-      set((state) => ({
-        variables: {
-          ...state.variables,
-          [newId]: {
-            id: newId,
-            workflowId: variable.workflowId,
-            name: uniqueName,
-            type: variable.type,
-            value: variable.value,
-          },
-        },
-      }))
-
-      return newId
     },
 
     getVariablesByWorkflowId: (workflowId) => {

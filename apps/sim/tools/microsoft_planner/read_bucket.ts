@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   MicrosoftPlannerReadBucketResponse,
   MicrosoftPlannerToolParams,
@@ -31,8 +31,8 @@ export const readBucketTool: ToolConfig<
     bucketId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the bucket to retrieve',
+      visibility: 'user-or-llm',
+      description: 'The ID of the bucket to retrieve (e.g., "hsOf2dhOJkC6Fey9VjDg1JgAC9Rq")',
     },
   },
 
@@ -76,6 +76,13 @@ export const readBucketTool: ToolConfig<
   outputs: {
     success: { type: 'boolean', description: 'Whether the bucket was retrieved successfully' },
     bucket: { type: 'object', description: 'The bucket object with all properties' },
-    metadata: { type: 'object', description: 'Metadata including bucketId and planId' },
+    metadata: {
+      type: 'object',
+      description: 'Metadata including bucketId and planId',
+      properties: {
+        bucketId: { type: 'string', description: 'Bucket ID' },
+        planId: { type: 'string', description: 'Parent plan ID' },
+      },
+    },
   },
 }

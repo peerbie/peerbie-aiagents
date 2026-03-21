@@ -1,8 +1,9 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   HubSpotSearchCompaniesParams,
   HubSpotSearchCompaniesResponse,
 } from '@/tools/hubspot/types'
+import { COMPANIES_ARRAY_OUTPUT, METADATA_OUTPUT, PAGING_OUTPUT } from '@/tools/hubspot/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('HubSpotSearchCompanies')
@@ -31,40 +32,42 @@ export const hubspotSearchCompaniesTool: ToolConfig<
     filterGroups: {
       type: 'array',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description:
-        'Array of filter groups. Each group contains filters with propertyName, operator, and value',
+        'Array of filter groups as JSON. Each group contains "filters" array with objects having "propertyName", "operator" (e.g., "EQ", "CONTAINS"), and "value"',
     },
     sorts: {
       type: 'array',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description:
-        'Array of sort objects with propertyName and direction ("ASCENDING" or "DESCENDING")',
+        'Array of sort objects as JSON with "propertyName" and "direction" ("ASCENDING" or "DESCENDING")',
     },
     query: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Search query string',
+      visibility: 'user-or-llm',
+      description:
+        'Search query string to match against company name, domain, and other text fields',
     },
     properties: {
       type: 'array',
       required: false,
-      visibility: 'user-only',
-      description: 'Array of property names to return',
+      visibility: 'user-or-llm',
+      description:
+        'Array of HubSpot property names to return (e.g., ["name", "domain", "industry"])',
     },
     limit: {
       type: 'number',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Maximum number of results to return (max 100)',
     },
     after: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Pagination cursor for next page',
+      visibility: 'user-or-llm',
+      description: 'Pagination cursor for next page (from previous response)',
     },
   },
 
@@ -84,17 +87,47 @@ export const hubspotSearchCompaniesTool: ToolConfig<
     body: (params) => {
       const body: any = {}
 
-      if (params.filterGroups && params.filterGroups.length > 0) {
-        body.filterGroups = params.filterGroups
+      if (params.filterGroups) {
+        let parsedFilterGroups = params.filterGroups
+        if (typeof params.filterGroups === 'string') {
+          try {
+            parsedFilterGroups = JSON.parse(params.filterGroups)
+          } catch (e) {
+            throw new Error(`Invalid JSON for filterGroups: ${(e as Error).message}`)
+          }
+        }
+        if (Array.isArray(parsedFilterGroups) && parsedFilterGroups.length > 0) {
+          body.filterGroups = parsedFilterGroups
+        }
       }
-      if (params.sorts && params.sorts.length > 0) {
-        body.sorts = params.sorts
+      if (params.sorts) {
+        let parsedSorts = params.sorts
+        if (typeof params.sorts === 'string') {
+          try {
+            parsedSorts = JSON.parse(params.sorts)
+          } catch (e) {
+            throw new Error(`Invalid JSON for sorts: ${(e as Error).message}`)
+          }
+        }
+        if (Array.isArray(parsedSorts) && parsedSorts.length > 0) {
+          body.sorts = parsedSorts
+        }
       }
       if (params.query) {
         body.query = params.query
       }
-      if (params.properties && params.properties.length > 0) {
-        body.properties = params.properties
+      if (params.properties) {
+        let parsedProperties = params.properties
+        if (typeof params.properties === 'string') {
+          try {
+            parsedProperties = JSON.parse(params.properties)
+          } catch (e) {
+            throw new Error(`Invalid JSON for properties: ${(e as Error).message}`)
+          }
+        }
+        if (Array.isArray(parsedProperties) && parsedProperties.length > 0) {
+          body.properties = parsedProperties
+        }
       }
       if (params.limit) {
         body.limit = params.limit
@@ -119,12 +152,11 @@ export const hubspotSearchCompaniesTool: ToolConfig<
       success: true,
       output: {
         companies: data.results || [],
-        total: data.total,
-        paging: data.paging,
+        total: data.total ?? null,
+        paging: data.paging ?? null,
         metadata: {
-          operation: 'search_companies' as const,
           totalReturned: data.results?.length || 0,
-          total: data.total,
+          hasMore: !!data.paging?.next,
         },
         success: true,
       },
@@ -132,29 +164,10 @@ export const hubspotSearchCompaniesTool: ToolConfig<
   },
 
   outputs: {
+    companies: COMPANIES_ARRAY_OUTPUT,
+    total: { type: 'number', description: 'Total number of matching companies', optional: true },
+    paging: PAGING_OUTPUT,
+    metadata: METADATA_OUTPUT,
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Search results',
-      properties: {
-        companies: {
-          type: 'array',
-          description: 'Array of matching company objects',
-        },
-        total: {
-          type: 'number',
-          description: 'Total number of matching companies',
-        },
-        paging: {
-          type: 'object',
-          description: 'Pagination information',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

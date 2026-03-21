@@ -1,4 +1,8 @@
 import type { CapturePaymentIntentParams, PaymentIntentResponse } from '@/tools/stripe/types'
+import {
+  PAYMENT_INTENT_METADATA_OUTPUT_PROPERTIES,
+  PAYMENT_INTENT_OUTPUT,
+} from '@/tools/stripe/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const stripeCapturePaymentIntentTool: ToolConfig<
@@ -65,12 +69,13 @@ export const stripeCapturePaymentIntentTool: ToolConfig<
 
   outputs: {
     payment_intent: {
-      type: 'json',
+      ...PAYMENT_INTENT_OUTPUT,
       description: 'The captured Payment Intent object',
     },
     metadata: {
       type: 'json',
       description: 'Payment Intent metadata including ID, status, amount, and currency',
+      properties: PAYMENT_INTENT_METADATA_OUTPUT_PROPERTIES,
     },
   },
 }

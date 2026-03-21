@@ -50,7 +50,13 @@ export const SUPPORTED_MIME_TYPES: Record<SupportedDocumentExtension, string[]> 
     'application/octet-stream',
   ],
   txt: ['text/plain', 'text/x-plain', 'application/txt'],
-  md: ['text/markdown', 'text/x-markdown', 'text/plain', 'application/markdown'],
+  md: [
+    'text/markdown',
+    'text/x-markdown',
+    'text/plain',
+    'application/markdown',
+    'application/octet-stream',
+  ],
   xlsx: [
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'application/octet-stream',
@@ -105,6 +111,22 @@ export const ACCEPTED_FILE_EXTENSIONS = SUPPORTED_DOCUMENT_EXTENSIONS.map((ext) 
 
 export const ACCEPT_ATTRIBUTE = [...ACCEPTED_FILE_TYPES, ...ACCEPTED_FILE_EXTENSIONS].join(',')
 
+const SUPPORTED_IMAGE_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/svg+xml',
+]
+
+const SUPPORTED_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg']
+
+export const CHAT_ACCEPT_ATTRIBUTE = [
+  ACCEPT_ATTRIBUTE,
+  ...SUPPORTED_IMAGE_MIME_TYPES,
+  ...SUPPORTED_IMAGE_EXTENSIONS,
+].join(',')
+
 export interface FileValidationError {
   code: 'UNSUPPORTED_FILE_TYPE' | 'MIME_TYPE_MISMATCH'
   message: string
@@ -126,6 +148,11 @@ export function validateFileType(fileName: string, mimeType: string): FileValida
   }
 
   const baseMimeType = mimeType.split(';')[0].trim()
+
+  // Allow empty MIME types if the extension is supported (browsers often don't recognize certain file types)
+  if (!baseMimeType) {
+    return null
+  }
 
   const allowedMimeTypes = SUPPORTED_MIME_TYPES[extension]
   if (!allowedMimeTypes.includes(baseMimeType)) {
@@ -181,6 +208,15 @@ export function isSupportedVideoExtension(extension: string): extension is Suppo
 /**
  * Validate if an audio/video file type is supported for STT processing
  */
+const PNG_MAGIC_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+/**
+ * Validate that a buffer contains valid PNG data by checking magic bytes
+ */
+export function isValidPng(buffer: Buffer): boolean {
+  return buffer.length >= 8 && buffer.subarray(0, 8).equals(PNG_MAGIC_BYTES)
+}
+
 export function validateMediaFileType(
   fileName: string,
   mimeType: string

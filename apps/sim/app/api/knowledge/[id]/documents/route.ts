@@ -1,18 +1,22 @@
 import { randomUUID } from 'crypto'
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
+import { AuditAction, AuditResourceType, recordAudit } from '@/lib/audit/log'
 import { getSession } from '@/lib/auth'
+import { checkSessionOrInternalAuth } from '@/lib/auth/hybrid'
 import {
   bulkDocumentOperation,
+  bulkDocumentOperationByFilter,
   createDocumentRecords,
   createSingleDocument,
   getDocuments,
   getProcessingConfig,
   processDocumentsWithQueue,
+  type TagFilterCondition,
 } from '@/lib/knowledge/documents/service'
 import type { DocumentSortField, SortOrder } from '@/lib/knowledge/documents/types'
-import { createLogger } from '@/lib/logs/console/logger'
-import { getUserId } from '@/app/api/auth/oauth/utils'
+import { authorizeWorkflowByWorkspacePermission } from '@/lib/workflows/utils'
 import { checkKnowledgeBaseAccess, checkKnowledgeBaseWriteAccess } from '@/app/api/knowledge/utils'
 
 const logger = createLogger('DocumentsAPI')
@@ -34,25 +38,43 @@ const CreateDocumentSchema = z.object({
   documentTagsData: z.string().optional(),
 })
 
+/**
+ * Schema for bulk document creation with processing options
+ *
+ * Processing options units:
+ * - chunkSize: tokens (1 token ≈ 4 characters)
+ * - minCharactersPerChunk: characters
+ * - chunkOverlap: characters
+ */
 const BulkCreateDocumentsSchema = z.object({
   documents: z.array(CreateDocumentSchema),
   processingOptions: z.object({
+    /** Maximum chunk size in tokens (1 token ≈ 4 characters) */
     chunkSize: z.number().min(100).max(4000),
+    /** Minimum chunk size in characters */
     minCharactersPerChunk: z.number().min(1).max(2000),
     recipe: z.string(),
     lang: z.string(),
+    /** Overlap between chunks in characters */
     chunkOverlap: z.number().min(0).max(500),
   }),
   bulk: z.literal(true),
 })
 
-const BulkUpdateDocumentsSchema = z.object({
-  operation: z.enum(['enable', 'disable', 'delete']),
-  documentIds: z
-    .array(z.string())
-    .min(1, 'At least one document ID is required')
-    .max(100, 'Cannot operate on more than 100 documents at once'),
-})
+const BulkUpdateDocumentsSchema = z
+  .object({
+    operation: z.enum(['enable', 'disable', 'delete']),
+    documentIds: z
+      .array(z.string())
+      .min(1, 'At least one document ID is required')
+      .max(100, 'Cannot operate on more than 100 documents at once')
+      .optional(),
+    selectAll: z.boolean().optional(),
+    enabledFilter: z.enum(['all', 'enabled', 'disabled']).optional(),
+  })
+  .refine((data) => data.selectAll || (data.documentIds && data.documentIds.length > 0), {
+    message: 'Either selectAll must be true or documentIds must be provided',
+  })
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const requestId = randomUUID().slice(0, 8)
@@ -79,14 +101,17 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     }
 
     const url = new URL(req.url)
-    const includeDisabled = url.searchParams.get('includeDisabled') === 'true'
+    const enabledFilter = url.searchParams.get('enabledFilter') as
+      | 'all'
+      | 'enabled'
+      | 'disabled'
+      | null
     const search = url.searchParams.get('search') || undefined
     const limit = Number.parseInt(url.searchParams.get('limit') || '50')
     const offset = Number.parseInt(url.searchParams.get('offset') || '0')
     const sortByParam = url.searchParams.get('sortBy')
     const sortOrderParam = url.searchParams.get('sortOrder')
 
-    // Validate sort parameters
     const validSortFields: DocumentSortField[] = [
       'filename',
       'fileSize',
@@ -94,6 +119,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       'chunkCount',
       'uploadedAt',
       'processingStatus',
+      'enabled',
     ]
     const validSortOrders: SortOrder[] = ['asc', 'desc']
 
@@ -106,15 +132,31 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         ? (sortOrderParam as SortOrder)
         : undefined
 
+    let tagFilters: TagFilterCondition[] | undefined
+    const tagFiltersParam = url.searchParams.get('tagFilters')
+    if (tagFiltersParam) {
+      try {
+        const parsed = JSON.parse(tagFiltersParam)
+        if (Array.isArray(parsed)) {
+          tagFilters = parsed.filter(
+            (f: TagFilterCondition) => f.tagSlot && f.operator && f.value !== undefined
+          )
+        }
+      } catch {
+        logger.warn(`[${requestId}] Invalid tagFilters param`)
+      }
+    }
+
     const result = await getDocuments(
       knowledgeBaseId,
       {
-        includeDisabled,
+        enabledFilter: enabledFilter || undefined,
         search,
         limit,
         offset,
         ...(sortBy && { sortBy }),
         ...(sortOrder && { sortOrder }),
+        tagFilters,
       },
       requestId
     )
@@ -147,16 +189,28 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       bodyKeys: Object.keys(body),
     })
 
-    const userId = await getUserId(requestId, workflowId)
-
-    if (!userId) {
-      const errorMessage = workflowId ? 'Workflow not found' : 'Unauthorized'
-      const statusCode = workflowId ? 404 : 401
-      logger.warn(`[${requestId}] Authentication failed: ${errorMessage}`, {
+    const auth = await checkSessionOrInternalAuth(req, { requireWorkflowId: false })
+    if (!auth.success || !auth.userId) {
+      logger.warn(`[${requestId}] Authentication failed: ${auth.error || 'Unauthorized'}`, {
         workflowId,
         hasWorkflowId: !!workflowId,
       })
-      return NextResponse.json({ error: errorMessage }, { status: statusCode })
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    const userId = auth.userId
+
+    if (workflowId) {
+      const authorization = await authorizeWorkflowByWorkspacePermission({
+        workflowId,
+        userId,
+        action: 'write',
+      })
+      if (!authorization.allowed) {
+        return NextResponse.json(
+          { error: authorization.message || 'Access denied' },
+          { status: authorization.status }
+        )
+      }
     }
 
     const accessCheck = await checkKnowledgeBaseWriteAccess(knowledgeBaseId, userId)
@@ -179,23 +233,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         const createdDocuments = await createDocumentRecords(
           validatedData.documents,
           knowledgeBaseId,
-          requestId,
-          userId
+          requestId
         )
 
         logger.info(
           `[${requestId}] Starting controlled async processing of ${createdDocuments.length} documents`
         )
 
-        // Track bulk document upload
         try {
-          const { trackPlatformEvent } = await import('@/lib/telemetry/tracer')
-          trackPlatformEvent('platform.knowledge_base.documents_uploaded', {
-            'knowledge_base.id': knowledgeBaseId,
-            'documents.count': createdDocuments.length,
-            'documents.upload_type': 'bulk',
-            'processing.chunk_size': validatedData.processingOptions.chunkSize,
-            'processing.recipe': validatedData.processingOptions.recipe,
+          const { PlatformEvents } = await import('@/lib/core/telemetry')
+          PlatformEvents.knowledgeBaseDocumentsUploaded({
+            knowledgeBaseId,
+            documentsCount: createdDocuments.length,
+            uploadType: 'bulk',
+            chunkSize: validatedData.processingOptions.chunkSize,
+            recipe: validatedData.processingOptions.recipe,
           })
         } catch (_e) {
           // Silently fail
@@ -208,6 +260,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           requestId
         ).catch((error: unknown) => {
           logger.error(`[${requestId}] Critical error in document processing pipeline:`, error)
+        })
+
+        recordAudit({
+          workspaceId: accessCheck.knowledgeBase?.workspaceId ?? null,
+          actorId: userId,
+          actorName: auth.userName,
+          actorEmail: auth.userEmail,
+          action: AuditAction.DOCUMENT_UPLOADED,
+          resourceType: AuditResourceType.DOCUMENT,
+          resourceId: knowledgeBaseId,
+          resourceName: `${createdDocuments.length} document(s)`,
+          description: `Uploaded ${createdDocuments.length} document(s) to knowledge base "${knowledgeBaseId}"`,
+          metadata: {
+            fileCount: createdDocuments.length,
+            fileNames: createdDocuments.map((doc) => doc.filename),
+          },
+          request: req,
         })
 
         return NextResponse.json({
@@ -240,30 +309,41 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         throw validationError
       }
     } else {
-      // Handle single document creation
       try {
         const validatedData = CreateDocumentSchema.parse(body)
 
-        const newDocument = await createSingleDocument(
-          validatedData,
-          knowledgeBaseId,
-          requestId,
-          userId
-        )
+        const newDocument = await createSingleDocument(validatedData, knowledgeBaseId, requestId)
 
-        // Track single document upload
         try {
-          const { trackPlatformEvent } = await import('@/lib/telemetry/tracer')
-          trackPlatformEvent('platform.knowledge_base.documents_uploaded', {
-            'knowledge_base.id': knowledgeBaseId,
-            'documents.count': 1,
-            'documents.upload_type': 'single',
-            'document.mime_type': validatedData.mimeType,
-            'document.file_size': validatedData.fileSize,
+          const { PlatformEvents } = await import('@/lib/core/telemetry')
+          PlatformEvents.knowledgeBaseDocumentsUploaded({
+            knowledgeBaseId,
+            documentsCount: 1,
+            uploadType: 'single',
+            mimeType: validatedData.mimeType,
+            fileSize: validatedData.fileSize,
           })
         } catch (_e) {
           // Silently fail
         }
+
+        recordAudit({
+          workspaceId: accessCheck.knowledgeBase?.workspaceId ?? null,
+          actorId: userId,
+          actorName: auth.userName,
+          actorEmail: auth.userEmail,
+          action: AuditAction.DOCUMENT_UPLOADED,
+          resourceType: AuditResourceType.DOCUMENT,
+          resourceId: knowledgeBaseId,
+          resourceName: validatedData.filename,
+          description: `Uploaded document "${validatedData.filename}" to knowledge base "${knowledgeBaseId}"`,
+          metadata: {
+            fileName: validatedData.filename,
+            fileType: validatedData.mimeType,
+            fileSize: validatedData.fileSize,
+          },
+          request: req,
+        })
 
         return NextResponse.json({
           success: true,
@@ -285,12 +365,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   } catch (error) {
     logger.error(`[${requestId}] Error creating document`, error)
 
-    // Check if it's a storage limit error
     const errorMessage = error instanceof Error ? error.message : 'Failed to create document'
     const isStorageLimitError =
       errorMessage.includes('Storage limit exceeded') || errorMessage.includes('storage limit')
+    const isMissingKnowledgeBase = errorMessage === 'Knowledge base not found'
 
-    return NextResponse.json({ error: errorMessage }, { status: isStorageLimitError ? 413 : 500 })
+    return NextResponse.json(
+      { error: errorMessage },
+      { status: isMissingKnowledgeBase ? 404 : isStorageLimitError ? 413 : 500 }
+    )
   }
 }
 
@@ -322,16 +405,22 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     try {
       const validatedData = BulkUpdateDocumentsSchema.parse(body)
-      const { operation, documentIds } = validatedData
+      const { operation, documentIds, selectAll, enabledFilter } = validatedData
 
       try {
-        const result = await bulkDocumentOperation(
-          knowledgeBaseId,
-          operation,
-          documentIds,
-          requestId,
-          session.user.id
-        )
+        let result
+        if (selectAll) {
+          result = await bulkDocumentOperationByFilter(
+            knowledgeBaseId,
+            operation,
+            enabledFilter,
+            requestId
+          )
+        } else if (documentIds && documentIds.length > 0) {
+          result = await bulkDocumentOperation(knowledgeBaseId, operation, documentIds, requestId)
+        } else {
+          return NextResponse.json({ error: 'No documents specified' }, { status: 400 })
+        }
 
         return NextResponse.json({
           success: true,

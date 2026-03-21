@@ -5,9 +5,13 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="simstudio-sdk",
-    version="0.1.0",
+    version="0.1.1",
     author="Sim",
+<<<<<<< HEAD
     author_email="support@peerbie.com",
+=======
+    author_email="help@sim.ai",
+>>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b
     description="Sim SDK - Execute workflows programmatically",
     long_description=long_description,
     long_description_content_type="text/markdown",

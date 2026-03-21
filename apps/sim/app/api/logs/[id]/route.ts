@@ -1,10 +1,16 @@
 import { db } from '@sim/db'
-import { permissions, workflow, workflowExecutionLogs } from '@sim/db/schema'
+import {
+  jobExecutionLogs,
+  permissions,
+  workflow,
+  workflowDeploymentVersion,
+  workflowExecutionLogs,
+} from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
+import { generateRequestId } from '@/lib/core/utils/request'
 
 const logger = createLogger('LogDetailsByIdAPI')
 
@@ -29,7 +35,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         workflowId: workflowExecutionLogs.workflowId,
         executionId: workflowExecutionLogs.executionId,
         stateSnapshotId: workflowExecutionLogs.stateSnapshotId,
+        deploymentVersionId: workflowExecutionLogs.deploymentVersionId,
         level: workflowExecutionLogs.level,
+        status: workflowExecutionLogs.status,
         trigger: workflowExecutionLogs.trigger,
         startedAt: workflowExecutionLogs.startedAt,
         endedAt: workflowExecutionLogs.endedAt,
@@ -46,14 +54,20 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
         workflowWorkspaceId: workflow.workspaceId,
         workflowCreatedAt: workflow.createdAt,
         workflowUpdatedAt: workflow.updatedAt,
+        deploymentVersion: workflowDeploymentVersion.version,
+        deploymentVersionName: workflowDeploymentVersion.name,
       })
       .from(workflowExecutionLogs)
-      .innerJoin(workflow, eq(workflowExecutionLogs.workflowId, workflow.id))
+      .leftJoin(workflow, eq(workflowExecutionLogs.workflowId, workflow.id))
+      .leftJoin(
+        workflowDeploymentVersion,
+        eq(workflowDeploymentVersion.id, workflowExecutionLogs.deploymentVersionId)
+      )
       .innerJoin(
         permissions,
         and(
           eq(permissions.entityType, 'workspace'),
-          eq(permissions.entityId, workflow.workspaceId),
+          eq(permissions.entityId, workflowExecutionLogs.workspaceId),
           eq(permissions.userId, userId)
         )
       )
@@ -61,27 +75,89 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       .limit(1)
 
     const log = rows[0]
+
+    // Fallback: check job_execution_logs
     if (!log) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+      const jobRows = await db
+        .select({
+          id: jobExecutionLogs.id,
+          executionId: jobExecutionLogs.executionId,
+          level: jobExecutionLogs.level,
+          status: jobExecutionLogs.status,
+          trigger: jobExecutionLogs.trigger,
+          startedAt: jobExecutionLogs.startedAt,
+          endedAt: jobExecutionLogs.endedAt,
+          totalDurationMs: jobExecutionLogs.totalDurationMs,
+          executionData: jobExecutionLogs.executionData,
+          cost: jobExecutionLogs.cost,
+          createdAt: jobExecutionLogs.createdAt,
+        })
+        .from(jobExecutionLogs)
+        .innerJoin(
+          permissions,
+          and(
+            eq(permissions.entityType, 'workspace'),
+            eq(permissions.entityId, jobExecutionLogs.workspaceId),
+            eq(permissions.userId, userId)
+          )
+        )
+        .where(eq(jobExecutionLogs.id, id))
+        .limit(1)
+
+      const jobLog = jobRows[0]
+      if (!jobLog) {
+        return NextResponse.json({ error: 'Not found' }, { status: 404 })
+      }
+
+      const execData = jobLog.executionData as Record<string, any> | null
+      const response = {
+        id: jobLog.id,
+        workflowId: null,
+        executionId: jobLog.executionId,
+        deploymentVersionId: null,
+        deploymentVersion: null,
+        deploymentVersionName: null,
+        level: jobLog.level,
+        status: jobLog.status,
+        duration: jobLog.totalDurationMs ? `${jobLog.totalDurationMs}ms` : null,
+        trigger: jobLog.trigger,
+        createdAt: jobLog.startedAt.toISOString(),
+        workflow: null,
+        jobTitle: (execData?.trigger?.source as string) || null,
+        executionData: {
+          totalDuration: jobLog.totalDurationMs,
+          ...execData,
+          enhanced: true,
+        },
+        cost: jobLog.cost as any,
+      }
+
+      return NextResponse.json({ data: response })
     }
 
-    const workflowSummary = {
-      id: log.workflowId,
-      name: log.workflowName,
-      description: log.workflowDescription,
-      color: log.workflowColor,
-      folderId: log.workflowFolderId,
-      userId: log.workflowUserId,
-      workspaceId: log.workflowWorkspaceId,
-      createdAt: log.workflowCreatedAt,
-      updatedAt: log.workflowUpdatedAt,
-    }
+    const workflowSummary = log.workflowId
+      ? {
+          id: log.workflowId,
+          name: log.workflowName,
+          description: log.workflowDescription,
+          color: log.workflowColor,
+          folderId: log.workflowFolderId,
+          userId: log.workflowUserId,
+          workspaceId: log.workflowWorkspaceId,
+          createdAt: log.workflowCreatedAt,
+          updatedAt: log.workflowUpdatedAt,
+        }
+      : null
 
     const response = {
       id: log.id,
       workflowId: log.workflowId,
       executionId: log.executionId,
+      deploymentVersionId: log.deploymentVersionId,
+      deploymentVersion: log.deploymentVersion ?? null,
+      deploymentVersionName: log.deploymentVersionName ?? null,
       level: log.level,
+      status: log.status,
       duration: log.totalDurationMs ? `${log.totalDurationMs}ms` : null,
       trigger: log.trigger,
       createdAt: log.startedAt.toISOString(),

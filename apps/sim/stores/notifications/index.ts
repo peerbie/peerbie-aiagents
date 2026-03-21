@@ -1,7 +1,7 @@
+export { useNotificationStore } from './store'
 export type {
   AddNotificationParams,
   Notification,
   NotificationAction,
-} from './store'
-export { useNotificationStore } from './store'
-export { openCopilotWithMessage } from './utils'
+} from './types'
+export { openCopilotWithMessage, sendMothershipMessage } from './utils'

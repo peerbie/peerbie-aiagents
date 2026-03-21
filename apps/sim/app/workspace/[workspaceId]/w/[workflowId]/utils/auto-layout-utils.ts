@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import {
   DEFAULT_HORIZONTAL_SPACING,
   DEFAULT_LAYOUT_PADDING,
@@ -21,6 +21,7 @@ export interface AutoLayoutOptions {
     x?: number
     y?: number
   }
+  gridSize?: number
 }
 
 /**
@@ -51,6 +52,16 @@ export async function applyAutoLayoutAndUpdateStore(
       return { success: false, error: 'No blocks to layout' }
     }
 
+    // Check for locked blocks - auto-layout is disabled when blocks are locked
+    const hasLockedBlocks = Object.values(blocks).some((block) => block.locked)
+    if (hasLockedBlocks) {
+      logger.info('Auto layout skipped: workflow contains locked blocks', { workflowId })
+      return {
+        success: false,
+        error: 'Auto-layout is disabled when blocks are locked. Unlock blocks to use auto-layout.',
+      }
+    }
+
     // Merge with default options
     const layoutOptions = {
       spacing: {
@@ -62,6 +73,7 @@ export async function applyAutoLayoutAndUpdateStore(
         x: options.padding?.x ?? DEFAULT_LAYOUT_PADDING.x,
         y: options.padding?.y ?? DEFAULT_LAYOUT_PADDING.y,
       },
+      gridSize: options.gridSize,
     }
 
     // Call the autolayout API route
@@ -104,7 +116,7 @@ export async function applyAutoLayoutAndUpdateStore(
       lastSaved: Date.now(),
     }
 
-    useWorkflowStore.setState(newWorkflowState)
+    useWorkflowStore.getState().replaceWorkflowState(newWorkflowState)
 
     logger.info('Successfully updated workflow store with auto layout', { workflowId })
 
@@ -117,7 +129,6 @@ export async function applyAutoLayoutAndUpdateStore(
 
       const cleanedWorkflowState = {
         ...stateToSave,
-        deployedAt: stateToSave.deployedAt ? new Date(stateToSave.deployedAt) : undefined,
         loops: stateToSave.loops || {},
         parallels: stateToSave.parallels || {},
         edges: (stateToSave.edges || []).map((edge: any) => {
@@ -157,9 +168,9 @@ export async function applyAutoLayoutAndUpdateStore(
       })
 
       // Revert the store changes since database save failed
-      useWorkflowStore.setState({
+      useWorkflowStore.getState().replaceWorkflowState({
         ...workflowStore.getWorkflowState(),
-        blocks: blocks,
+        blocks,
         lastSaved: workflowStore.lastSaved,
       })
 

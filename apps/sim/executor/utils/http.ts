@@ -1,6 +1,6 @@
 import { generateInternalToken } from '@/lib/auth/internal'
-import { getBaseUrl } from '@/lib/urls/utils'
-import { HTTP } from '@/executor/consts'
+import { getBaseUrl, getInternalApiBaseUrl } from '@/lib/core/utils/urls'
+import { HTTP } from '@/executor/constants'
 
 export async function buildAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
@@ -16,7 +16,8 @@ export async function buildAuthHeaders(): Promise<Record<string, string>> {
 }
 
 export function buildAPIUrl(path: string, params?: Record<string, string>): URL {
-  const url = new URL(path, getBaseUrl())
+  const baseUrl = path.startsWith('/api/') ? getInternalApiBaseUrl() : getBaseUrl()
+  const url = new URL(path, baseUrl)
 
   if (params) {
     for (const [key, value] of Object.entries(params)) {

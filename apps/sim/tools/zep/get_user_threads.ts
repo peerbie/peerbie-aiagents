@@ -1,7 +1,7 @@
 import type { ToolConfig } from '@/tools/types'
 import type { ZepResponse } from '@/tools/zep/types'
+import { PAGINATION_OUTPUT_PROPERTIES, THREADS_ARRAY_OUTPUT } from '@/tools/zep/types'
 
-// Get User Threads Tool - List all threads for a user (Zep v3)
 export const zepGetUserThreadsTool: ToolConfig<any, ZepResponse> = {
   id: 'zep_get_user_threads',
   name: 'Get User Threads',
@@ -12,15 +12,15 @@ export const zepGetUserThreadsTool: ToolConfig<any, ZepResponse> = {
     userId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'User ID to get threads for',
+      visibility: 'user-or-llm',
+      description: 'User ID to get threads for (e.g., "user_123")',
     },
     limit: {
       type: 'number',
       required: false,
       default: 10,
-      visibility: 'user-only',
-      description: 'Maximum number of threads to return',
+      visibility: 'user-or-llm',
+      description: 'Maximum number of threads to return (e.g., 10, 25, 50)',
     },
     apiKey: {
       type: 'string',
@@ -43,31 +43,25 @@ export const zepGetUserThreadsTool: ToolConfig<any, ZepResponse> = {
   },
 
   transformResponse: async (response) => {
-    const text = await response.text()
-
     if (!response.ok) {
-      throw new Error(`Zep API error (${response.status}): ${text || response.statusText}`)
+      const error = await response.text()
+      throw new Error(`Zep API error (${response.status}): ${error || response.statusText}`)
     }
 
-    const data = JSON.parse(text.replace(/^\uFEFF/, '').trim())
+    const data = await response.json()
+    const threads = data.threads || data || []
 
     return {
       success: true,
       output: {
-        threads: data.threads || data || [],
-        userId: data.user_id,
+        threads,
+        totalCount: threads.length,
       },
     }
   },
 
   outputs: {
-    threads: {
-      type: 'array',
-      description: 'Array of thread objects for this user',
-    },
-    userId: {
-      type: 'string',
-      description: 'The user ID',
-    },
+    threads: THREADS_ARRAY_OUTPUT,
+    totalCount: PAGINATION_OUTPUT_PROPERTIES.totalCount,
   },
 }

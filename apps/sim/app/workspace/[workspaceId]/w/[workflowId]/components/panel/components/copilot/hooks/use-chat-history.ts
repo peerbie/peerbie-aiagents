@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useMemo } from 'react'
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 
 const logger = createLogger('useChatHistory')
 
@@ -10,7 +10,6 @@ interface UseChatHistoryProps {
   activeWorkflowId: string | null
   copilotWorkflowId: string | null
   loadChats: (forceRefresh: boolean) => Promise<void>
-  areChatsFresh: (workflowId: string) => boolean
   isSendingMessage: boolean
 }
 
@@ -21,12 +20,9 @@ interface UseChatHistoryProps {
  * @returns Chat history utilities
  */
 export function useChatHistory(props: UseChatHistoryProps) {
-  const { chats, activeWorkflowId, copilotWorkflowId, loadChats, areChatsFresh, isSendingMessage } =
-    props
+  const { chats, activeWorkflowId, copilotWorkflowId, loadChats, isSendingMessage } = props
 
-  /**
-   * Groups chats by time period (Today, Yesterday, This Week, etc.)
-   */
+  /** Groups chats by time period (Today, Yesterday, This Week, etc.) */
   const groupedChats = useMemo(() => {
     if (!activeWorkflowId || copilotWorkflowId !== activeWorkflowId || chats.length === 0) {
       return []
@@ -68,18 +64,21 @@ export function useChatHistory(props: UseChatHistoryProps) {
       }
     })
 
+    for (const groupName of Object.keys(groups)) {
+      groups[groupName].sort((a, b) => {
+        const dateA = new Date(a.updatedAt).getTime()
+        const dateB = new Date(b.updatedAt).getTime()
+        return dateB - dateA
+      })
+    }
+
     return Object.entries(groups).filter(([, chats]) => chats.length > 0)
   }, [chats, activeWorkflowId, copilotWorkflowId])
 
-  /**
-   * Handles history dropdown opening and loads chats if needed
-   * Does not await loading - fires in background to avoid blocking UI
-   */
+  /** Handles history dropdown opening and loads chats if needed (non-blocking) */
   const handleHistoryDropdownOpen = useCallback(
     (open: boolean) => {
-      // Only load if opening dropdown AND we don't have fresh chats AND not streaming
-      if (open && activeWorkflowId && !isSendingMessage && !areChatsFresh(activeWorkflowId)) {
-        // Fire in background, don't await - same pattern as old panel
+      if (open && activeWorkflowId && !isSendingMessage) {
         loadChats(false).catch((error) => {
           logger.error('Failed to load chat history:', error)
         })
@@ -89,7 +88,7 @@ export function useChatHistory(props: UseChatHistoryProps) {
         logger.info('Chat history opened during stream - showing cached data only')
       }
     },
-    [activeWorkflowId, areChatsFresh, isSendingMessage, loadChats]
+    [activeWorkflowId, isSendingMessage, loadChats]
   )
 
   return {

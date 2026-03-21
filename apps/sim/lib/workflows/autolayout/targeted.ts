@@ -1,22 +1,21 @@
-import { CONTAINER_DIMENSIONS } from '@/lib/blocks/block-dimensions'
-import { createLogger } from '@/lib/logs/console/logger'
 import {
   CONTAINER_PADDING,
   DEFAULT_HORIZONTAL_SPACING,
   DEFAULT_VERTICAL_SPACING,
 } from '@/lib/workflows/autolayout/constants'
-import { layoutBlocksCore } from '@/lib/workflows/autolayout/core'
+import { assignLayers, layoutBlocksCore } from '@/lib/workflows/autolayout/core'
 import type { Edge, LayoutOptions } from '@/lib/workflows/autolayout/types'
 import {
+  calculateSubflowDepths,
   filterLayoutEligibleBlockIds,
   getBlockMetrics,
   getBlocksByParent,
-  isContainerType,
+  prepareContainerDimensions,
   shouldSkipAutoLayout,
+  snapPositionToGrid,
 } from '@/lib/workflows/autolayout/utils'
+import { CONTAINER_DIMENSIONS } from '@/lib/workflows/blocks/block-dimensions'
 import type { BlockState } from '@/stores/workflows/workflow/types'
-
-const logger = createLogger('AutoLayout:Targeted')
 
 export interface TargetedLayoutOptions extends LayoutOptions {
   changedBlockIds: string[]
@@ -37,6 +36,7 @@ export function applyTargetedLayout(
     changedBlockIds,
     verticalSpacing = DEFAULT_VERTICAL_SPACING,
     horizontalSpacing = DEFAULT_HORIZONTAL_SPACING,
+    gridSize,
   } = options
 
   if (!changedBlockIds || changedBlockIds.length === 0) {
@@ -46,9 +46,30 @@ export function applyTargetedLayout(
   const changedSet = new Set(changedBlockIds)
   const blocksCopy: Record<string, BlockState> = JSON.parse(JSON.stringify(blocks))
 
+  prepareContainerDimensions(
+    blocksCopy,
+    edges,
+    layoutBlocksCore,
+    horizontalSpacing,
+    verticalSpacing,
+    gridSize
+  )
+
   const groups = getBlocksByParent(blocksCopy)
 
-  layoutGroup(null, groups.root, blocksCopy, edges, changedSet, verticalSpacing, horizontalSpacing)
+  const subflowDepths = calculateSubflowDepths(blocksCopy, edges, assignLayers)
+
+  layoutGroup(
+    null,
+    groups.root,
+    blocksCopy,
+    edges,
+    changedSet,
+    verticalSpacing,
+    horizontalSpacing,
+    subflowDepths,
+    gridSize
+  )
 
   for (const [parentId, childIds] of groups.children.entries()) {
     layoutGroup(
@@ -58,7 +79,9 @@ export function applyTargetedLayout(
       edges,
       changedSet,
       verticalSpacing,
-      horizontalSpacing
+      horizontalSpacing,
+      subflowDepths,
+      gridSize
     )
   }
 
@@ -66,7 +89,39 @@ export function applyTargetedLayout(
 }
 
 /**
- * Layouts a group of blocks (either root level or within a container)
+ * Selects the best anchor block for offset computation.
+ * Prefers an unchanged block that is a direct edge-neighbor of a block
+ * that needs layout, so the offset aligns new blocks relative to their
+ * actual graph neighbors rather than an arbitrary/outlier block.
+ */
+function selectBestAnchor(
+  eligibleIds: string[],
+  needsLayoutSet: Set<string>,
+  edges: Edge[],
+  layoutPositions: Map<string, { x: number; y: number }>
+): string | undefined {
+  const candidates = eligibleIds.filter((id) => !needsLayoutSet.has(id) && layoutPositions.has(id))
+  if (candidates.length === 0) return undefined
+  if (candidates.length === 1) return candidates[0]
+
+  const candidateSet = new Set(candidates)
+
+  for (const edge of edges) {
+    if (needsLayoutSet.has(edge.source) && candidateSet.has(edge.target)) {
+      return edge.target
+    }
+    if (needsLayoutSet.has(edge.target) && candidateSet.has(edge.source)) {
+      return edge.source
+    }
+  }
+
+  return candidates[0]
+}
+
+/**
+ * Layouts a group of blocks (either root level or within a container).
+ * Only repositions blocks in `changedSet` or those with invalid positions;
+ * all other blocks act as anchors.
  */
 function layoutGroup(
   parentId: string | null,
@@ -75,7 +130,9 @@ function layoutGroup(
   edges: Edge[],
   changedSet: Set<string>,
   verticalSpacing: number,
-  horizontalSpacing: number
+  horizontalSpacing: number,
+  subflowDepths: Map<string, number>,
+  gridSize?: number
 ): void {
   if (childIds.length === 0) return
 
@@ -90,31 +147,26 @@ function layoutGroup(
     return
   }
 
-  // Determine which blocks need repositioning
   const requestedLayout = layoutEligibleChildIds.filter((id) => {
     const block = blocks[id]
     if (!block) return false
-    // Never reposition containers, only update their dimensions
-    if (isContainerType(block.type)) return false
     return changedSet.has(id)
   })
-  const missingPositions = layoutEligibleChildIds.filter((id) => {
+  const invalidPositions = layoutEligibleChildIds.filter((id) => {
     const block = blocks[id]
     if (!block) return false
     return !hasPosition(block)
   })
-  const needsLayoutSet = new Set([...requestedLayout, ...missingPositions])
+  const needsLayoutSet = new Set([...requestedLayout, ...invalidPositions])
   const needsLayout = Array.from(needsLayoutSet)
 
-  if (parentBlock) {
-    updateContainerDimensions(parentBlock, childIds, blocks)
-  }
-
   if (needsLayout.length === 0) {
+    if (parentBlock) {
+      updateContainerDimensions(parentBlock, childIds, blocks)
+    }
     return
   }
 
-  // Store old positions for anchor calculation
   const oldPositions = new Map<string, { x: number; y: number }>()
   for (const id of layoutEligibleChildIds) {
     const block = blocks[id]
@@ -122,14 +174,15 @@ function layoutGroup(
     oldPositions.set(id, { ...block.position })
   }
 
-  // Compute layout positions using core function
   const layoutPositions = computeLayoutPositions(
     layoutEligibleChildIds,
     blocks,
     edges,
     parentBlock,
     horizontalSpacing,
-    verticalSpacing
+    verticalSpacing,
+    parentId === null ? subflowDepths : undefined,
+    gridSize
   )
 
   if (layoutPositions.size === 0) {
@@ -139,13 +192,10 @@ function layoutGroup(
     return
   }
 
-  // Find anchor block (unchanged block with a layout position)
   let offsetX = 0
   let offsetY = 0
 
-  const anchorId = layoutEligibleChildIds.find(
-    (id) => !needsLayout.includes(id) && layoutPositions.has(id)
-  )
+  const anchorId = selectBestAnchor(layoutEligibleChildIds, needsLayoutSet, edges, layoutPositions)
 
   if (anchorId) {
     const oldPos = oldPositions.get(anchorId)
@@ -156,20 +206,20 @@ function layoutGroup(
     }
   }
 
-  // Apply new positions only to blocks that need layout
   for (const id of needsLayout) {
     const block = blocks[id]
     const newPos = layoutPositions.get(id)
     if (!block || !newPos) continue
-    block.position = {
-      x: newPos.x + offsetX,
-      y: newPos.y + offsetY,
-    }
+    block.position = snapPositionToGrid({ x: newPos.x + offsetX, y: newPos.y + offsetY }, gridSize)
+  }
+
+  if (parentBlock) {
+    updateContainerDimensions(parentBlock, childIds, blocks)
   }
 }
 
 /**
- * Computes layout positions for a subset of blocks using the core layout
+ * Computes layout positions for a subset of blocks using the core layout function
  */
 function computeLayoutPositions(
   childIds: string[],
@@ -177,7 +227,9 @@ function computeLayoutPositions(
   edges: Edge[],
   parentBlock: BlockState | undefined,
   horizontalSpacing: number,
-  verticalSpacing: number
+  verticalSpacing: number,
+  subflowDepths?: Map<string, number>,
+  gridSize?: number
 ): Map<string, { x: number; y: number }> {
   const subsetBlocks: Record<string, BlockState> = {}
   for (const id of childIds) {
@@ -198,11 +250,11 @@ function computeLayoutPositions(
     layoutOptions: {
       horizontalSpacing: isContainer ? horizontalSpacing * 0.85 : horizontalSpacing,
       verticalSpacing,
-      alignment: 'center',
+      gridSize,
     },
+    subflowDepths,
   })
 
-  // Update parent container dimensions if applicable
   if (parentBlock) {
     parentBlock.data = {
       ...parentBlock.data,
@@ -211,7 +263,6 @@ function computeLayoutPositions(
     }
   }
 
-  // Convert nodes to position map
   const positions = new Map<string, { x: number; y: number }>()
   for (const node of nodes.values()) {
     positions.set(node.id, { x: node.position.x, y: node.position.y })
@@ -282,7 +333,8 @@ function updateContainerDimensions(
 }
 
 /**
- * Checks if a block has a valid position
+ * Checks if a block has a valid, finite position.
+ * Returns false for missing, undefined, NaN, or Infinity coordinates.
  */
 function hasPosition(block: BlockState): boolean {
   if (!block.position) return false

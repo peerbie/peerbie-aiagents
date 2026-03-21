@@ -1,17 +1,17 @@
 import { db } from '@sim/db'
 import { account } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { eq } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
-import { refreshAccessTokenIfNeeded } from '@/app/api/auth/oauth/utils'
+import { validateEnum, validatePathSegment } from '@/lib/core/security/input-validation'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { refreshAccessTokenIfNeeded, resolveOAuthAccountId } from '@/app/api/auth/oauth/utils'
 
 export const dynamic = 'force-dynamic'
 
 const logger = createLogger('WealthboxItemsAPI')
 
-// Interface for transformed Wealthbox items
 interface WealthboxItem {
   id: string
   name: string
@@ -45,32 +45,60 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Credential ID is required' }, { status: 400 })
     }
 
-    if (type !== 'contact') {
-      logger.warn(`[${requestId}] Invalid item type: ${type}`)
-      return NextResponse.json(
-        { error: 'Invalid item type. Only contact is supported.' },
-        { status: 400 }
-      )
+    const credentialIdValidation = validatePathSegment(credentialId, {
+      paramName: 'credentialId',
+      maxLength: 100,
+      allowHyphens: true,
+      allowUnderscores: true,
+      allowDots: false,
+    })
+    if (!credentialIdValidation.isValid) {
+      logger.warn(`[${requestId}] Invalid credentialId format: ${credentialId}`)
+      return NextResponse.json({ error: credentialIdValidation.error }, { status: 400 })
     }
 
-    const credentials = await db.select().from(account).where(eq(account.id, credentialId)).limit(1)
+    const ALLOWED_TYPES = ['contact'] as const
+    const typeValidation = validateEnum(type, ALLOWED_TYPES, 'type')
+    if (!typeValidation.isValid) {
+      logger.warn(`[${requestId}] Invalid item type: ${type}`)
+      return NextResponse.json({ error: typeValidation.error }, { status: 400 })
+    }
+
+    const resolved = await resolveOAuthAccountId(credentialId)
+    if (!resolved) {
+      return NextResponse.json({ error: 'Credential not found' }, { status: 404 })
+    }
+
+    if (resolved.workspaceId) {
+      const { getUserEntityPermissions } = await import('@/lib/workspaces/permissions/utils')
+      const perm = await getUserEntityPermissions(
+        session.user.id,
+        'workspace',
+        resolved.workspaceId
+      )
+      if (perm === null) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
+    }
+
+    const credentials = await db
+      .select()
+      .from(account)
+      .where(eq(account.id, resolved.accountId))
+      .limit(1)
 
     if (!credentials.length) {
       logger.warn(`[${requestId}] Credential not found`, { credentialId })
       return NextResponse.json({ error: 'Credential not found' }, { status: 404 })
     }
 
-    const credential = credentials[0]
+    const accountRow = credentials[0]
 
-    if (credential.userId !== session.user.id) {
-      logger.warn(`[${requestId}] Unauthorized credential access attempt`, {
-        credentialUserId: credential.userId,
-        requestUserId: session.user.id,
-      })
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
-
-    const accessToken = await refreshAccessTokenIfNeeded(credentialId, session.user.id, requestId)
+    const accessToken = await refreshAccessTokenIfNeeded(
+      resolved.accountId,
+      accountRow.userId,
+      requestId
+    )
 
     if (!accessToken) {
       logger.error(`[${requestId}] Failed to obtain valid access token`)
