@@ -1,20 +1,16 @@
 import { randomUUID } from 'crypto'
 import { db } from '@sim/db'
-import { chat } from '@sim/db/schema'
-import { eq } from 'drizzle-orm'
+import { chat, workflow } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
+import { and, eq, isNull } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
+import { addCorsHeaders, validateAuthToken } from '@/lib/core/security/deployment'
+import { generateRequestId } from '@/lib/core/utils/request'
 import { preprocessExecution } from '@/lib/execution/preprocessing'
-import { createLogger } from '@/lib/logs/console/logger'
 import { LoggingSession } from '@/lib/logs/execution/logging-session'
 import { ChatFiles } from '@/lib/uploads'
-import { generateRequestId } from '@/lib/utils'
-import {
-  addCorsHeaders,
-  setChatAuthCookie,
-  validateAuthToken,
-  validateChatAuth,
-} from '@/app/api/chat/utils'
+import { setChatAuthCookie, validateChatAuth } from '@/app/api/chat/utils'
 import { createErrorResponse, createSuccessResponse } from '@/app/api/workflows/utils'
 
 const logger = createLogger('ChatIdentifierAPI')
@@ -46,8 +42,6 @@ export async function POST(
   const requestId = generateRequestId()
 
   try {
-    logger.debug(`[${requestId}] Processing chat request for identifier: ${identifier}`)
-
     let parsedBody
     try {
       const rawBody = await request.json()
@@ -81,7 +75,7 @@ export async function POST(
         outputConfigs: chat.outputConfigs,
       })
       .from(chat)
-      .where(eq(chat.identifier, identifier))
+      .where(and(eq(chat.identifier, identifier), isNull(chat.archivedAt)))
       .limit(1)
 
     if (deploymentResult.length === 0) {
@@ -94,6 +88,21 @@ export async function POST(
     if (!deployment.isActive) {
       logger.warn(`[${requestId}] Chat is not active: ${identifier}`)
 
+      const [workflowRecord] = await db
+        .select({ workspaceId: workflow.workspaceId })
+        .from(workflow)
+        .where(and(eq(workflow.id, deployment.workflowId), isNull(workflow.archivedAt)))
+        .limit(1)
+
+      const workspaceId = workflowRecord?.workspaceId
+      if (!workspaceId) {
+        logger.warn(`[${requestId}] Cannot log: workflow ${deployment.workflowId} has no workspace`)
+        return addCorsHeaders(
+          createErrorResponse('This chat is currently unavailable', 403),
+          request
+        )
+      }
+
       const executionId = randomUUID()
       const loggingSession = new LoggingSession(
         deployment.workflowId,
@@ -104,7 +113,7 @@ export async function POST(
 
       await loggingSession.safeStart({
         userId: deployment.userId,
-        workspaceId: '', // Will be resolved if needed
+        workspaceId,
         variables: {},
       })
 
@@ -132,7 +141,7 @@ export async function POST(
     if ((password || email) && !input) {
       const response = addCorsHeaders(createSuccessResponse({ authenticated: true }), request)
 
-      setChatAuthCookie(response, deployment.id, deployment.authType)
+      setChatAuthCookie(response, deployment.id, deployment.authType, deployment.password)
 
       return response
     }
@@ -151,8 +160,8 @@ export async function POST(
       triggerType: 'chat',
       executionId,
       requestId,
-      checkRateLimit: false, // Chat bypasses rate limits
-      checkDeployment: true, // Chat requires deployed workflows
+      checkRateLimit: true,
+      checkDeployment: true,
       loggingSession,
     })
 
@@ -169,7 +178,14 @@ export async function POST(
 
     const { actorUserId, workflowRecord } = preprocessResult
     const workspaceOwnerId = actorUserId!
-    const workspaceId = workflowRecord?.workspaceId || ''
+    const workspaceId = workflowRecord?.workspaceId
+    if (!workspaceId) {
+      logger.error(`[${requestId}] Workflow ${deployment.workflowId} has no workspaceId`)
+      return addCorsHeaders(
+        createErrorResponse('Workflow has no associated workspace', 500),
+        request
+      )
+    }
 
     try {
       const selectedOutputs: string[] = []
@@ -182,9 +198,8 @@ export async function POST(
         }
       }
 
-      const { createStreamingResponse } = await import('@/lib/workflows/streaming')
-      const { SSE_HEADERS } = await import('@/lib/utils')
-      const { createFilteredResult } = await import('@/app/api/workflows/[id]/execute/route')
+      const { createStreamingResponse } = await import('@/lib/workflows/streaming/streaming')
+      const { SSE_HEADERS } = await import('@/lib/core/utils/sse')
 
       const workflowInput: any = { input, conversationId }
       if (files && Array.isArray(files) && files.length > 0) {
@@ -232,7 +247,7 @@ export async function POST(
         userId: deployment.userId,
         workspaceId,
         isDeployed: workflowRecord?.isDeployed ?? false,
-        variables: workflowRecord?.variables || {},
+        variables: (workflowRecord?.variables as Record<string, unknown>) ?? undefined,
       }
 
       const stream = await createStreamingResponse({
@@ -245,7 +260,6 @@ export async function POST(
           isSecureMode: true,
           workflowTriggerType: 'chat',
         },
-        createFilteredResult,
         executionId,
       })
 
@@ -278,8 +292,6 @@ export async function GET(
   const requestId = generateRequestId()
 
   try {
-    logger.debug(`[${requestId}] Fetching chat info for identifier: ${identifier}`)
-
     const deploymentResult = await db
       .select({
         id: chat.id,
@@ -294,7 +306,7 @@ export async function GET(
         outputConfigs: chat.outputConfigs,
       })
       .from(chat)
-      .where(eq(chat.identifier, identifier))
+      .where(and(eq(chat.identifier, identifier), isNull(chat.archivedAt)))
       .limit(1)
 
     if (deploymentResult.length === 0) {
@@ -315,7 +327,7 @@ export async function GET(
     if (
       deployment.authType !== 'public' &&
       authCookie &&
-      validateAuthToken(authCookie.value, deployment.id)
+      validateAuthToken(authCookie.value, deployment.id, deployment.password)
     ) {
       return addCorsHeaders(
         createSuccessResponse({

@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   MicrosoftPlannerToolParams,
   MicrosoftPlannerUpdateTaskResponse,
@@ -33,8 +33,8 @@ export const updateTaskTool: ToolConfig<
     taskId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the task to update',
+      visibility: 'user-or-llm',
+      description: 'The ID of the task to update (e.g., "pbT5K2OVkkO1M7r5bfsJ6JgAGD5m")',
     },
     etag: {
       type: 'string',
@@ -45,20 +45,21 @@ export const updateTaskTool: ToolConfig<
     title: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'The new title of the task',
+      visibility: 'user-or-llm',
+      description: 'The new title of the task (e.g., "Review quarterly report")',
     },
     bucketId: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'The bucket ID to move the task to',
+      visibility: 'user-or-llm',
+      description: 'The bucket ID to move the task to (e.g., "hsOf2dhOJkC6Fey9VjDg1JgAC9Rq")',
     },
     dueDateTime: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'The due date and time for the task (ISO 8601 format)',
+      visibility: 'user-or-llm',
+      description:
+        'The due date and time for the task in ISO 8601 format (e.g., "2025-03-15T17:00:00Z")',
     },
     startDateTime: {
       type: 'string',
@@ -81,8 +82,9 @@ export const updateTaskTool: ToolConfig<
     assigneeUserId: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'The user ID to assign the task to',
+      visibility: 'user-or-llm',
+      description:
+        'The user ID to assign the task to (e.g., "e82f74c3-4d8a-4b5c-9f1e-2a6b8c9d0e3f")',
     },
   },
 
@@ -204,7 +206,7 @@ export const updateTaskTool: ToolConfig<
     logger.info('Updated task:', task)
 
     // Extract and clean the new etag for subsequent operations
-    let newEtag = task['@odata.etag']
+    let newEtag = task['@odata.etag'] ?? null
     if (newEtag && typeof newEtag === 'string' && newEtag.includes('\\"')) {
       newEtag = newEtag.replace(/\\"/g, '"')
     }
@@ -235,7 +237,16 @@ export const updateTaskTool: ToolConfig<
     etag: {
       type: 'string',
       description: 'New ETag after update - use this for subsequent operations',
+      optional: true,
     },
-    metadata: { type: 'object', description: 'Metadata including taskId, planId, and taskUrl' },
+    metadata: {
+      type: 'object',
+      description: 'Metadata including taskId, planId, and taskUrl',
+      properties: {
+        taskId: { type: 'string', description: 'Updated task ID' },
+        planId: { type: 'string', description: 'Parent plan ID' },
+        taskUrl: { type: 'string', description: 'Microsoft Graph API URL for the task' },
+      },
+    },
   },
 }

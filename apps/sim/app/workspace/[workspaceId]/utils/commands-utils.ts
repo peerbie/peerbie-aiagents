@@ -7,17 +7,16 @@ import type { GlobalCommand } from '@/app/workspace/[workspaceId]/providers/glob
  * ad-hoc ids or shortcuts to ensure a single source of truth.
  */
 export type CommandId =
+  | 'accept-diff-changes'
   | 'add-agent'
-  | 'goto-templates'
+  // | 'goto-templates'
   | 'goto-logs'
   | 'open-search'
   | 'run-workflow'
-  | 'focus-copilot-tab'
-  | 'focus-toolbar-tab'
-  | 'focus-editor-tab'
   | 'clear-terminal-console'
   | 'focus-toolbar-search'
   | 'clear-notifications'
+  | 'fit-to-view'
 
 /**
  * Static metadata for a global command.
@@ -43,16 +42,21 @@ export interface CommandDefinition {
  * All global commands must be declared here to be usable.
  */
 export const COMMAND_DEFINITIONS: Record<CommandId, CommandDefinition> = {
+  'accept-diff-changes': {
+    id: 'accept-diff-changes',
+    shortcut: 'Mod+Shift+Enter',
+    allowInEditable: true,
+  },
   'add-agent': {
     id: 'add-agent',
     shortcut: 'Mod+Shift+A',
     allowInEditable: true,
   },
-  'goto-templates': {
-    id: 'goto-templates',
-    shortcut: 'Mod+Y',
-    allowInEditable: true,
-  },
+  // 'goto-templates': {
+  //   id: 'goto-templates',
+  //   shortcut: 'Mod+Y',
+  //   allowInEditable: true,
+  // },
   'goto-logs': {
     id: 'goto-logs',
     shortcut: 'Mod+L',
@@ -68,21 +72,6 @@ export const COMMAND_DEFINITIONS: Record<CommandId, CommandDefinition> = {
     shortcut: 'Mod+Enter',
     allowInEditable: false,
   },
-  'focus-copilot-tab': {
-    id: 'focus-copilot-tab',
-    shortcut: 'C',
-    allowInEditable: false,
-  },
-  'focus-toolbar-tab': {
-    id: 'focus-toolbar-tab',
-    shortcut: 'T',
-    allowInEditable: false,
-  },
-  'focus-editor-tab': {
-    id: 'focus-editor-tab',
-    shortcut: 'E',
-    allowInEditable: false,
-  },
   'clear-terminal-console': {
     id: 'clear-terminal-console',
     shortcut: 'Mod+D',
@@ -96,6 +85,11 @@ export const COMMAND_DEFINITIONS: Record<CommandId, CommandDefinition> = {
   'clear-notifications': {
     id: 'clear-notifications',
     shortcut: 'Mod+E',
+    allowInEditable: false,
+  },
+  'fit-to-view': {
+    id: 'fit-to-view',
+    shortcut: 'Mod+Shift+F',
     allowInEditable: false,
   },
 }

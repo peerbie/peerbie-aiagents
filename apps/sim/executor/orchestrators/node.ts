@@ -1,5 +1,5 @@
-import { createLogger } from '@/lib/logs/console/logger'
-import { EDGE } from '@/executor/consts'
+import { createLogger } from '@sim/logger'
+import { EDGE } from '@/executor/constants'
 import type { DAG, DAGNode } from '@/executor/dag/builder'
 import type { BlockExecutor } from '@/executor/execution/block-executor'
 import type { BlockStateController } from '@/executor/execution/types'
@@ -31,7 +31,18 @@ export class NodeExecutionOrchestrator {
       throw new Error(`Node not found in DAG: ${nodeId}`)
     }
 
-    if (this.state.hasExecuted(nodeId)) {
+    if (ctx.runFromBlockContext && !ctx.runFromBlockContext.dirtySet.has(nodeId)) {
+      const cachedOutput = this.state.getBlockOutput(nodeId) || {}
+      logger.debug('Skipping non-dirty block in run-from-block mode', { nodeId })
+      return {
+        nodeId,
+        output: cachedOutput,
+        isFinalOutput: false,
+      }
+    }
+
+    const isDirtyBlock = ctx.runFromBlockContext?.dirtySet.has(nodeId) ?? false
+    if (!isDirtyBlock && this.state.hasExecuted(nodeId)) {
       const output = this.state.getBlockOutput(nodeId) || {}
       return {
         nodeId,
@@ -42,19 +53,18 @@ export class NodeExecutionOrchestrator {
 
     const loopId = node.metadata.loopId
     if (loopId && !this.loopOrchestrator.getLoopScope(ctx, loopId)) {
-      this.loopOrchestrator.initializeLoopScope(ctx, loopId)
+      await this.loopOrchestrator.initializeLoopScope(ctx, loopId)
     }
 
-    if (loopId && !this.loopOrchestrator.shouldExecuteLoopNode(ctx, nodeId, loopId)) {
-      return {
-        nodeId,
-        output: {},
-        isFinalOutput: false,
-      }
+    const parallelId = node.metadata.parallelId
+    if (parallelId && !this.parallelOrchestrator.getParallelScope(ctx, parallelId)) {
+      const parallelConfig = this.dag.parallelConfigs.get(parallelId)
+      const nodesInParallel = parallelConfig?.nodes?.length || 1
+      await this.parallelOrchestrator.initializeParallelScope(ctx, parallelId, nodesInParallel)
     }
 
     if (node.metadata.isSentinel) {
-      const output = this.handleSentinel(ctx, node)
+      const output = await this.handleSentinel(ctx, node)
       const isFinalOutput = node.outgoingEdges.size === 0
       return {
         nodeId,
@@ -72,12 +82,32 @@ export class NodeExecutionOrchestrator {
     }
   }
 
-  private handleSentinel(ctx: ExecutionContext, node: DAGNode): NormalizedBlockOutput {
+  private async handleSentinel(
+    ctx: ExecutionContext,
+    node: DAGNode
+  ): Promise<NormalizedBlockOutput> {
     const sentinelType = node.metadata.sentinelType
     const loopId = node.metadata.loopId
+    const parallelId = node.metadata.parallelId
+    const isParallelSentinel = node.metadata.isParallelSentinel
+
+    if (isParallelSentinel) {
+      return await this.handleParallelSentinel(ctx, node, sentinelType, parallelId)
+    }
 
     switch (sentinelType) {
       case 'start': {
+        if (loopId) {
+          const shouldExecute = await this.loopOrchestrator.evaluateInitialCondition(ctx, loopId)
+          if (!shouldExecute) {
+            logger.info('Loop initial condition false, skipping loop body', { loopId })
+            return {
+              sentinelStart: true,
+              shouldExit: true,
+              selectedRoute: EDGE.LOOP_EXIT,
+            }
+          }
+        }
         return { sentinelStart: true }
       }
 
@@ -87,7 +117,7 @@ export class NodeExecutionOrchestrator {
           return { shouldExit: true, selectedRoute: EDGE.LOOP_EXIT }
         }
 
-        const continuationResult = this.loopOrchestrator.evaluateLoopContinuation(ctx, loopId)
+        const continuationResult = await this.loopOrchestrator.evaluateLoopContinuation(ctx, loopId)
 
         if (continuationResult.shouldContinue) {
           return {
@@ -112,6 +142,53 @@ export class NodeExecutionOrchestrator {
     }
   }
 
+  private async handleParallelSentinel(
+    ctx: ExecutionContext,
+    node: DAGNode,
+    sentinelType: string | undefined,
+    parallelId: string | undefined
+  ): Promise<NormalizedBlockOutput> {
+    if (!parallelId) {
+      logger.warn('Parallel sentinel called without parallelId')
+      return {}
+    }
+
+    if (sentinelType === 'start') {
+      if (!this.parallelOrchestrator.getParallelScope(ctx, parallelId)) {
+        const parallelConfig = this.dag.parallelConfigs.get(parallelId)
+        if (parallelConfig) {
+          const nodesInParallel = parallelConfig.nodes?.length || 1
+          await this.parallelOrchestrator.initializeParallelScope(ctx, parallelId, nodesInParallel)
+        }
+      }
+
+      const scope = this.parallelOrchestrator.getParallelScope(ctx, parallelId)
+      if (scope?.isEmpty) {
+        logger.info('Parallel has empty distribution, skipping parallel body', { parallelId })
+        return {
+          sentinelStart: true,
+          shouldExit: true,
+          selectedRoute: EDGE.PARALLEL_EXIT,
+        }
+      }
+
+      return { sentinelStart: true }
+    }
+
+    if (sentinelType === 'end') {
+      const result = await this.parallelOrchestrator.aggregateParallelResults(ctx, parallelId)
+      return {
+        results: result.results || [],
+        sentinelEnd: true,
+        selectedRoute: EDGE.PARALLEL_EXIT,
+        totalBranches: result.totalBranches,
+      }
+    }
+
+    logger.warn('Unknown parallel sentinel type', { sentinelType })
+    return {}
+  }
+
   async handleNodeCompletion(
     ctx: ExecutionContext,
     nodeId: string,
@@ -133,7 +210,7 @@ export class NodeExecutionOrchestrator {
     } else if (isParallelBranch) {
       const parallelId = this.findParallelIdForNode(node.id)
       if (parallelId) {
-        this.handleParallelNodeCompletion(ctx, node, output, parallelId)
+        await this.handleParallelNodeCompletion(ctx, node, output, parallelId)
       } else {
         this.handleRegularNodeCompletion(ctx, node, output)
       }
@@ -152,23 +229,17 @@ export class NodeExecutionOrchestrator {
     this.state.setBlockOutput(node.id, output)
   }
 
-  private handleParallelNodeCompletion(
+  private async handleParallelNodeCompletion(
     ctx: ExecutionContext,
     node: DAGNode,
     output: NormalizedBlockOutput,
     parallelId: string
-  ): void {
+  ): Promise<void> {
     const scope = this.parallelOrchestrator.getParallelScope(ctx, parallelId)
     if (!scope) {
-      const totalBranches = node.metadata.branchTotal || 1
       const parallelConfig = this.dag.parallelConfigs.get(parallelId)
-      const nodesInParallel = (parallelConfig as any)?.nodes?.length || 1
-      this.parallelOrchestrator.initializeParallelScope(
-        ctx,
-        parallelId,
-        totalBranches,
-        nodesInParallel
-      )
+      const nodesInParallel = parallelConfig?.nodes?.length || 1
+      await this.parallelOrchestrator.initializeParallelScope(ctx, parallelId, nodesInParallel)
     }
     const allComplete = this.parallelOrchestrator.handleParallelBranchCompletion(
       ctx,
@@ -177,7 +248,7 @@ export class NodeExecutionOrchestrator {
       output
     )
     if (allComplete) {
-      this.parallelOrchestrator.aggregateParallelResults(ctx, parallelId)
+      await this.parallelOrchestrator.aggregateParallelResults(ctx, parallelId)
     }
 
     this.state.setBlockOutput(node.id, output)
@@ -197,7 +268,7 @@ export class NodeExecutionOrchestrator {
     ) {
       const loopId = node.metadata.loopId
       if (loopId) {
-        this.loopOrchestrator.clearLoopExecutionState(loopId)
+        this.loopOrchestrator.clearLoopExecutionState(loopId, ctx)
         this.loopOrchestrator.restoreLoopEdges(loopId)
       }
     }

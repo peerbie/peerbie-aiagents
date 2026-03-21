@@ -1,4 +1,5 @@
 import type { FinalizeInvoiceParams, InvoiceResponse } from '@/tools/stripe/types'
+import { INVOICE_METADATA_OUTPUT_PROPERTIES, INVOICE_OUTPUT } from '@/tools/stripe/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const stripeFinalizeInvoiceTool: ToolConfig<FinalizeInvoiceParams, InvoiceResponse> = {
@@ -64,12 +65,13 @@ export const stripeFinalizeInvoiceTool: ToolConfig<FinalizeInvoiceParams, Invoic
 
   outputs: {
     invoice: {
-      type: 'json',
+      ...INVOICE_OUTPUT,
       description: 'The finalized invoice object',
     },
     metadata: {
       type: 'json',
       description: 'Invoice metadata',
+      properties: INVOICE_METADATA_OUTPUT_PROPERTIES,
     },
   },
 }

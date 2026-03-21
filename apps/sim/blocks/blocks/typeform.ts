@@ -67,11 +67,40 @@ export const TypeformBlock: BlockConfig<TypeformResponse> = {
       condition: { field: 'operation', value: 'typeform_responses' },
     },
     {
+      id: 'before',
+      title: 'Before (Cursor)',
+      type: 'short-input',
+      placeholder: 'Cursor token from previous response for pagination',
+      condition: { field: 'operation', value: 'typeform_responses' },
+    },
+    {
+      id: 'after',
+      title: 'After (Cursor)',
+      type: 'short-input',
+      placeholder: 'Cursor token from previous response for newer results',
+      condition: { field: 'operation', value: 'typeform_responses' },
+    },
+    {
       id: 'since',
       title: 'Since',
       type: 'short-input',
       placeholder: 'Retrieve responses after this date (ISO format)',
       condition: { field: 'operation', value: 'typeform_responses' },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate an ISO 8601 timestamp based on the user's description.
+The timestamp should be in the format: YYYY-MM-DDTHH:MM:SSZ (UTC timezone).
+Examples:
+- "yesterday" -> Calculate yesterday's date at 00:00:00Z
+- "last week" -> Calculate 7 days ago at 00:00:00Z
+- "beginning of this month" -> First day of current month at 00:00:00Z
+- "24 hours ago" -> Calculate exactly 24 hours before now
+- "last Monday at 9am" -> Calculate the most recent Monday at 09:00:00Z
+
+Return ONLY the timestamp string - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the start date (e.g., "last week", "beginning of month")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'until',
@@ -79,6 +108,21 @@ export const TypeformBlock: BlockConfig<TypeformResponse> = {
       type: 'short-input',
       placeholder: 'Retrieve responses before this date (ISO format)',
       condition: { field: 'operation', value: 'typeform_responses' },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate an ISO 8601 timestamp based on the user's description.
+The timestamp should be in the format: YYYY-MM-DDTHH:MM:SSZ (UTC timezone).
+Examples:
+- "now" -> Current timestamp
+- "today at midnight" -> Today's date at 23:59:59Z
+- "end of this month" -> Last day of current month at 23:59:59Z
+- "yesterday" -> Yesterday's date at 23:59:59Z
+- "end of last week" -> Most recent Sunday at 23:59:59Z
+
+Return ONLY the timestamp string - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the end date (e.g., "now", "end of yesterday")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'completed',
@@ -199,10 +243,76 @@ export const TypeformBlock: BlockConfig<TypeformResponse> = {
     {
       id: 'operations',
       title: 'JSON Patch Operations',
-      type: 'long-input',
-      placeholder: 'JSON array of patch operations (RFC 6902)',
+      type: 'code',
+      language: 'json',
+      placeholder: '[{"op": "replace", "path": "/title", "value": "New Title"}]',
       condition: { field: 'operation', value: 'typeform_update_form' },
       required: true,
+      wandConfig: {
+        enabled: true,
+        maintainHistory: true,
+        prompt: `You are an expert at creating JSON Patch operations (RFC 6902) for Typeform forms.
+Generate ONLY the JSON array of patch operations based on the user's request.
+The output MUST be a valid JSON array, starting with [ and ending with ].
+
+Current operations: {context}
+
+### JSON PATCH OPERATIONS
+Each operation is an object with:
+- "op": The operation type ("add", "remove", "replace", "move", "copy", "test")
+- "path": JSON pointer to the target location (e.g., "/title", "/fields/0", "/settings/language")
+- "value": The new value (required for "add", "replace", "copy", "test")
+- "from": Source path (required for "move" and "copy")
+
+### COMMON TYPEFORM PATHS
+- /title - Form title
+- /settings/language - Form language (e.g., "en", "es", "fr")
+- /settings/is_public - Whether form is public (true/false)
+- /settings/show_progress_bar - Show progress bar (true/false)
+- /fields - Array of form fields
+- /fields/- - Add to end of fields array
+- /fields/0 - First field
+- /welcome_screens - Array of welcome screens
+- /thankyou_screens - Array of thank you screens
+- /theme/href - Theme URL reference
+
+### FIELD OBJECT STRUCTURE
+{
+  "type": "short_text" | "long_text" | "email" | "number" | "multiple_choice" | "yes_no" | "rating" | "date" | "dropdown" | "file_upload",
+  "title": "Question text",
+  "ref": "unique_reference_id",
+  "properties": { ... },
+  "validations": { "required": true/false }
+}
+
+### EXAMPLES
+
+**Change form title:**
+[{"op": "replace", "path": "/title", "value": "My Updated Form"}]
+
+**Add a new text field:**
+[{"op": "add", "path": "/fields/-", "value": {"type": "short_text", "title": "What is your name?", "ref": "name_field", "validations": {"required": true}}}]
+
+**Add multiple choice field:**
+[{"op": "add", "path": "/fields/-", "value": {"type": "multiple_choice", "title": "Select your favorite color", "ref": "color_field", "properties": {"choices": [{"label": "Red"}, {"label": "Blue"}, {"label": "Green"}]}}}]
+
+**Remove first field:**
+[{"op": "remove", "path": "/fields/0"}]
+
+**Update form settings:**
+[{"op": "replace", "path": "/settings/language", "value": "es"}, {"op": "replace", "path": "/settings/is_public", "value": false}]
+
+**Multiple operations:**
+[
+  {"op": "replace", "path": "/title", "value": "Customer Feedback Form"},
+  {"op": "add", "path": "/fields/-", "value": {"type": "rating", "title": "Rate your experience", "ref": "rating_field", "properties": {"steps": 5}}},
+  {"op": "replace", "path": "/settings/show_progress_bar", "value": true}
+]
+
+Do not include any explanations, markdown formatting, or other text outside the JSON array.`,
+        placeholder: 'Describe how you want to update the form...',
+        generationType: 'json-object',
+      },
     },
     ...getTrigger('typeform_webhook').subBlocks,
   ],
@@ -284,6 +394,8 @@ export const TypeformBlock: BlockConfig<TypeformResponse> = {
     apiKey: { type: 'string', description: 'Personal access token' },
     // Response operation params
     pageSize: { type: 'number', description: 'Responses per page' },
+    before: { type: 'string', description: 'Cursor token for fetching the next page' },
+    after: { type: 'string', description: 'Cursor token for fetching newer results' },
     since: { type: 'string', description: 'Start date filter' },
     until: { type: 'string', description: 'End date filter' },
     completed: { type: 'string', description: 'Completion status filter' },
@@ -308,29 +420,33 @@ export const TypeformBlock: BlockConfig<TypeformResponse> = {
     operations: { type: 'json', description: 'JSON Patch operations array' },
   },
   outputs: {
-    // Common outputs (used by responses, list_forms)
+    // List/responses outputs
     total_items: { type: 'number', description: 'Total response/form count' },
     page_count: { type: 'number', description: 'Total page count' },
     items: { type: 'json', description: 'Response/form items array' },
-    // Form details outputs (get_form, create_form, update_form)
+    // Form details outputs
     id: { type: 'string', description: 'Form unique identifier' },
     title: { type: 'string', description: 'Form title' },
     type: { type: 'string', description: 'Form type' },
-    created_at: { type: 'string', description: 'ISO timestamp of form creation' },
-    last_updated_at: { type: 'string', description: 'ISO timestamp of last update' },
     settings: { type: 'json', description: 'Form settings object' },
-    theme: { type: 'json', description: 'Theme configuration object' },
-    workspace: { type: 'json', description: 'Workspace information' },
-    fields: { type: 'json', description: 'Form fields/questions array' },
+    theme: { type: 'json', description: 'Theme reference' },
+    workspace: { type: 'json', description: 'Workspace reference' },
+    fields: { type: 'json', description: 'Form fields array' },
+    welcome_screens: { type: 'json', description: 'Welcome screens array' },
     thankyou_screens: { type: 'json', description: 'Thank you screens array' },
+    created_at: { type: 'string', description: 'Form creation timestamp' },
+    last_updated_at: { type: 'string', description: 'Form last update timestamp' },
+    published_at: { type: 'string', description: 'Form publication timestamp' },
     _links: { type: 'json', description: 'Related resource links' },
     // Delete form outputs
-    deleted: { type: 'boolean', description: 'Whether the form was successfully deleted' },
+    deleted: { type: 'boolean', description: 'Whether the form was deleted' },
     message: { type: 'string', description: 'Deletion confirmation message' },
     // File operation outputs
     fileUrl: { type: 'string', description: 'Downloaded file URL' },
     contentType: { type: 'string', description: 'File content type' },
     filename: { type: 'string', description: 'File name' },
+    // Insights outputs
+    form: { type: 'json', description: 'Form analytics and performance data' },
   },
   triggers: {
     enabled: true,

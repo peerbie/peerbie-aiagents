@@ -1,4 +1,5 @@
 import type { BranchProtectionResponse, UpdateBranchProtectionParams } from '@/tools/github/types'
+import { BRANCH_PROTECTION_OUTPUT_PROPERTIES } from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const updateBranchProtectionTool: ToolConfig<
@@ -218,4 +219,31 @@ Enforce Admins: ${protection.enforce_admins?.enabled ? 'Yes' : 'No'}`
       },
     },
   },
+}
+
+export const updateBranchProtectionV2Tool: ToolConfig = {
+  id: 'github_update_branch_protection_v2',
+  name: updateBranchProtectionTool.name,
+  description: updateBranchProtectionTool.description,
+  version: '2.0.0',
+  params: updateBranchProtectionTool.params,
+  request: updateBranchProtectionTool.request,
+  oauth: updateBranchProtectionTool.oauth,
+  transformResponse: async (response: Response) => {
+    const protection = await response.json()
+    return {
+      success: true,
+      output: {
+        url: protection.url,
+        required_status_checks: protection.required_status_checks ?? null,
+        enforce_admins: protection.enforce_admins,
+        required_pull_request_reviews: protection.required_pull_request_reviews ?? null,
+        restrictions: protection.restrictions ?? null,
+        required_linear_history: protection.required_linear_history ?? null,
+        allow_force_pushes: protection.allow_force_pushes ?? null,
+        allow_deletions: protection.allow_deletions ?? null,
+      },
+    }
+  },
+  outputs: BRANCH_PROTECTION_OUTPUT_PROPERTIES,
 }

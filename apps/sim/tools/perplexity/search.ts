@@ -24,8 +24,9 @@ export const searchTool: ToolConfig<PerplexitySearchParams, PerplexitySearchResp
     search_domain_filter: {
       type: 'array',
       required: false,
-      visibility: 'user-only',
-      description: 'List of domains/URLs to limit search results to (max 20)',
+      visibility: 'user-or-llm',
+      description:
+        'List of domains/URLs to limit search results to (e.g., ["github.com", "stackoverflow.com"], max 20)',
     },
     max_tokens_per_page: {
       type: 'number',
@@ -42,8 +43,8 @@ export const searchTool: ToolConfig<PerplexitySearchParams, PerplexitySearchResp
     search_recency_filter: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Filter results by recency: hour, day, week, month, or year',
+      visibility: 'user-or-llm',
+      description: 'Filter results by recency (e.g., "hour", "day", "week", "month", "year")',
     },
     search_after_date: {
       type: 'string',
@@ -62,6 +63,20 @@ export const searchTool: ToolConfig<PerplexitySearchParams, PerplexitySearchResp
       required: true,
       visibility: 'user-only',
       description: 'Perplexity API key',
+    },
+  },
+
+  hosting: {
+    envKeyPrefix: 'PERPLEXITY_API_KEY',
+    apiKeyParam: 'apiKey',
+    byokProviderId: 'perplexity',
+    pricing: {
+      type: 'per_request',
+      cost: 0.005,
+    },
+    rateLimit: {
+      mode: 'per_request',
+      requestsPerMinute: 30,
     },
   },
 
@@ -126,29 +141,22 @@ export const searchTool: ToolConfig<PerplexitySearchParams, PerplexitySearchResp
   },
 
   outputs: {
-    success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Search results',
-      properties: {
-        results: {
-          type: 'array',
-          description: 'Array of search results',
-          items: {
-            type: 'object',
-            properties: {
-              title: { type: 'string', description: 'Title of the search result' },
-              url: { type: 'string', description: 'URL of the search result' },
-              snippet: { type: 'string', description: 'Brief excerpt or summary of the content' },
-              date: {
-                type: 'string',
-                description: "Date the page was crawled and added to Perplexity's index",
-              },
-              last_updated: {
-                type: 'string',
-                description: "Date the page was last updated in Perplexity's index",
-              },
-            },
+    results: {
+      type: 'array',
+      description: 'Array of search results',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Title of the search result' },
+          url: { type: 'string', description: 'URL of the search result' },
+          snippet: { type: 'string', description: 'Brief excerpt or summary of the content' },
+          date: {
+            type: 'string',
+            description: "Date the page was crawled and added to Perplexity's index",
+          },
+          last_updated: {
+            type: 'string',
+            description: "Date the page was last updated in Perplexity's index",
           },
         },
       },

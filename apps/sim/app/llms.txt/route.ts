@@ -1,51 +1,71 @@
-export async function GET() {
-  const llmsContent = `# Sim - AI Agent Workflow Builder
-Sim is an open-source AI agent workflow builder for production workflows. Developers at trail-blazing startups to Fortune 500 companies deploy agentic workflows on the Sim platform. 60,000+ developers already use Sim to build and ship AI automations with 100+ integrations. Sim is SOC2 and HIPAA compliant and is designed for secure, enterprise-grade AI automation.
+import { getBaseUrl } from '@/lib/core/utils/urls'
 
-Website: https://sim.ai
-App: https://sim.ai/workspace
-Docs: https://docs.sim.ai
-GitHub: https://github.com/simstudioai/sim
-Region: global
-Primary language: en
+export async function GET() {
+  const baseUrl = getBaseUrl()
+
+  const llmsContent = `# Sim
+
+> Sim is the open-source platform to build AI agents and run your agentic workforce. Connect 1,000+ integrations and LLMs to deploy and orchestrate agentic workflows.
+
+Sim lets teams create agents, workflows, knowledge bases, tables, and docs. Over 100,000 builders use Sim — from startups to Fortune 500 companies. SOC2 and HIPAA compliant.
+
+## Core Pages
+
+- [Homepage](${baseUrl}): Product overview, features, and pricing
+- [Changelog](${baseUrl}/changelog): Product updates and release notes
+- [Sim Blog](${baseUrl}/blog): Announcements, insights, and guides
+
+## Documentation
+
+- [Documentation](https://docs.sim.ai): Complete guides and API reference
+- [Quickstart](https://docs.sim.ai/quickstart): Get started in 5 minutes
+- [API Reference](https://docs.sim.ai/api): REST API documentation
+
+## Key Concepts
+
+- **Workspace**: Container for workflows, data sources, and executions
+- **Workflow**: Directed graph of blocks defining an agentic process
+- **Block**: Individual step (LLM call, tool call, HTTP request, code execution)
+- **Trigger**: Event or schedule that initiates workflow execution
+- **Execution**: A single run of a workflow with logs and outputs
+- **Knowledge Base**: Vector-indexed document store for retrieval-augmented generation
 
 ## Capabilities
-- Visual workflow builder for multi-step AI agents and tools
-- Orchestration of LLM calls, tools, webhooks, and external APIs
-- Scheduled and event-driven agent executions
-- First-class support for retrieval-augmented generation (RAG)
-- Multi-tenant, workspace-based access model
 
-## Ideal Use Cases
-- AI agent workflow automation
-- RAG agents and retrieval pipelines
-- Chatbot and copilot workflows for SaaS products
-- Document and email processing workflows
-- Customer support, marketing, and growth automations
-- Internal operations automations (ops, finance, legal, sales)
+- AI agent creation and deployment
+- Agentic workflow orchestration
+- 1,000+ integrations (Slack, Gmail, Notion, Airtable, databases, and more)
+- Multi-model LLM orchestration (OpenAI, Anthropic, Google, Mistral, xAI, Perplexity)
+- Knowledge base creation with retrieval-augmented generation (RAG)
+- Table creation and management
+- Document creation and processing
+- Scheduled and webhook-triggered executions
 
-## Key Entities
-- Workspace: container for workflows, data sources, and executions
-- Workflow: directed graph of blocks defining an agentic process
-- Block: individual step (LLM call, tool call, HTTP request, code, etc.)
-- Schedule: time-based trigger for running workflows
-- Execution: a single run of a workflow
+## Use Cases
 
-## Getting Started
-- Quickstart: https://docs.sim.ai/quickstart
-- Product overview: https://docs.sim.ai
-- Source code: https://github.com/simstudioai/sim
+- AI agent deployment and orchestration
+- Knowledge bases and RAG pipelines
+- Document creation and processing
+- Customer support automation
+- Internal operations (sales, marketing, legal, finance)
 
-## Safety & Reliability
-- SOC2 and HIPAA aligned security controls
-- Audit-friendly execution logs and cost tracking
-- Fine-grained control over external tools, APIs, and data sources
+## Links
+
+- [GitHub Repository](https://github.com/simstudioai/sim): Open-source codebase
+- [Discord Community](https://discord.gg/Hr4UWYEcTT): Get help and connect with 100,000+ builders
+- [X/Twitter](https://x.com/simdotai): Product updates and announcements
+
+## Optional
+
+- [Careers](https://jobs.ashbyhq.com/sim): Join the Sim team
+- [Terms of Service](${baseUrl}/terms): Legal terms
+- [Privacy Policy](${baseUrl}/privacy): Data handling practices
 `
 
   return new Response(llmsContent, {
     headers: {
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Cache-Control': 'public, max-age=86400',
+      'Content-Type': 'text/markdown; charset=utf-8',
+      'Cache-Control': 'public, max-age=86400, s-maxage=86400',
     },
   })
 }

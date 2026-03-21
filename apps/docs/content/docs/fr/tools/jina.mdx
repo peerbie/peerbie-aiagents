@@ -61,8 +61,6 @@ Extrayez et traitez le contenu web en texte propre et adapté aux LLM avec Jina 
 | Paramètre | Type | Description |
 | --------- | ---- | ----------- |
 | `content` | string | Le contenu extrait de l'URL, traité en texte propre et adapté aux LLM |
-| `links` | array | Liste des liens trouvés sur la page (lorsque gatherLinks ou withLinksummary est activé) |
-| `images` | array | Liste des images trouvées sur la page (lorsque withImagesummary est activé) |
 
 ### `jina_search`
 
@@ -90,8 +88,3 @@ Recherche sur le web et renvoie les 5 meilleurs résultats avec un contenu adapt
 | Paramètre | Type | Description |
 | --------- | ---- | ----------- |
 | `results` | array | Tableau de résultats de recherche, chacun contenant titre, description, url et contenu adapté aux LLM |
-
-## Notes
-
-- Catégorie : `tools`
-- Type : `jina`

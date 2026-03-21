@@ -144,6 +144,7 @@ export const JinaBlock: BlockConfig<ReadUrlResponse | SearchResponse> = {
       required: true,
       placeholder: 'Enter your Jina API key',
       password: true,
+      hideWhenHosted: true,
     },
   ],
   tools: {
@@ -185,8 +186,6 @@ export const JinaBlock: BlockConfig<ReadUrlResponse | SearchResponse> = {
   outputs: {
     // Read URL outputs
     content: { type: 'string', description: 'Extracted content' },
-    links: { type: 'array', description: 'List of links from page' },
-    images: { type: 'array', description: 'List of images from page' },
     // Search outputs
     results: {
       type: 'array',

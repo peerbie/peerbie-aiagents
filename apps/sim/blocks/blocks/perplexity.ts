@@ -50,7 +50,6 @@ export const PerplexityBlock: BlockConfig<PerplexityResponse> = {
         { label: 'Sonar', id: 'sonar' },
         { label: 'Sonar Pro', id: 'sonar-pro' },
         { label: 'Sonar Deep Research', id: 'sonar-deep-research' },
-        { label: 'Sonar Reasoning', id: 'sonar-reasoning' },
         { label: 'Sonar Reasoning Pro', id: 'sonar-reasoning-pro' },
       ],
       value: () => 'sonar',
@@ -129,6 +128,20 @@ export const PerplexityBlock: BlockConfig<PerplexityResponse> = {
       type: 'short-input',
       placeholder: 'MM/DD/YYYY',
       condition: { field: 'operation', value: 'perplexity_search' },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date in MM/DD/YYYY format based on the user's description for Perplexity search "after date" filter.
+This filters results to only include content published after this date.
+Examples:
+- "last week" -> Calculate 7 days ago in MM/DD/YYYY format
+- "beginning of this year" -> 01/01/[current year]
+- "3 months ago" -> Calculate 3 months ago in MM/DD/YYYY format
+- "last January" -> 01/01/[last year or current year depending on context]
+
+Return ONLY the date string in MM/DD/YYYY format - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the date (e.g., "last week", "beginning of this year")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'search_before_date',
@@ -136,6 +149,20 @@ export const PerplexityBlock: BlockConfig<PerplexityResponse> = {
       type: 'short-input',
       placeholder: 'MM/DD/YYYY',
       condition: { field: 'operation', value: 'perplexity_search' },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date in MM/DD/YYYY format based on the user's description for Perplexity search "before date" filter.
+This filters results to only include content published before this date.
+Examples:
+- "today" -> Calculate today's date in MM/DD/YYYY format
+- "end of last month" -> Last day of previous month in MM/DD/YYYY format
+- "6 months ago" -> Calculate 6 months ago in MM/DD/YYYY format
+- "end of 2023" -> 12/31/2023
+
+Return ONLY the date string in MM/DD/YYYY format - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the date (e.g., "end of last month", "today")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'apiKey',
@@ -144,6 +171,7 @@ export const PerplexityBlock: BlockConfig<PerplexityResponse> = {
       placeholder: 'Enter your Perplexity API key',
       password: true,
       required: true,
+      hideWhenHosted: true,
     },
   ],
   tools: {

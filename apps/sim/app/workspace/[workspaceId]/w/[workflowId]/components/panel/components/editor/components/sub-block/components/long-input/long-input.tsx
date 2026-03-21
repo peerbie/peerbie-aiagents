@@ -1,17 +1,17 @@
+import type React from 'react'
 import {
   useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
 } from 'react'
+import { createLogger } from '@sim/logger'
 import { ChevronsUpDown, Wand2 } from 'lucide-react'
 import { Textarea } from '@/components/emcn'
 import { Button } from '@/components/ui/button'
-import { createLogger } from '@/lib/logs/console/logger'
-import { cn } from '@/lib/utils'
+import { cn } from '@/lib/core/utils/cn'
 import { formatDisplayText } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/components/formatted-text'
 import { SubBlockInputController } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/components/sub-block-input-controller'
 import { useSubBlockInput } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/hooks/use-sub-block-input'
@@ -122,11 +122,9 @@ export function LongInput({
     isStreaming: wandHook.isStreaming,
   })
 
-  useEffect(() => {
-    persistSubBlockValueRef.current = (value: string) => {
-      setSubBlockValue(value)
-    }
-  }, [setSubBlockValue])
+  persistSubBlockValueRef.current = (value: string) => {
+    setSubBlockValue(value)
+  }
 
   // Check if wand is actually enabled
   const isWandEnabled = config.wandConfig?.enabled ?? false
@@ -159,11 +157,29 @@ export function LongInput({
 
   const accessiblePrefixes = useAccessibleReferencePrefixes(blockId)
 
+  /**
+   * Callback to show tag dropdown when input is empty and focused
+   */
+  const shouldForceTagDropdown = useCallback(
+    ({
+      value,
+    }: {
+      value: string
+      cursor: number
+      event: 'focus'
+    }): { show: boolean } | undefined => {
+      if (isPreview || disabled) return { show: false }
+      // Show tag dropdown on focus when input is empty
+      if (value.trim() === '') {
+        return { show: true }
+      }
+      return { show: false }
+    },
+    [isPreview, disabled]
+  )
+
   // During streaming, use local content; otherwise use the controller value
-  const value = useMemo(() => {
-    if (wandHook.isStreaming) return localContent
-    return ctrl.valueString
-  }, [wandHook.isStreaming, localContent, ctrl.valueString])
+  const value = wandHook.isStreaming ? localContent : ctrl.valueString
 
   // Base value for syncing (not including streaming)
   const baseValue = isPreview
@@ -175,12 +191,12 @@ export function LongInput({
   // Sync local content with base value when not streaming
   useEffect(() => {
     if (!wandHook.isStreaming) {
-      const baseValueString = baseValue?.toString() ?? ''
-      if (baseValueString !== localContent) {
-        setLocalContent(baseValueString)
-      }
+      setLocalContent((prev) => {
+        const baseValueString = baseValue?.toString() ?? ''
+        return baseValueString !== prev ? baseValueString : prev
+      })
     }
-  }, [baseValue, wandHook.isStreaming]) // Removed localContent to prevent infinite loop
+  }, [baseValue, wandHook.isStreaming])
 
   // Update height when rows prop changes
   useLayoutEffect(() => {
@@ -212,48 +228,45 @@ export function LongInput({
   }, [value])
 
   // Handle resize functionality
-  const startResize = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault()
-      e.stopPropagation()
-      isResizing.current = true
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    isResizing.current = true
 
-      const startY = e.clientY
-      const startHeight = height
+    const startY = e.clientY
+    const startHeight = height
 
-      const handleMouseMove = (moveEvent: MouseEvent) => {
-        if (!isResizing.current) return
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (!isResizing.current) return
 
-        const deltaY = moveEvent.clientY - startY
-        const newHeight = Math.max(MIN_HEIGHT_PX, startHeight + deltaY)
+      const deltaY = moveEvent.clientY - startY
+      const newHeight = Math.max(MIN_HEIGHT_PX, startHeight + deltaY)
 
-        if (textareaRef.current && overlayRef.current) {
-          textareaRef.current.style.height = `${newHeight}px`
-          overlayRef.current.style.height = `${newHeight}px`
-        }
-        if (containerRef.current) {
-          containerRef.current.style.height = `${newHeight}px`
-        }
-        // Keep React state in sync so parent layouts (e.g., Editor) update during drag
-        setHeight(newHeight)
+      if (textareaRef.current && overlayRef.current) {
+        textareaRef.current.style.height = `${newHeight}px`
+        overlayRef.current.style.height = `${newHeight}px`
+      }
+      if (containerRef.current) {
+        containerRef.current.style.height = `${newHeight}px`
+      }
+      // Keep React state in sync so parent layouts (e.g., Editor) update during drag
+      setHeight(newHeight)
+    }
+
+    const handleMouseUp = () => {
+      if (textareaRef.current) {
+        const finalHeight = Number.parseInt(textareaRef.current.style.height, 10) || height
+        setHeight(finalHeight)
       }
 
-      const handleMouseUp = () => {
-        if (textareaRef.current) {
-          const finalHeight = Number.parseInt(textareaRef.current.style.height, 10) || height
-          setHeight(finalHeight)
-        }
+      isResizing.current = false
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
 
-        isResizing.current = false
-        document.removeEventListener('mousemove', handleMouseMove)
-        document.removeEventListener('mouseup', handleMouseUp)
-      }
-
-      document.addEventListener('mousemove', handleMouseMove)
-      document.addEventListener('mouseup', handleMouseUp)
-    },
-    [height]
-  )
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+  }
 
   // Expose wand control handlers to parent via ref
   useImperativeHandle(
@@ -294,6 +307,7 @@ export function LongInput({
         disabled={disabled}
         isStreaming={wandHook.isStreaming}
         previewValue={previewValue}
+        shouldForceTagDropdown={shouldForceTagDropdown}
       >
         {({ ref, onChange: handleChange, onKeyDown, onDrop, onDragOver, onFocus }) => {
           const setRefs = (el: HTMLTextAreaElement | null) => {
@@ -303,7 +317,7 @@ export function LongInput({
           return (
             <div
               ref={containerRef}
-              className={cn('group relative w-full', wandHook.isStreaming && 'streaming-effect')}
+              className='group relative w-full'
               style={{ height: `${height}px` }}
             >
               <Textarea
@@ -332,7 +346,11 @@ export function LongInput({
               />
               <div
                 ref={overlayRef}
-                className='pointer-events-none absolute inset-0 box-border overflow-auto whitespace-pre-wrap break-words border border-transparent bg-transparent px-[8px] py-[8px] font-medium font-sans text-sm'
+                className={cn(
+                  'absolute inset-0 box-border overflow-auto whitespace-pre-wrap break-words border border-transparent bg-transparent px-[8px] py-[8px] font-medium font-sans text-sm',
+                  (isPreview || disabled) && 'opacity-50',
+                  !(isPreview || disabled) && 'pointer-events-none'
+                )}
                 style={{
                   fontFamily: 'inherit',
                   lineHeight: 'inherit',
@@ -369,7 +387,7 @@ export function LongInput({
               {/* Custom resize handle */}
               {!wandHook.isStreaming && (
                 <div
-                  className='absolute right-1 bottom-1 flex h-4 w-4 cursor-ns-resize items-center justify-center rounded-[4px] border border-[var(--surface-11)] bg-[var(--surface-6)] dark:bg-[var(--surface-9)]'
+                  className='absolute right-1 bottom-1 flex h-4 w-4 cursor-ns-resize items-center justify-center rounded-[4px] border border-[var(--border-1)] bg-[var(--surface-5)] dark:bg-[var(--surface-5)]'
                   onMouseDown={startResize}
                   onDragStart={(e) => {
                     e.preventDefault()

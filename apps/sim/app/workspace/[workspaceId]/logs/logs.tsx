@@ -1,52 +1,210 @@
 'use client'
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AlertCircle, ArrowUpRight, Info, Loader2 } from 'lucide-react'
-import Link from 'next/link'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
-import { getIntegrationMetadata } from '@/lib/logs/get-trigger-options'
-import { parseQuery, queryToApiParams } from '@/lib/logs/query-parser'
-import { cn } from '@/lib/utils'
-import Controls from '@/app/workspace/[workspaceId]/logs/components/dashboard/controls'
-import { AutocompleteSearch } from '@/app/workspace/[workspaceId]/logs/components/search/search'
-import { Sidebar } from '@/app/workspace/[workspaceId]/logs/components/sidebar/sidebar'
-import Dashboard from '@/app/workspace/[workspaceId]/logs/dashboard'
-import { formatDate } from '@/app/workspace/[workspaceId]/logs/utils'
+import {
+  Bell,
+  Button,
+  Combobox,
+  type ComboboxOption,
+  Download,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+  Library,
+  Loader,
+} from '@/components/emcn'
+import { DatePicker } from '@/components/emcn/components/date-picker/date-picker'
+import { dollarsToCredits } from '@/lib/billing/credits/conversion'
+import { cn } from '@/lib/core/utils/cn'
+import { formatDuration } from '@/lib/core/utils/formatting'
+import {
+  getEndDateFromTimeRange,
+  getStartDateFromTimeRange,
+  hasActiveFilters,
+} from '@/lib/logs/filters'
+import { getTriggerOptions } from '@/lib/logs/get-trigger-options'
+import { type ParsedFilter, parseQuery, queryToApiParams } from '@/lib/logs/query-parser'
+import {
+  type FolderData,
+  SearchSuggestions,
+  type TriggerData,
+  type WorkflowData,
+} from '@/lib/logs/search-suggestions'
+import type {
+  FilterTag,
+  HeaderAction,
+  ResourceColumn,
+  ResourceRow,
+  SearchConfig,
+} from '@/app/workspace/[workspaceId]/components'
+import {
+  ResourceHeader,
+  ResourceOptionsBar,
+  ResourceTable,
+} from '@/app/workspace/[workspaceId]/components'
+import { useSearchState } from '@/app/workspace/[workspaceId]/logs/hooks/use-search-state'
+import type { Suggestion } from '@/app/workspace/[workspaceId]/logs/types'
+import { useUserPermissionsContext } from '@/app/workspace/[workspaceId]/providers/workspace-permissions-provider'
+import { getBlock } from '@/blocks/registry'
 import { useFolders } from '@/hooks/queries/folders'
-import { useLogDetail, useLogsList } from '@/hooks/queries/logs'
+import {
+  prefetchLogDetail,
+  useDashboardStats,
+  useLogDetail,
+  useLogsList,
+} from '@/hooks/queries/logs'
 import { useDebounce } from '@/hooks/use-debounce'
 import { useFolderStore } from '@/stores/folders/store'
 import { useFilterStore } from '@/stores/logs/filters/store'
 import type { WorkflowLog } from '@/stores/logs/filters/types'
+import { CORE_TRIGGER_TYPES } from '@/stores/logs/filters/types'
+import { useWorkflowRegistry } from '@/stores/workflows/registry/store'
+import {
+  Dashboard,
+  ExecutionSnapshot,
+  LogDetails,
+  LogRowContextMenu,
+  NotificationSettings,
+} from './components'
+import {
+  DELETED_WORKFLOW_COLOR,
+  DELETED_WORKFLOW_LABEL,
+  formatDate,
+  getDisplayStatus,
+  type LogStatus,
+  parseDuration,
+  STATUS_CONFIG,
+  StatusBadge,
+  TriggerBadge,
+} from './utils'
 
-const LOGS_PER_PAGE = 50
+const LOGS_PER_PAGE = 50 as const
+const REFRESH_SPINNER_DURATION_MS = 1000 as const
 
-const selectedRowAnimation = `
-  @keyframes borderPulse {
-    0% { border-left-color: hsl(var(--primary) / 0.3) }
-    50% { border-left-color: hsl(var(--primary) / 0.7) }
-    100% { border-left-color: hsl(var(--primary) / 0.5) }
+const LOG_COLUMNS: ResourceColumn[] = [
+  { id: 'workflow', header: 'Workflow' },
+  { id: 'date', header: 'Date' },
+  { id: 'status', header: 'Status' },
+  { id: 'cost', header: 'Cost' },
+  { id: 'trigger', header: 'Trigger' },
+  { id: 'duration', header: 'Duration' },
+]
+
+interface LogSelectionState {
+  selectedLogId: string | null
+  isSidebarOpen: boolean
+}
+
+type LogSelectionAction =
+  | { type: 'TOGGLE_LOG'; logId: string }
+  | { type: 'SELECT_LOG'; logId: string }
+  | { type: 'CLOSE_SIDEBAR' }
+  | { type: 'TOGGLE_SIDEBAR' }
+
+function logSelectionReducer(
+  state: LogSelectionState,
+  action: LogSelectionAction
+): LogSelectionState {
+  switch (action.type) {
+    case 'TOGGLE_LOG':
+      if (state.selectedLogId === action.logId && state.isSidebarOpen) {
+        return { selectedLogId: null, isSidebarOpen: false }
+      }
+      return { selectedLogId: action.logId, isSidebarOpen: true }
+    case 'SELECT_LOG':
+      return { ...state, selectedLogId: action.logId }
+    case 'CLOSE_SIDEBAR':
+      return { selectedLogId: null, isSidebarOpen: false }
+    case 'TOGGLE_SIDEBAR':
+      return state.selectedLogId ? { ...state, isSidebarOpen: !state.isSidebarOpen } : state
+    default:
+      return state
   }
-  .selected-row {
-    animation: borderPulse 1s ease-in-out
-    border-left-color: hsl(var(--primary) / 0.5)
-  }
-`
+}
 
-const TriggerBadge = React.memo(({ trigger }: { trigger: string }) => {
-  const metadata = getIntegrationMetadata(trigger)
-  return (
+const TIME_RANGE_OPTIONS: ComboboxOption[] = [
+  { value: 'All time', label: 'All time' },
+  { value: 'Past 30 minutes', label: 'Past 30 minutes' },
+  { value: 'Past hour', label: 'Past hour' },
+  { value: 'Past 6 hours', label: 'Past 6 hours' },
+  { value: 'Past 12 hours', label: 'Past 12 hours' },
+  { value: 'Past 24 hours', label: 'Past 24 hours' },
+  { value: 'Past 3 days', label: 'Past 3 days' },
+  { value: 'Past 7 days', label: 'Past 7 days' },
+  { value: 'Past 14 days', label: 'Past 14 days' },
+  { value: 'Past 30 days', label: 'Past 30 days' },
+  { value: 'Custom range', label: 'Custom range' },
+] as const
+
+const colorIconCache = new Map<string, React.ComponentType<{ className?: string }>>()
+
+function getColorIcon(
+  color: string,
+  withRing = false
+): React.ComponentType<{ className?: string }> {
+  const cacheKey = withRing ? `${color}-ring` : color
+  const cached = colorIconCache.get(cacheKey)
+  if (cached) return cached
+
+  const ColorIcon = ({ className }: { className?: string }) => (
     <div
-      className='inline-flex items-center rounded-[6px] px-[8px] py-[2px] font-medium text-[12px] text-white'
-      style={{ backgroundColor: metadata.color }}
-    >
-      {metadata.label}
-    </div>
+      className={cn(className, 'flex-shrink-0 rounded-[3px]', withRing && 'border-[1.5px]')}
+      style={{
+        backgroundColor: color,
+        width: 10,
+        height: 10,
+        ...(withRing && {
+          borderColor: `${color}60`,
+          backgroundClip: 'padding-box' as const,
+        }),
+      }}
+    />
   )
-})
+  ColorIcon.displayName = `ColorIcon(${color}${withRing ? '-ring' : ''})`
+  colorIconCache.set(cacheKey, ColorIcon)
+  return ColorIcon
+}
 
-TriggerBadge.displayName = 'TriggerBadge'
+function getTriggerIcon(
+  triggerType: string
+): React.ComponentType<{ className?: string }> | undefined {
+  if ((CORE_TRIGGER_TYPES as readonly string[]).includes(triggerType)) return undefined
+  const block = getBlock(triggerType)
+  if (!block?.icon) return undefined
+  const BlockIcon = block.icon
+  const TriggerIcon = ({ className }: { className?: string }) => (
+    <BlockIcon className={cn(className, 'flex-shrink-0')} style={{ width: 12, height: 12 }} />
+  )
+  TriggerIcon.displayName = `TriggerIcon(${triggerType})`
+  return TriggerIcon
+}
 
+function formatDateShort(dateStr: string): string {
+  const date = new Date(dateStr)
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ]
+  return `${months[date.getMonth()]} ${date.getDate()}`
+}
+
+/**
+ * Logs page component displaying workflow execution history.
+ * Supports filtering, search, live updates, and detailed log inspection.
+ * @returns The logs page view with table and sidebar details
+ */
 export default function Logs() {
   const params = useParams()
   const workspaceId = params.workspaceId as string
@@ -55,40 +213,88 @@ export default function Logs() {
     setWorkspaceId,
     initializeFromURL,
     timeRange,
+    startDate,
+    endDate,
     level,
     workflowIds,
     folderIds,
-    searchQuery: storeSearchQuery,
+    setWorkflowIds,
     setSearchQuery: setStoreSearchQuery,
     triggers,
     viewMode,
     setViewMode,
+    resetFilters,
+    setLevel,
+    setFolderIds,
+    setTriggers,
+    setTimeRange,
+    setDateRange,
+    clearDateRange,
   } = useFilterStore()
 
   useEffect(() => {
     setWorkspaceId(workspaceId)
-  }, [workspaceId])
+  }, [workspaceId, setWorkspaceId])
 
-  const [selectedLog, setSelectedLog] = useState<WorkflowLog | null>(null)
-  const [selectedLogIndex, setSelectedLogIndex] = useState<number>(-1)
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
-  const selectedRowRef = useRef<HTMLTableRowElement | null>(null)
-  const loaderRef = useRef<HTMLDivElement>(null)
-  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const [{ selectedLogId, isSidebarOpen }, dispatch] = useReducer(logSelectionReducer, {
+    selectedLogId: null,
+    isSidebarOpen: false,
+  })
   const isInitialized = useRef<boolean>(false)
 
-  const [searchQuery, setSearchQuery] = useState(storeSearchQuery)
+  const [searchQuery, setSearchQuery] = useState('')
   const debouncedSearchQuery = useDebounce(searchQuery, 300)
 
-  const [, setAvailableWorkflows] = useState<string[]>([])
-  const [, setAvailableFolders] = useState<string[]>([])
+  useEffect(() => {
+    const urlSearch = new URLSearchParams(window.location.search).get('search') || ''
+    if (urlSearch && urlSearch !== searchQuery) {
+      setSearchQuery(urlSearch)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  const [isLive, setIsLive] = useState(false)
-  const isSearchOpenRef = useRef<boolean>(false)
+  const isLive = true
+  const [isVisuallyRefreshing, setIsVisuallyRefreshing] = useState(false)
+  const [isExporting, setIsExporting] = useState(false)
+  const refreshTimersRef = useRef(new Set<number>())
+  const logsRef = useRef<WorkflowLog[]>([])
+  const selectedLogIndexRef = useRef(-1)
+  const selectedLogIdRef = useRef<string | null>(null)
+  const logsRefetchRef = useRef<() => void>(() => {})
+  const activeLogRefetchRef = useRef<() => void>(() => {})
+  const logsQueryRef = useRef({ isFetching: false, hasNextPage: false, fetchNextPage: () => {} })
+  const [isNotificationSettingsOpen, setIsNotificationSettingsOpen] = useState(false)
+  const userPermissions = useUserPermissionsContext()
+
+  const [contextMenuOpen, setContextMenuOpen] = useState(false)
+  const [contextMenuPosition, setContextMenuPosition] = useState({ x: 0, y: 0 })
+  const [contextMenuLog, setContextMenuLog] = useState<WorkflowLog | null>(null)
+  const contextMenuRef = useRef<HTMLDivElement>(null)
+
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false)
+  const [previewLogId, setPreviewLogId] = useState<string | null>(null)
+
+  const activeLogId = isPreviewOpen ? previewLogId : selectedLogId
+  const queryClient = useQueryClient()
+
+  const detailRefetchInterval = useCallback(
+    (query: { state: { data?: WorkflowLog } }) => {
+      if (!isLive) return false
+      const status = query.state.data?.status
+      return status === 'running' || status === 'pending' ? 3000 : false
+    },
+    [isLive]
+  )
+
+  const activeLogQuery = useLogDetail(activeLogId ?? undefined, {
+    refetchInterval: detailRefetchInterval,
+  })
 
   const logFilters = useMemo(
     () => ({
       timeRange,
+      startDate,
+      endDate,
       level,
       workflowIds,
       folderIds,
@@ -96,148 +302,263 @@ export default function Logs() {
       searchQuery: debouncedSearchQuery,
       limit: LOGS_PER_PAGE,
     }),
-    [timeRange, level, workflowIds, folderIds, triggers, debouncedSearchQuery]
+    [timeRange, startDate, endDate, level, workflowIds, folderIds, triggers, debouncedSearchQuery]
   )
 
   const logsQuery = useLogsList(workspaceId, logFilters, {
     enabled: Boolean(workspaceId) && isInitialized.current,
-    refetchInterval: isLive ? 5000 : false,
+    refetchInterval: isLive ? 3000 : false,
   })
 
-  const logDetailQuery = useLogDetail(selectedLog?.id)
+  const dashboardFilters = useMemo(
+    () => ({
+      timeRange,
+      startDate,
+      endDate,
+      level,
+      workflowIds,
+      folderIds,
+      triggers,
+      searchQuery: debouncedSearchQuery,
+    }),
+    [timeRange, startDate, endDate, level, workflowIds, folderIds, triggers, debouncedSearchQuery]
+  )
+
+  const dashboardStatsQuery = useDashboardStats(workspaceId, dashboardFilters, {
+    enabled: Boolean(workspaceId) && isInitialized.current,
+    refetchInterval: isLive ? 3000 : false,
+  })
 
   const logs = useMemo(() => {
     if (!logsQuery.data?.pages) return []
     return logsQuery.data.pages.flatMap((page) => page.logs)
   }, [logsQuery.data?.pages])
 
+  const selectedLogIndex = useMemo(
+    () => (selectedLogId ? logs.findIndex((l) => l.id === selectedLogId) : -1),
+    [logs, selectedLogId]
+  )
+  const selectedLogFromList = selectedLogIndex >= 0 ? logs[selectedLogIndex] : null
+
+  const selectedLog = useMemo(() => {
+    if (!selectedLogFromList) return null
+    if (!activeLogQuery.data || isPreviewOpen || activeLogQuery.isPlaceholderData)
+      return selectedLogFromList
+    return { ...selectedLogFromList, ...activeLogQuery.data }
+  }, [selectedLogFromList, activeLogQuery.data, activeLogQuery.isPlaceholderData, isPreviewOpen])
+
+  const handleLogHover = useCallback(
+    (rowId: string) => {
+      prefetchLogDetail(queryClient, rowId)
+    },
+    [queryClient]
+  )
+
+  useFolders(workspaceId)
+
   useEffect(() => {
-    setSearchQuery(storeSearchQuery)
-  }, [storeSearchQuery])
-
-  const foldersQuery = useFolders(workspaceId)
-  const { getFolderTree } = useFolderStore()
+    logsRef.current = logs
+  }, [logs])
+  useEffect(() => {
+    selectedLogIndexRef.current = selectedLogIndex
+  }, [selectedLogIndex])
+  useEffect(() => {
+    selectedLogIdRef.current = selectedLogId
+  }, [selectedLogId])
+  useEffect(() => {
+    logsRefetchRef.current = logsQuery.refetch
+  }, [logsQuery.refetch])
+  useEffect(() => {
+    activeLogRefetchRef.current = activeLogQuery.refetch
+  }, [activeLogQuery.refetch])
+  useEffect(() => {
+    logsQueryRef.current = {
+      isFetching: logsQuery.isFetching,
+      hasNextPage: logsQuery.hasNextPage ?? false,
+      fetchNextPage: logsQuery.fetchNextPage,
+    }
+  }, [logsQuery.isFetching, logsQuery.hasNextPage, logsQuery.fetchNextPage])
 
   useEffect(() => {
-    let cancelled = false
-
-    const fetchSuggestions = async () => {
-      try {
-        const res = await fetch(`/api/workflows?workspaceId=${encodeURIComponent(workspaceId)}`)
-        if (res.ok) {
-          const body = await res.json()
-          const names: string[] = Array.isArray(body?.data)
-            ? body.data.map((w: any) => w?.name).filter(Boolean)
-            : []
-          if (!cancelled) setAvailableWorkflows(names)
-        } else {
-          if (!cancelled) setAvailableWorkflows([])
-        }
-
-        const tree = getFolderTree(workspaceId)
-
-        const flatten = (nodes: any[], parentPath = ''): string[] => {
-          const out: string[] = []
-          for (const n of nodes) {
-            const path = parentPath ? `${parentPath} / ${n.name}` : n.name
-            out.push(path)
-            if (n.children?.length) out.push(...flatten(n.children, path))
-          }
-          return out
-        }
-
-        const folderPaths: string[] = Array.isArray(tree) ? flatten(tree) : []
-        if (!cancelled) setAvailableFolders(folderPaths)
-      } catch {
-        if (!cancelled) {
-          setAvailableWorkflows([])
-          setAvailableFolders([])
-        }
-      }
-    }
-
-    if (workspaceId) {
-      fetchSuggestions()
-    }
-
+    const timers = refreshTimersRef.current
     return () => {
-      cancelled = true
+      timers.forEach((id) => window.clearTimeout(id))
+      timers.clear()
     }
-  }, [workspaceId, getFolderTree, foldersQuery.data])
+  }, [])
 
   useEffect(() => {
-    if (isInitialized.current && debouncedSearchQuery !== storeSearchQuery) {
+    if (isInitialized.current) {
       setStoreSearchQuery(debouncedSearchQuery)
     }
-  }, [debouncedSearchQuery, storeSearchQuery])
+  }, [debouncedSearchQuery, setStoreSearchQuery])
 
-  const handleLogClick = (log: WorkflowLog) => {
-    setSelectedLog(log)
-    const index = logs.findIndex((l) => l.id === log.id)
-    setSelectedLogIndex(index)
-    setIsSidebarOpen(true)
-  }
+  const handleLogClick = useCallback((rowId: string) => {
+    dispatch({ type: 'TOGGLE_LOG', logId: rowId })
+  }, [])
 
   const handleNavigateNext = useCallback(() => {
-    if (selectedLogIndex < logs.length - 1) {
-      const nextIndex = selectedLogIndex + 1
-      setSelectedLogIndex(nextIndex)
-      const nextLog = logs[nextIndex]
-      setSelectedLog(nextLog)
+    const idx = selectedLogIndexRef.current
+    const currentLogs = logsRef.current
+    if (idx < currentLogs.length - 1) {
+      dispatch({ type: 'SELECT_LOG', logId: currentLogs[idx + 1].id })
     }
-  }, [selectedLogIndex, logs])
+  }, [])
 
   const handleNavigatePrev = useCallback(() => {
-    if (selectedLogIndex > 0) {
-      const prevIndex = selectedLogIndex - 1
-      setSelectedLogIndex(prevIndex)
-      const prevLog = logs[prevIndex]
-      setSelectedLog(prevLog)
+    const idx = selectedLogIndexRef.current
+    if (idx > 0) {
+      dispatch({ type: 'SELECT_LOG', logId: logsRef.current[idx - 1].id })
     }
-  }, [selectedLogIndex, logs])
+  }, [])
 
-  const handleCloseSidebar = () => {
-    setIsSidebarOpen(false)
-    setSelectedLog(null)
-    setSelectedLogIndex(-1)
-  }
+  const handleCloseSidebar = useCallback(() => {
+    dispatch({ type: 'CLOSE_SIDEBAR' })
+  }, [])
+
+  const handleLogContextMenu = useCallback(
+    (e: React.MouseEvent, rowId: string) => {
+      e.preventDefault()
+      const log = logs.find((l) => l.id === rowId) ?? null
+      setContextMenuPosition({ x: e.clientX, y: e.clientY })
+      setContextMenuLog(log)
+      setContextMenuOpen(true)
+    },
+    [logs]
+  )
+
+  const handleCopyExecutionId = useCallback(() => {
+    if (contextMenuLog?.executionId) {
+      navigator.clipboard.writeText(contextMenuLog.executionId)
+    }
+  }, [contextMenuLog])
+
+  const handleOpenWorkflow = useCallback(() => {
+    const wfId = contextMenuLog?.workflow?.id || contextMenuLog?.workflowId
+    if (wfId) {
+      window.open(`/workspace/${workspaceId}/w/${wfId}`, '_blank')
+    }
+  }, [contextMenuLog, workspaceId])
+
+  const handleToggleWorkflowFilter = useCallback(() => {
+    const wfId = contextMenuLog?.workflow?.id || contextMenuLog?.workflowId
+    if (!wfId) return
+
+    if (workflowIds.length === 1 && workflowIds[0] === wfId) {
+      setWorkflowIds([])
+    } else {
+      setWorkflowIds([wfId])
+    }
+  }, [contextMenuLog, workflowIds, setWorkflowIds])
+
+  const handleClearAllFilters = useCallback(() => {
+    resetFilters()
+    setSearchQuery('')
+  }, [resetFilters, setSearchQuery])
+
+  const handleOpenPreview = useCallback(() => {
+    if (contextMenuLog?.id) {
+      setPreviewLogId(contextMenuLog.id)
+      setIsPreviewOpen(true)
+    }
+  }, [contextMenuLog])
+
+  const contextMenuWorkflowId = contextMenuLog?.workflow?.id || contextMenuLog?.workflowId
+  const isFilteredByThisWorkflow = Boolean(
+    contextMenuWorkflowId && workflowIds.length === 1 && workflowIds[0] === contextMenuWorkflowId
+  )
+
+  const filtersActive = hasActiveFilters({
+    timeRange,
+    level,
+    workflowIds,
+    folderIds,
+    triggers,
+    searchQuery: debouncedSearchQuery,
+  })
 
   useEffect(() => {
-    if (selectedRowRef.current) {
-      selectedRowRef.current.scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest',
-      })
+    if (!selectedLogId) return
+    const row = document.querySelector(`[data-row-id="${selectedLogId}"]`) as HTMLElement | null
+    if (row) {
+      row.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
     }
-  }, [selectedLogIndex])
+  }, [selectedLogId, selectedLogIndex])
 
-  const handleRefresh = async () => {
-    await logsQuery.refetch()
-    if (selectedLog?.id) {
-      await logDetailQuery.refetch()
+  const handleRefresh = useCallback(() => {
+    setIsVisuallyRefreshing(true)
+    const timerId = window.setTimeout(() => {
+      setIsVisuallyRefreshing(false)
+      refreshTimersRef.current.delete(timerId)
+    }, REFRESH_SPINNER_DURATION_MS)
+    refreshTimersRef.current.add(timerId)
+    logsRefetchRef.current()
+    if (selectedLogIdRef.current) {
+      activeLogRefetchRef.current()
     }
-  }
+  }, [])
 
-  const handleExport = async () => {
-    const params = new URLSearchParams()
-    params.set('workspaceId', workspaceId)
-    if (level !== 'all') params.set('level', level)
-    if (triggers.length > 0) params.set('triggers', triggers.join(','))
-    if (workflowIds.length > 0) params.set('workflowIds', workflowIds.join(','))
-    if (folderIds.length > 0) params.set('folderIds', folderIds.join(','))
+  const prevIsFetchingRef = useRef(logsQuery.isFetching)
+  useEffect(() => {
+    const wasFetching = prevIsFetchingRef.current
+    const isFetching = logsQuery.isFetching
+    prevIsFetchingRef.current = isFetching
 
-    const parsed = parseQuery(debouncedSearchQuery)
-    const extra = queryToApiParams(parsed)
-    Object.entries(extra).forEach(([k, v]) => params.set(k, v))
+    if (isLive && !wasFetching && isFetching) {
+      setIsVisuallyRefreshing(true)
+      const timerId = window.setTimeout(() => {
+        setIsVisuallyRefreshing(false)
+        refreshTimersRef.current.delete(timerId)
+      }, REFRESH_SPINNER_DURATION_MS)
+      refreshTimersRef.current.add(timerId)
+    }
+  }, [logsQuery.isFetching, isLive])
 
-    const url = `/api/logs/export?${params.toString()}`
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'logs_export.csv'
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-  }
+  const handleExport = useCallback(async () => {
+    setIsExporting(true)
+    try {
+      const params = new URLSearchParams()
+      params.set('workspaceId', workspaceId)
+      if (level !== 'all') params.set('level', level)
+      if (triggers.length > 0) params.set('triggers', triggers.join(','))
+      if (workflowIds.length > 0) params.set('workflowIds', workflowIds.join(','))
+      if (folderIds.length > 0) params.set('folderIds', folderIds.join(','))
+
+      const computedStartDate = getStartDateFromTimeRange(timeRange, startDate)
+      if (computedStartDate) {
+        params.set('startDate', computedStartDate.toISOString())
+      }
+
+      const computedEndDate = getEndDateFromTimeRange(timeRange, endDate)
+      if (computedEndDate) {
+        params.set('endDate', computedEndDate.toISOString())
+      }
+
+      const parsed = parseQuery(debouncedSearchQuery)
+      const extra = queryToApiParams(parsed)
+      Object.entries(extra).forEach(([k, v]) => params.set(k, v))
+
+      const url = `/api/logs/export?${params.toString()}`
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'logs_export.csv'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } finally {
+      setIsExporting(false)
+    }
+  }, [
+    workspaceId,
+    level,
+    triggers,
+    workflowIds,
+    folderIds,
+    timeRange,
+    startDate,
+    endDate,
+    debouncedSearchQuery,
+  ])
 
   useEffect(() => {
     if (!isInitialized.current) {
@@ -249,6 +570,8 @@ export default function Logs() {
   useEffect(() => {
     const handlePopState = () => {
       initializeFromURL()
+      const params = new URLSearchParams(window.location.search)
+      setSearchQuery(params.get('search') || '')
     }
 
     window.addEventListener('popstate', handlePopState)
@@ -256,349 +579,910 @@ export default function Logs() {
   }, [initializeFromURL])
 
   const loadMoreLogs = useCallback(() => {
-    if (!logsQuery.isFetching && logsQuery.hasNextPage) {
-      logsQuery.fetchNextPage()
+    const { isFetching, hasNextPage, fetchNextPage } = logsQueryRef.current
+    if (!isFetching && hasNextPage) {
+      fetchNextPage()
     }
-  }, [logsQuery])
-
-  useEffect(() => {
-    if (logsQuery.isLoading || !logsQuery.hasNextPage) return
-
-    const scrollContainer = scrollContainerRef.current
-    if (!scrollContainer) return
-
-    const handleScroll = () => {
-      if (!scrollContainer) return
-
-      const { scrollTop, scrollHeight, clientHeight } = scrollContainer
-
-      const scrollPercentage = (scrollTop / (scrollHeight - clientHeight)) * 100
-
-      if (scrollPercentage > 60 && !logsQuery.isFetchingNextPage && logsQuery.hasNextPage) {
-        loadMoreLogs()
-      }
-    }
-
-    scrollContainer.addEventListener('scroll', handleScroll)
-
-    return () => {
-      scrollContainer.removeEventListener('scroll', handleScroll)
-    }
-  }, [logsQuery.isLoading, logsQuery.hasNextPage, logsQuery.isFetchingNextPage, loadMoreLogs])
-
-  useEffect(() => {
-    const currentLoaderRef = loaderRef.current
-    const scrollContainer = scrollContainerRef.current
-
-    if (!currentLoaderRef || !scrollContainer || logsQuery.isLoading || !logsQuery.hasNextPage)
-      return
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const e = entries[0]
-        if (!e?.isIntersecting) return
-        const { scrollTop, scrollHeight, clientHeight } = scrollContainer
-        const pct = (scrollTop / (scrollHeight - clientHeight)) * 100
-        if (pct > 70 && !logsQuery.isFetchingNextPage) {
-          loadMoreLogs()
-        }
-      },
-      {
-        root: scrollContainer,
-        threshold: 0.1,
-        rootMargin: '200px 0px 0px 0px',
-      }
-    )
-
-    observer.observe(currentLoaderRef)
-
-    return () => {
-      observer.unobserve(currentLoaderRef)
-    }
-  }, [logsQuery.isLoading, logsQuery.hasNextPage, logsQuery.isFetchingNextPage, loadMoreLogs])
+  }, [])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (isSearchOpenRef.current) return
-      if (logs.length === 0) return
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      const currentLogs = logsRef.current
+      const currentIndex = selectedLogIndexRef.current
+      if (currentLogs.length === 0) return
 
-      if (selectedLogIndex === -1 && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      if (currentIndex === -1 && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         e.preventDefault()
-        setSelectedLogIndex(0)
-        setSelectedLog(logs[0])
+        dispatch({ type: 'SELECT_LOG', logId: currentLogs[0].id })
         return
       }
 
-      if (e.key === 'ArrowUp' && !e.metaKey && !e.ctrlKey && selectedLogIndex > 0) {
+      if (e.key === 'ArrowUp' && !e.metaKey && !e.ctrlKey && currentIndex > 0) {
         e.preventDefault()
         handleNavigatePrev()
       }
 
-      if (e.key === 'ArrowDown' && !e.metaKey && !e.ctrlKey && selectedLogIndex < logs.length - 1) {
+      if (
+        e.key === 'ArrowDown' &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        currentIndex < currentLogs.length - 1
+      ) {
         e.preventDefault()
         handleNavigateNext()
       }
 
-      if (e.key === 'Enter' && selectedLog) {
+      if (e.key === 'Enter' && selectedLogIdRef.current) {
         e.preventDefault()
-        setIsSidebarOpen(!isSidebarOpen)
+        dispatch({ type: 'TOGGLE_SIDEBAR' })
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [logs, selectedLogIndex, isSidebarOpen, selectedLog, handleNavigateNext, handleNavigatePrev])
+  }, [handleNavigateNext, handleNavigatePrev])
 
-  if (viewMode === 'dashboard') {
-    return <Dashboard />
-  }
+  const handleCloseContextMenu = useCallback(() => setContextMenuOpen(false), [])
+  const handleOpenNotificationSettings = useCallback(() => setIsNotificationSettingsOpen(true), [])
+  const handleClosePreview = useCallback(() => {
+    setIsPreviewOpen(false)
+    setPreviewLogId(null)
+  }, [])
 
-  return (
-    <div className='fixed inset-0 left-[256px] flex min-w-0 flex-col'>
-      {/* Add the animation styles */}
-      <style jsx global>
-        {selectedRowAnimation}
-      </style>
+  const isDashboardView = viewMode === 'dashboard'
 
-      <div className='flex min-w-0 flex-1 overflow-hidden'>
-        <div className='flex flex-1 flex-col p-[24px]'>
-          <Controls
-            isRefetching={logsQuery.isFetching}
-            resetToNow={handleRefresh}
-            live={isLive}
-            setLive={(fn) => setIsLive(fn)}
-            viewMode={viewMode as string}
-            setViewMode={setViewMode as (mode: 'logs' | 'dashboard') => void}
-            searchComponent={
-              <AutocompleteSearch
-                value={searchQuery}
-                onChange={setSearchQuery}
-                placeholder='Search logs...'
-                onOpenChange={(open: boolean) => {
-                  isSearchOpenRef.current = open
-                }}
-              />
-            }
-            showExport={true}
-            onExport={handleExport}
-          />
+  const rows: ResourceRow[] = useMemo(
+    () =>
+      logs.map((log) => {
+        const formattedDate = formatDate(log.createdAt)
+        const displayStatus = getDisplayStatus(log.status)
+        const isMothershipJob = log.trigger === 'mothership'
+        const isDeletedWorkflow = !isMothershipJob && !log.workflow?.id && !log.workflowId
+        const workflowName = isMothershipJob
+          ? log.jobTitle || 'Untitled Job'
+          : isDeletedWorkflow
+            ? DELETED_WORKFLOW_LABEL
+            : log.workflow?.name || 'Unknown'
+        const workflowColor = isMothershipJob
+          ? '#ec4899'
+          : isDeletedWorkflow
+            ? DELETED_WORKFLOW_COLOR
+            : log.workflow?.color
 
-          {/* Table container */}
-          <div className='flex flex-1 flex-col overflow-hidden rounded-[8px] border dark:border-[var(--border)]'>
-            {/* Header */}
-            <div className='flex-shrink-0 border-b bg-[var(--surface-1)] dark:border-[var(--border)] dark:bg-[var(--surface-1)]'>
-              <div className='grid min-w-[600px] grid-cols-[120px_80px_120px_120px] gap-[8px] px-[24px] py-[12px] md:grid-cols-[140px_90px_140px_120px] md:gap-[12px] lg:min-w-0 lg:grid-cols-[160px_100px_160px_120px] lg:gap-[16px] xl:grid-cols-[160px_100px_160px_120px_120px_100px]'>
-                <div className='font-medium text-[13px] text-[var(--text-tertiary)] dark:text-[var(--text-tertiary)]'>
-                  Time
-                </div>
-                <div className='font-medium text-[13px] text-[var(--text-tertiary)] dark:text-[var(--text-tertiary)]'>
-                  Status
-                </div>
-                <div className='font-medium text-[13px] text-[var(--text-tertiary)] dark:text-[var(--text-tertiary)]'>
-                  Workflow
-                </div>
-                <div className='font-medium text-[13px] text-[var(--text-tertiary)] dark:text-[var(--text-tertiary)]'>
-                  Cost
-                </div>
-                <div className='hidden font-medium text-[13px] text-[var(--text-tertiary)] xl:block dark:text-[var(--text-tertiary)]'>
-                  Trigger
-                </div>
+        const durationMs = parseDuration({ duration: log.duration ?? undefined })
+        const durationText =
+          durationMs != null ? (formatDuration(durationMs, { precision: 2 }) ?? '—') : '—'
 
-                <div className='hidden font-medium text-[13px] text-[var(--text-tertiary)] xl:block dark:text-[var(--text-tertiary)]'>
-                  Duration
-                </div>
-              </div>
-            </div>
+        const costCredits =
+          typeof log.cost?.total === 'number' ? dollarsToCredits(log.cost.total) : null
+        const costText =
+          costCredits !== null
+            ? `${costCredits.toLocaleString()} ${costCredits === 1 ? 'credit' : 'credits'}`
+            : '—'
 
-            {/* Table body - scrollable */}
-            <div className='flex-1 overflow-y-auto overflow-x-hidden' ref={scrollContainerRef}>
-              {logsQuery.isLoading && !logsQuery.data ? (
-                <div className='flex h-full items-center justify-center'>
-                  <div className='flex items-center gap-[8px] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
-                    <Loader2 className='h-[16px] w-[16px] animate-spin' />
-                    <span className='text-[13px]'>Loading logs...</span>
-                  </div>
-                </div>
-              ) : logsQuery.isError ? (
-                <div className='flex h-full items-center justify-center'>
-                  <div className='flex items-center gap-[8px] text-[var(--text-error)] dark:text-[var(--text-error)]'>
-                    <AlertCircle className='h-[16px] w-[16px]' />
-                    <span className='text-[13px]'>
-                      Error: {logsQuery.error?.message || 'Failed to load logs'}
-                    </span>
-                  </div>
-                </div>
-              ) : logs.length === 0 ? (
-                <div className='flex h-full items-center justify-center'>
-                  <div className='flex items-center gap-[8px] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
-                    <Info className='h-[16px] w-[16px]' />
-                    <span className='text-[13px]'>No logs found</span>
-                  </div>
-                </div>
-              ) : (
-                <div className='pb-[16px]'>
-                  {logs.map((log) => {
-                    const formattedDate = formatDate(log.createdAt)
-                    const isSelected = selectedLog?.id === log.id
-                    const baseLevel = (log.level || 'info').toLowerCase()
-                    const isError = baseLevel === 'error'
-                    const isPending = !isError && log.hasPendingPause === true
-                    const statusLabel = isPending
-                      ? 'Pending'
-                      : `${baseLevel.charAt(0).toUpperCase()}${baseLevel.slice(1)}`
+        return {
+          id: log.id,
+          cells: {
+            workflow: {
+              icon: workflowColor ? (
+                <div
+                  className='h-[10px] w-[10px] rounded-[3px] border-[1.5px]'
+                  style={{
+                    backgroundColor: workflowColor,
+                    borderColor: `${workflowColor}60`,
+                    backgroundClip: 'padding-box',
+                  }}
+                />
+              ) : undefined,
+              label: workflowName,
+            },
+            date: { label: `${formattedDate.compactDate} ${formattedDate.compactTime}` },
+            status: { content: <StatusBadge status={displayStatus} /> },
+            cost: { label: costText },
+            trigger: { content: <TriggerBadge trigger={log.trigger || 'manual'} /> },
+            duration: { label: durationText },
+          },
+        }
+      }),
+    [logs]
+  )
 
-                    return (
-                      <div
-                        key={log.id}
-                        ref={isSelected ? selectedRowRef : null}
-                        className={`cursor-pointer border-b transition-all duration-200 dark:border-[var(--border)] ${
-                          isSelected ? 'bg-[var(--border)]' : 'hover:bg-[var(--border)]'
-                        }`}
-                        onClick={() => handleLogClick(log)}
-                      >
-                        <div className='grid min-w-[600px] grid-cols-[120px_80px_120px_120px_40px] items-center gap-[8px] px-[24px] py-[12px] md:grid-cols-[140px_90px_140px_120px_40px] md:gap-[12px] lg:min-w-0 lg:grid-cols-[160px_100px_160px_120px_40px] lg:gap-[16px] xl:grid-cols-[160px_100px_160px_120px_120px_100px_40px]'>
-                          {/* Time */}
-                          <div>
-                            <div className='text-[13px]'>
-                              <span className='text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
-                                {formattedDate.compactDate}
-                              </span>
-                              <span className='ml-[8px] hidden font-medium sm:inline'>
-                                {formattedDate.compactTime}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Status */}
-                          <div>
-                            {isError || !isPending ? (
-                              <div
-                                className={cn(
-                                  'flex h-[24px] w-[56px] items-center justify-start rounded-[6px] border pl-[9px]',
-                                  isError
-                                    ? 'gap-[5px] border-[#883827] bg-[#491515]'
-                                    : 'gap-[8px] border-[#686868] bg-[#383838]'
-                                )}
-                              >
-                                <div
-                                  className='h-[6px] w-[6px] rounded-[2px]'
-                                  style={{
-                                    backgroundColor: isError ? '#EF4444' : '#B7B7B7',
-                                  }}
-                                />
-                                <span
-                                  className='font-medium text-[11.5px]'
-                                  style={{ color: isError ? '#EF4444' : '#B7B7B7' }}
-                                >
-                                  {statusLabel}
-                                </span>
-                              </div>
-                            ) : (
-                              <div className='inline-flex items-center bg-amber-300 px-[8px] py-[2px] font-medium text-[12px] text-amber-900 dark:bg-amber-500/90 dark:text-black'>
-                                {statusLabel}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Workflow */}
-                          <div className='min-w-0'>
-                            <div className='flex items-center gap-2 truncate'>
-                              <div
-                                className='h-[12px] w-[12px] flex-shrink-0 rounded'
-                                style={{
-                                  backgroundColor: log.workflow?.color || '#64748b',
-                                }}
-                              />
-                              <span className='truncate font-medium text-[13px] text-[var(--text-primary)] dark:text-[var(--text-primary)]'>
-                                {log.workflow?.name || 'Unknown Workflow'}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Cost */}
-                          <div>
-                            <div className='font-medium text-[12px] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
-                              {typeof (log as any)?.cost?.total === 'number'
-                                ? `$${((log as any).cost.total as number).toFixed(4)}`
-                                : '—'}
-                            </div>
-                          </div>
-
-                          {/* Trigger */}
-                          <div className='hidden xl:block'>
-                            {log.trigger ? (
-                              <TriggerBadge trigger={log.trigger} />
-                            ) : (
-                              <div className='font-medium text-[12px] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
-                                —
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Duration */}
-                          <div className='hidden xl:block'>
-                            <div className='font-medium text-[12px] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'>
-                              {log.duration || '—'}
-                            </div>
-                          </div>
-
-                          {/* Resume Link */}
-                          <div className='flex justify-end'>
-                            {isPending &&
-                            log.executionId &&
-                            (log.workflow?.id || log.workflowId) ? (
-                              <Link
-                                href={`/resume/${log.workflow?.id || log.workflowId}/${log.executionId}`}
-                                className='inline-flex h-[28px] w-[28px] items-center justify-center rounded-[8px] border border-primary/60 border-dashed text-primary hover:bg-primary/10'
-                                aria-label='Open resume console'
-                              >
-                                <ArrowUpRight className='h-[14px] w-[14px]' />
-                              </Link>
-                            ) : (
-                              <span className='h-[28px] w-[28px]' />
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
-
-                  {/* Infinite scroll loader */}
-                  {logsQuery.hasNextPage && (
-                    <div className='flex items-center justify-center py-[16px]'>
-                      <div
-                        ref={loaderRef}
-                        className='flex items-center gap-[8px] text-[var(--text-secondary)] dark:text-[var(--text-secondary)]'
-                      >
-                        {logsQuery.isFetchingNextPage ? (
-                          <>
-                            <Loader2 className='h-[16px] w-[16px] animate-spin' />
-                            <span className='text-[13px]'>Loading more...</span>
-                          </>
-                        ) : (
-                          <span className='text-[13px]'>Scroll to load more</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Log Sidebar */}
-      <Sidebar
-        log={logDetailQuery.data || selectedLog}
+  const sidebarOverlay = useMemo(
+    () => (
+      <LogDetails
+        log={selectedLog}
         isOpen={isSidebarOpen}
-        isLoadingDetails={logDetailQuery.isLoading}
         onClose={handleCloseSidebar}
         onNavigateNext={handleNavigateNext}
         onNavigatePrev={handleNavigatePrev}
         hasNext={selectedLogIndex < logs.length - 1}
         hasPrev={selectedLogIndex > 0}
       />
+    ),
+    [
+      selectedLog,
+      isSidebarOpen,
+      handleCloseSidebar,
+      handleNavigateNext,
+      handleNavigatePrev,
+      selectedLogIndex,
+      logs.length,
+    ]
+  )
+
+  const allWorkflows = useWorkflowRegistry((state) => state.workflows)
+  const folders = useFolderStore((state) => state.folders)
+
+  const filterTags = useMemo<FilterTag[]>(() => {
+    const tags: FilterTag[] = []
+
+    if (level && level !== 'all') {
+      const statuses = level.split(',').filter(Boolean)
+      const labels = statuses.map((s) => STATUS_CONFIG[s as LogStatus]?.label ?? s)
+      tags.push({
+        label: `Status: ${labels.join(', ')}`,
+        onRemove: () => setLevel('all'),
+      })
+    }
+
+    if (workflowIds.length > 0) {
+      const names = workflowIds.map((id) => allWorkflows[id]?.name ?? id.slice(0, 8))
+      tags.push({
+        label: `Workflow: ${names.join(', ')}`,
+        onRemove: () => setWorkflowIds([]),
+      })
+    }
+
+    if (folderIds.length > 0) {
+      const names = folderIds.map((id) => folders[id]?.name ?? id.slice(0, 8))
+      tags.push({
+        label: `Folder: ${names.join(', ')}`,
+        onRemove: () => setFolderIds([]),
+      })
+    }
+
+    if (triggers.length > 0) {
+      tags.push({
+        label: `Trigger: ${triggers.join(', ')}`,
+        onRemove: () => setTriggers([]),
+      })
+    }
+
+    if (timeRange !== 'All time') {
+      tags.push({
+        label:
+          timeRange === 'Custom range' && startDate && endDate
+            ? `${startDate} – ${endDate}`
+            : timeRange,
+        onRemove: () => {
+          clearDateRange()
+          setTimeRange('All time')
+        },
+      })
+    }
+
+    return tags
+  }, [
+    level,
+    setLevel,
+    workflowIds,
+    setWorkflowIds,
+    allWorkflows,
+    folderIds,
+    setFolderIds,
+    folders,
+    triggers,
+    setTriggers,
+    timeRange,
+    startDate,
+    endDate,
+    clearDateRange,
+    setTimeRange,
+  ])
+
+  const workflowsData = useMemo<WorkflowData[]>(
+    () =>
+      Object.values(allWorkflows).map((w) => ({
+        id: w.id,
+        name: w.name,
+        description: w.description,
+      })),
+    [allWorkflows]
+  )
+  const foldersData = useMemo<FolderData[]>(
+    () => Object.values(folders).map((f) => ({ id: f.id, name: f.name })),
+    [folders]
+  )
+  const triggersData = useMemo<TriggerData[]>(
+    () => getTriggerOptions().map((t) => ({ value: t.value, label: t.label, color: t.color })),
+    []
+  )
+  const suggestionEngine = useMemo(
+    () => new SearchSuggestions(workflowsData, foldersData, triggersData),
+    [workflowsData, foldersData, triggersData]
+  )
+
+  const handleFiltersChange = useCallback((filters: ParsedFilter[], textSearch: string) => {
+    const filterStrings = filters.map(
+      (f) => `${f.field}:${f.operator !== '=' ? f.operator : ''}${f.originalValue}`
+    )
+    const fullQuery = [...filterStrings, textSearch].filter(Boolean).join(' ')
+    setSearchQuery(fullQuery)
+  }, [])
+
+  const {
+    appliedFilters,
+    currentInput,
+    textSearch,
+    isOpen: isSuggestionsOpen,
+    suggestions,
+    sections,
+    highlightedIndex,
+    highlightedBadgeIndex,
+    inputRef: searchInputRef,
+    dropdownRef: searchDropdownRef,
+    handleInputChange: handleSearchInputChange,
+    handleSuggestionSelect,
+    handleKeyDown: handleSearchKeyDown,
+    handleFocus: handleSearchFocus,
+    handleBlur: handleSearchBlur,
+    removeBadge,
+    clearAll: clearSearch,
+    setHighlightedIndex,
+    initializeFromQuery,
+  } = useSearchState({
+    onFiltersChange: handleFiltersChange,
+    getSuggestions: (input) => suggestionEngine.getSuggestions(input),
+  })
+
+  const lastExternalSearchValue = useRef(searchQuery)
+  useEffect(() => {
+    if (searchQuery !== lastExternalSearchValue.current) {
+      lastExternalSearchValue.current = searchQuery
+      const parsed = parseQuery(searchQuery)
+      initializeFromQuery(parsed.textSearch, parsed.filters)
+    }
+  }, [searchQuery, initializeFromQuery])
+
+  useEffect(() => {
+    if (searchQuery) {
+      const parsed = parseQuery(searchQuery)
+      initializeFromQuery(parsed.textSearch, parsed.filters)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!isSuggestionsOpen || highlightedIndex < 0) return
+    const container = searchDropdownRef.current
+    const el = container?.querySelector(`[data-index="${highlightedIndex}"]`)
+    if (container && el) {
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+  }, [isSuggestionsOpen, highlightedIndex])
+
+  const suggestionsDropdown = useMemo(() => {
+    if (!isSuggestionsOpen || suggestions.length === 0) return undefined
+    const suggestionType =
+      sections.length > 0 ? 'multi-section' : (suggestions[0]?.category ?? null)
+
+    return (
+      <div className='max-h-96 overflow-y-auto px-1'>
+        {sections.length > 0 ? (
+          <div className='py-1'>
+            {suggestions[0]?.category === 'show-all' && (
+              <SuggestionButton
+                suggestion={suggestions[0]}
+                index={0}
+                highlighted={highlightedIndex === 0}
+                onHover={setHighlightedIndex}
+                onSelect={handleSuggestionSelect}
+              />
+            )}
+            {sections.map((section) => (
+              <div key={section.title}>
+                <div className='px-3 py-1.5 font-medium text-[12px] text-[var(--text-tertiary)] uppercase tracking-wide'>
+                  {section.title}
+                </div>
+                {section.suggestions.map((suggestion) => {
+                  if (suggestion.category === 'show-all') return null
+                  const index = suggestions.indexOf(suggestion)
+                  return (
+                    <SuggestionButton
+                      key={suggestion.id}
+                      suggestion={suggestion}
+                      index={index}
+                      highlighted={index === highlightedIndex}
+                      onHover={setHighlightedIndex}
+                      onSelect={handleSuggestionSelect}
+                      showCategory
+                    />
+                  )
+                })}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className='py-1'>
+            {suggestionType === 'filters' && (
+              <div className='px-3 py-1.5 font-medium text-[12px] text-[var(--text-tertiary)] uppercase tracking-wide'>
+                SUGGESTED FILTERS
+              </div>
+            )}
+            {suggestions.map((suggestion, index) => (
+              <SuggestionButton
+                key={suggestion.id}
+                suggestion={suggestion}
+                index={index}
+                highlighted={index === highlightedIndex}
+                onHover={setHighlightedIndex}
+                onSelect={handleSuggestionSelect}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }, [
+    isSuggestionsOpen,
+    suggestions,
+    sections,
+    highlightedIndex,
+    setHighlightedIndex,
+    handleSuggestionSelect,
+  ])
+
+  const searchTags = useMemo(
+    () => [
+      ...appliedFilters.map((f, i) => ({
+        label: f.field,
+        value: `${f.operator !== '=' ? f.operator : ''}${f.originalValue}`,
+        onRemove: () => removeBadge(i),
+      })),
+      ...(textSearch
+        ? [
+            {
+              label: 'search',
+              value: textSearch,
+              onRemove: () => handleFiltersChange(appliedFilters, ''),
+            },
+          ]
+        : []),
+    ],
+    [appliedFilters, textSearch, removeBadge, handleFiltersChange]
+  )
+
+  const searchConfig = useMemo<SearchConfig>(
+    () => ({
+      value: currentInput,
+      onChange: handleSearchInputChange,
+      placeholder: 'Search logs...',
+      inputRef: searchInputRef,
+      onKeyDown: handleSearchKeyDown,
+      onFocus: handleSearchFocus,
+      onBlur: handleSearchBlur,
+      tags: searchTags.length > 0 ? searchTags : undefined,
+      highlightedTagIndex: highlightedBadgeIndex,
+      onClearAll: clearSearch,
+      dropdown: suggestionsDropdown,
+      dropdownRef: searchDropdownRef,
+    }),
+    [
+      currentInput,
+      handleSearchInputChange,
+      searchInputRef,
+      handleSearchKeyDown,
+      handleSearchFocus,
+      handleSearchBlur,
+      searchTags,
+      highlightedBadgeIndex,
+      clearSearch,
+      suggestionsDropdown,
+      searchDropdownRef,
+    ]
+  )
+
+  const refreshIcon = useMemo(() => {
+    if (!isVisuallyRefreshing) return Loader
+    const Spinning = (props: React.SVGProps<SVGSVGElement>) => <Loader {...props} animate />
+    Spinning.displayName = 'SpinningLoader'
+    return Spinning
+  }, [isVisuallyRefreshing])
+
+  const headerActions = useMemo<HeaderAction[]>(
+    () => [
+      {
+        label: 'Export',
+        icon: Download,
+        onClick: handleExport,
+        disabled: !userPermissions.canEdit || isExporting || logs.length === 0,
+      },
+      {
+        label: 'Notifications',
+        icon: Bell,
+        onClick: handleOpenNotificationSettings,
+      },
+      {
+        label: '',
+        icon: refreshIcon,
+        onClick: handleRefresh,
+        disabled: isVisuallyRefreshing,
+      },
+      {
+        label: 'Logs',
+        onClick: () => setViewMode('logs'),
+        disabled: !isDashboardView,
+      },
+      {
+        label: 'Dashboard',
+        onClick: () => setViewMode('dashboard'),
+        disabled: isDashboardView,
+      },
+    ],
+    [
+      isDashboardView,
+      setViewMode,
+      refreshIcon,
+      isVisuallyRefreshing,
+      handleRefresh,
+      handleExport,
+      userPermissions.canEdit,
+      isExporting,
+      logs.length,
+      handleOpenNotificationSettings,
+    ]
+  )
+
+  return (
+    <>
+      <div className='flex h-full flex-1 flex-col overflow-hidden bg-[var(--bg)]'>
+        <ResourceHeader icon={Library} title='Logs' actions={headerActions} />
+        <ResourceOptionsBar
+          search={searchConfig}
+          filter={
+            <LogsFilterPanel searchQuery={searchQuery} onSearchQueryChange={setSearchQuery} />
+          }
+          filterTags={filterTags}
+        />
+        {isDashboardView ? (
+          <div className='relative flex min-h-0 flex-1 flex-col overflow-auto'>
+            <div className='flex min-h-0 flex-1 flex-col px-[24px]'>
+              <Dashboard
+                stats={dashboardStatsQuery.data}
+                isLoading={dashboardStatsQuery.isLoading}
+                error={dashboardStatsQuery.error}
+              />
+            </div>
+            {sidebarOverlay}
+          </div>
+        ) : (
+          <ResourceTable
+            columns={LOG_COLUMNS}
+            rows={rows}
+            selectedRowId={selectedLogId}
+            onRowClick={handleLogClick}
+            onRowHover={handleLogHover}
+            onRowContextMenu={handleLogContextMenu}
+            isLoading={!logsQuery.data}
+            onLoadMore={loadMoreLogs}
+            hasMore={logsQuery.hasNextPage ?? false}
+            isLoadingMore={logsQuery.isFetchingNextPage}
+            emptyMessage='No logs found'
+            overlay={sidebarOverlay}
+          />
+        )}
+      </div>
+
+      <NotificationSettings
+        workspaceId={workspaceId}
+        open={isNotificationSettingsOpen}
+        onOpenChange={setIsNotificationSettingsOpen}
+      />
+
+      <LogRowContextMenu
+        isOpen={contextMenuOpen}
+        position={contextMenuPosition}
+        onClose={handleCloseContextMenu}
+        log={contextMenuLog}
+        onCopyExecutionId={handleCopyExecutionId}
+        onOpenWorkflow={handleOpenWorkflow}
+        onOpenPreview={handleOpenPreview}
+        onToggleWorkflowFilter={handleToggleWorkflowFilter}
+        onClearAllFilters={handleClearAllFilters}
+        isFilteredByThisWorkflow={isFilteredByThisWorkflow}
+        hasActiveFilters={filtersActive}
+      />
+
+      {isPreviewOpen && !activeLogQuery.isPlaceholderData && activeLogQuery.data?.executionId && (
+        <ExecutionSnapshot
+          executionId={activeLogQuery.data.executionId}
+          traceSpans={activeLogQuery.data.executionData?.traceSpans}
+          isModal
+          isOpen={isPreviewOpen}
+          onClose={handleClosePreview}
+        />
+      )}
+    </>
+  )
+}
+
+interface LogsFilterPanelProps {
+  searchQuery: string
+  onSearchQueryChange: (query: string) => void
+}
+
+function LogsFilterPanel({ searchQuery, onSearchQueryChange }: LogsFilterPanelProps) {
+  const params = useParams()
+  const workspaceId = params.workspaceId as string
+
+  const {
+    level,
+    setLevel,
+    workflowIds,
+    setWorkflowIds,
+    folderIds,
+    setFolderIds,
+    triggers,
+    setTriggers,
+    timeRange,
+    setTimeRange,
+    startDate,
+    endDate,
+    setDateRange,
+    clearDateRange,
+    resetFilters,
+  } = useFilterStore()
+
+  const [datePickerOpen, setDatePickerOpen] = useState(false)
+  const [previousTimeRange, setPreviousTimeRange] = useState(timeRange)
+  const folders = useFolderStore((state) => state.folders)
+  const allWorkflows = useWorkflowRegistry((state) => state.workflows)
+
+  const workflows = useMemo(
+    () => Object.values(allWorkflows).map((w) => ({ id: w.id, name: w.name, color: w.color })),
+    [allWorkflows]
+  )
+
+  const folderList = useMemo(
+    () => Object.values(folders).filter((f) => f.workspaceId === workspaceId),
+    [folders, workspaceId]
+  )
+
+  const selectedStatuses = useMemo((): string[] => {
+    if (level === 'all' || !level) return []
+    return level.split(',').filter(Boolean)
+  }, [level])
+
+  const statusOptions: ComboboxOption[] = useMemo(
+    () =>
+      (Object.keys(STATUS_CONFIG) as LogStatus[]).map((status) => ({
+        value: status,
+        label: STATUS_CONFIG[status].label,
+        icon: getColorIcon(STATUS_CONFIG[status].color),
+      })),
+    []
+  )
+
+  const handleStatusChange = useCallback(
+    (values: string[]) => {
+      setLevel(values.length === 0 ? 'all' : values.join(','))
+    },
+    [setLevel]
+  )
+
+  const statusDisplayLabel = useMemo(() => {
+    if (selectedStatuses.length === 0) return 'Status'
+    if (selectedStatuses.length === 1) {
+      const status = statusOptions.find((s) => s.value === selectedStatuses[0])
+      return status?.label || '1 selected'
+    }
+    return `${selectedStatuses.length} selected`
+  }, [selectedStatuses, statusOptions])
+
+  const selectedStatusColor = useMemo(() => {
+    if (selectedStatuses.length !== 1) return null
+    const status = selectedStatuses[0] as LogStatus
+    return STATUS_CONFIG[status]?.color ?? null
+  }, [selectedStatuses])
+
+  const workflowOptions: ComboboxOption[] = useMemo(
+    () => workflows.map((w) => ({ value: w.id, label: w.name, icon: getColorIcon(w.color, true) })),
+    [workflows]
+  )
+
+  const workflowDisplayLabel = useMemo(() => {
+    if (workflowIds.length === 0) return 'Workflow'
+    if (workflowIds.length === 1) {
+      const workflow = workflows.find((w) => w.id === workflowIds[0])
+      return workflow?.name || '1 selected'
+    }
+    return `${workflowIds.length} workflows`
+  }, [workflowIds, workflows])
+
+  const selectedWorkflow =
+    workflowIds.length === 1 ? workflows.find((w) => w.id === workflowIds[0]) : null
+
+  const folderOptions: ComboboxOption[] = useMemo(
+    () => folderList.map((f) => ({ value: f.id, label: f.name })),
+    [folderList]
+  )
+
+  const folderDisplayLabel = useMemo(() => {
+    if (folderIds.length === 0) return 'Folder'
+    if (folderIds.length === 1) {
+      const folder = folderList.find((f) => f.id === folderIds[0])
+      return folder?.name || '1 selected'
+    }
+    return `${folderIds.length} folders`
+  }, [folderIds, folderList])
+
+  const triggerOptions: ComboboxOption[] = useMemo(
+    () =>
+      getTriggerOptions().map((t) => ({
+        value: t.value,
+        label: t.label,
+        icon: getTriggerIcon(t.value),
+      })),
+    []
+  )
+
+  const triggerDisplayLabel = useMemo(() => {
+    if (triggers.length === 0) return 'Trigger'
+    if (triggers.length === 1) {
+      const trigger = triggerOptions.find((t) => t.value === triggers[0])
+      return trigger?.label || '1 selected'
+    }
+    return `${triggers.length} triggers`
+  }, [triggers, triggerOptions])
+
+  const timeDisplayLabel = useMemo(() => {
+    if (timeRange === 'All time') return 'Time'
+    if (timeRange === 'Custom range' && startDate && endDate) {
+      return `${formatDateShort(startDate)} - ${formatDateShort(endDate)}`
+    }
+    if (timeRange === 'Custom range') return 'Custom range'
+    return timeRange
+  }, [timeRange, startDate, endDate])
+
+  const handleTimeRangeChange = useCallback(
+    (val: string) => {
+      if (val === 'Custom range') {
+        setPreviousTimeRange(timeRange)
+        setDatePickerOpen(true)
+      } else {
+        clearDateRange()
+        setTimeRange(val as typeof timeRange)
+      }
+    },
+    [timeRange, setTimeRange, clearDateRange]
+  )
+
+  const handleDateRangeApply = useCallback(
+    (start: string, end: string) => {
+      setDateRange(start, end)
+      setDatePickerOpen(false)
+    },
+    [setDateRange]
+  )
+
+  const handleDatePickerCancel = useCallback(() => {
+    if (timeRange === 'Custom range' && !startDate) {
+      setTimeRange(previousTimeRange)
+    }
+    setDatePickerOpen(false)
+  }, [timeRange, startDate, previousTimeRange, setTimeRange])
+
+  const filtersActive = useMemo(
+    () =>
+      hasActiveFilters({
+        timeRange,
+        level,
+        workflowIds,
+        folderIds,
+        triggers,
+        searchQuery,
+      }),
+    [timeRange, level, workflowIds, folderIds, triggers, searchQuery]
+  )
+
+  const handleClearFilters = useCallback(() => {
+    resetFilters()
+    onSearchQueryChange('')
+  }, [resetFilters, onSearchQueryChange])
+
+  return (
+    <div className='flex flex-col gap-[12px] p-[12px]'>
+      <div className='flex flex-col gap-[6px]'>
+        <span className='font-medium text-[12px] text-[var(--text-secondary)]'>Status</span>
+        <Combobox
+          options={statusOptions}
+          multiSelect
+          multiSelectValues={selectedStatuses}
+          onMultiSelectChange={handleStatusChange}
+          placeholder='All statuses'
+          overlayContent={
+            <span className='flex items-center gap-[6px] truncate text-[var(--text-primary)]'>
+              {selectedStatusColor && (
+                <div
+                  className='flex-shrink-0 rounded-[3px]'
+                  style={{ backgroundColor: selectedStatusColor, width: 8, height: 8 }}
+                />
+              )}
+              <span className='truncate'>{statusDisplayLabel}</span>
+            </span>
+          }
+          showAllOption
+          allOptionLabel='All statuses'
+          size='sm'
+          className='h-[32px] w-full rounded-[6px]'
+        />
+      </div>
+
+      <div className='flex flex-col gap-[6px]'>
+        <span className='font-medium text-[12px] text-[var(--text-secondary)]'>Workflow</span>
+        <Combobox
+          options={workflowOptions}
+          multiSelect
+          multiSelectValues={workflowIds}
+          onMultiSelectChange={setWorkflowIds}
+          placeholder='All workflows'
+          overlayContent={
+            <span className='flex items-center gap-[6px] truncate text-[var(--text-primary)]'>
+              {selectedWorkflow && (
+                <div
+                  className='h-[8px] w-[8px] flex-shrink-0 rounded-[2px] border-[1.5px]'
+                  style={{
+                    backgroundColor: selectedWorkflow.color,
+                    borderColor: `${selectedWorkflow.color}60`,
+                    backgroundClip: 'padding-box',
+                  }}
+                />
+              )}
+              <span className='truncate'>{workflowDisplayLabel}</span>
+            </span>
+          }
+          searchable
+          searchPlaceholder='Search workflows...'
+          showAllOption
+          allOptionLabel='All workflows'
+          size='sm'
+          className='h-[32px] w-full rounded-[6px]'
+        />
+      </div>
+
+      <div className='flex flex-col gap-[6px]'>
+        <span className='font-medium text-[12px] text-[var(--text-secondary)]'>Folder</span>
+        <Combobox
+          options={folderOptions}
+          multiSelect
+          multiSelectValues={folderIds}
+          onMultiSelectChange={setFolderIds}
+          placeholder='All folders'
+          overlayContent={
+            <span className='truncate text-[var(--text-primary)]'>{folderDisplayLabel}</span>
+          }
+          searchable
+          searchPlaceholder='Search folders...'
+          showAllOption
+          allOptionLabel='All folders'
+          size='sm'
+          className='h-[32px] w-full rounded-[6px]'
+        />
+      </div>
+
+      <div className='flex flex-col gap-[6px]'>
+        <span className='font-medium text-[12px] text-[var(--text-secondary)]'>Trigger</span>
+        <Combobox
+          options={triggerOptions}
+          multiSelect
+          multiSelectValues={triggers}
+          onMultiSelectChange={setTriggers}
+          placeholder='All triggers'
+          overlayContent={
+            <span className='truncate text-[var(--text-primary)]'>{triggerDisplayLabel}</span>
+          }
+          searchable
+          searchPlaceholder='Search triggers...'
+          showAllOption
+          allOptionLabel='All triggers'
+          size='sm'
+          className='h-[32px] w-full rounded-[6px]'
+        />
+      </div>
+
+      <div className='flex flex-col gap-[6px]'>
+        <span className='font-medium text-[12px] text-[var(--text-secondary)]'>Time Range</span>
+        <DropdownMenu open={datePickerOpen} onOpenChange={setDatePickerOpen}>
+          <DropdownMenuTrigger asChild>
+            <div>
+              <Combobox
+                options={TIME_RANGE_OPTIONS as unknown as ComboboxOption[]}
+                value={timeRange}
+                onChange={handleTimeRangeChange}
+                placeholder='All time'
+                overlayContent={
+                  <span className='truncate text-[var(--text-primary)]'>{timeDisplayLabel}</span>
+                }
+                size='sm'
+                className='h-[32px] w-full rounded-[6px]'
+              />
+            </div>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side='bottom'
+            align='end'
+            sideOffset={4}
+            collisionPadding={16}
+            className='w-auto p-0'
+          >
+            <DatePicker
+              mode='range'
+              startDate={startDate}
+              endDate={endDate}
+              onRangeChange={handleDateRangeApply}
+              onCancel={handleDatePickerCancel}
+              inline
+            />
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      {filtersActive && (
+        <Button
+          variant='active'
+          onClick={handleClearFilters}
+          className='h-[32px] w-full rounded-[6px]'
+        >
+          Clear All Filters
+        </Button>
+      )}
     </div>
+  )
+}
+
+function SuggestionButton({
+  suggestion,
+  index,
+  highlighted,
+  onHover,
+  onSelect,
+  showCategory,
+}: {
+  suggestion: Suggestion
+  index: number
+  highlighted: boolean
+  onHover: (i: number) => void
+  onSelect: (s: Suggestion) => void
+  showCategory?: boolean
+}) {
+  return (
+    <button
+      data-index={index}
+      className={cn(
+        'w-full rounded-[6px] px-3 py-2 text-left transition-colors hover:bg-[var(--surface-5)]',
+        highlighted && 'bg-[var(--surface-5)]'
+      )}
+      onMouseEnter={() => onHover(index)}
+      onMouseDown={(e) => {
+        e.preventDefault()
+        onSelect(suggestion)
+      }}
+    >
+      <div className='flex items-center justify-between gap-3'>
+        <div className='min-w-0 flex-1 truncate text-[13px]'>{suggestion.label}</div>
+        {showCategory && suggestion.value !== suggestion.label && (
+          <div className='shrink-0 font-mono text-[11px] text-[var(--text-muted)]'>
+            {suggestion.category === 'workflow' || suggestion.category === 'folder'
+              ? `${suggestion.category}:`
+              : ''}
+          </div>
+        )}
+        {!showCategory && suggestion.description && (
+          <div className='shrink-0 text-[11px] text-[var(--text-muted)]'>{suggestion.value}</div>
+        )}
+      </div>
+    </button>
   )
 }

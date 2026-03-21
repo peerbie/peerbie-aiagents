@@ -1,14 +1,20 @@
-import { NextResponse } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
-import { validateAlphanumericId, validateJiraCloudId } from '@/lib/security/input-validation'
+import { createLogger } from '@sim/logger'
+import { type NextRequest, NextResponse } from 'next/server'
+import { checkSessionOrInternalAuth } from '@/lib/auth/hybrid'
+import { validateAlphanumericId, validateJiraCloudId } from '@/lib/core/security/input-validation'
 import { getConfluenceCloudId } from '@/tools/confluence/utils'
 
 const logger = createLogger('ConfluenceCreatePageAPI')
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
+    const auth = await checkSessionOrInternalAuth(request)
+    if (!auth.success || !auth.userId) {
+      return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 })
+    }
+
     const {
       domain,
       accessToken,
@@ -29,6 +35,16 @@ export async function POST(request: Request) {
 
     if (!spaceId) {
       return NextResponse.json({ error: 'Space ID is required' }, { status: 400 })
+    }
+
+    if (!/^\d+$/.test(String(spaceId))) {
+      return NextResponse.json(
+        {
+          error:
+            'Invalid Space ID. The Space ID must be a numeric value, not the space key from the URL. Use the "list" operation to get all spaces with their numeric IDs.',
+        },
+        { status: 400 }
+      )
     }
 
     if (!title) {
@@ -91,10 +107,24 @@ export async function POST(request: Request) {
         statusText: response.statusText,
         error: JSON.stringify(errorData, null, 2),
       })
-      const errorMessage =
-        errorData?.message ||
-        (errorData?.errors && JSON.stringify(errorData.errors)) ||
-        `Failed to create Confluence page (${response.status})`
+
+      let errorMessage = `Failed to create Confluence page (${response.status})`
+      if (errorData?.message) {
+        errorMessage = errorData.message
+      } else if (errorData?.errors && Array.isArray(errorData.errors)) {
+        const firstError = errorData.errors[0]
+        if (firstError?.title) {
+          if (firstError.title.includes("'spaceId'") && firstError.title.includes('Long')) {
+            errorMessage =
+              'Invalid Space ID. Use the list spaces operation to find valid space IDs.'
+          } else {
+            errorMessage = firstError.title
+          }
+        } else {
+          errorMessage = JSON.stringify(errorData.errors)
+        }
+      }
+
       return NextResponse.json({ error: errorMessage }, { status: response.status })
     }
 

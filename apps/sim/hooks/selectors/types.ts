@@ -2,7 +2,28 @@ import type React from 'react'
 import type { QueryKey } from '@tanstack/react-query'
 
 export type SelectorKey =
+  | 'airtable.bases'
+  | 'airtable.tables'
+  | 'asana.workspaces'
+  | 'attio.lists'
+  | 'attio.objects'
+  | 'bigquery.datasets'
+  | 'bigquery.tables'
+  | 'calcom.eventTypes'
+  | 'calcom.schedules'
+  | 'confluence.spaces'
+  | 'google.tasks.lists'
+  | 'jsm.requestTypes'
+  | 'jsm.serviceDesks'
+  | 'microsoft.planner.plans'
+  | 'notion.databases'
+  | 'notion.pages'
+  | 'pipedrive.pipelines'
+  | 'sharepoint.lists'
+  | 'trello.boards'
+  | 'zoom.meetings'
   | 'slack.channels'
+  | 'slack.users'
   | 'gmail.labels'
   | 'outlook.folders'
   | 'google.calendar'
@@ -12,15 +33,23 @@ export type SelectorKey =
   | 'linear.teams'
   | 'confluence.pages'
   | 'microsoft.teams'
+  | 'microsoft.chats'
+  | 'microsoft.channels'
   | 'wealthbox.contacts'
   | 'onedrive.files'
   | 'onedrive.folders'
   | 'sharepoint.sites'
   | 'microsoft.excel'
+  | 'microsoft.excel.sheets'
   | 'microsoft.word'
   | 'microsoft.planner'
   | 'google.drive'
+  | 'google.sheets'
   | 'knowledge.documents'
+  | 'webflow.sites'
+  | 'webflow.collections'
+  | 'webflow.items'
+  | 'sim.workflows'
 
 export interface SelectorOption {
   id: string
@@ -32,8 +61,7 @@ export interface SelectorOption {
 export interface SelectorContext {
   workspaceId?: string
   workflowId?: string
-  credentialId?: string
-  provider?: string
+  oauthCredential?: string
   serviceId?: string
   domain?: string
   teamId?: string
@@ -42,6 +70,13 @@ export interface SelectorContext {
   planId?: string
   mimeType?: string
   fileId?: string
+  siteId?: string
+  collectionId?: string
+  spreadsheetId?: string
+  excludeWorkflowId?: string
+  baseId?: string
+  datasetId?: string
+  serviceDeskId?: string
 }
 
 export interface SelectorQueryArgs {

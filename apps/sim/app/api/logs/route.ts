@@ -1,30 +1,43 @@
 import { db } from '@sim/db'
-import { pausedExecutions, permissions, workflow, workflowExecutionLogs } from '@sim/db/schema'
-import { and, desc, eq, gte, inArray, lte, type SQL, sql } from 'drizzle-orm'
+import {
+  jobExecutionLogs,
+  pausedExecutions,
+  permissions,
+  workflow,
+  workflowDeploymentVersion,
+  workflowExecutionLogs,
+} from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
+import {
+  and,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  ne,
+  or,
+  type SQL,
+  sql,
+} from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { getSession } from '@/lib/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { buildFilterConditions, LogFilterParamsSchema } from '@/lib/logs/filters'
 
 const logger = createLogger('LogsAPI')
 
 export const revalidate = 0
 
-const QueryParamsSchema = z.object({
+const QueryParamsSchema = LogFilterParamsSchema.extend({
   details: z.enum(['basic', 'full']).optional().default('basic'),
   limit: z.coerce.number().optional().default(100),
   offset: z.coerce.number().optional().default(0),
-  level: z.string().optional(),
-  workflowIds: z.string().optional(), // Comma-separated list of workflow IDs
-  folderIds: z.string().optional(), // Comma-separated list of folder IDs
-  triggers: z.string().optional(), // Comma-separated list of trigger types
-  startDate: z.string().optional(),
-  endDate: z.string().optional(),
-  search: z.string().optional(),
-  workflowName: z.string().optional(),
-  folderName: z.string().optional(),
-  workspaceId: z.string(),
 })
 
 export async function GET(request: NextRequest) {
@@ -43,7 +56,6 @@ export async function GET(request: NextRequest) {
       const { searchParams } = new URL(request.url)
       const params = QueryParamsSchema.parse(Object.fromEntries(searchParams.entries()))
 
-      // Conditionally select columns based on detail level to optimize performance
       const selectColumns =
         params.details === 'full'
           ? {
@@ -51,14 +63,16 @@ export async function GET(request: NextRequest) {
               workflowId: workflowExecutionLogs.workflowId,
               executionId: workflowExecutionLogs.executionId,
               stateSnapshotId: workflowExecutionLogs.stateSnapshotId,
+              deploymentVersionId: workflowExecutionLogs.deploymentVersionId,
               level: workflowExecutionLogs.level,
+              status: workflowExecutionLogs.status,
               trigger: workflowExecutionLogs.trigger,
               startedAt: workflowExecutionLogs.startedAt,
               endedAt: workflowExecutionLogs.endedAt,
               totalDurationMs: workflowExecutionLogs.totalDurationMs,
-              executionData: workflowExecutionLogs.executionData, // Large field - only in full mode
+              executionData: workflowExecutionLogs.executionData,
               cost: workflowExecutionLogs.cost,
-              files: workflowExecutionLogs.files, // Large field - only in full mode
+              files: workflowExecutionLogs.files,
               createdAt: workflowExecutionLogs.createdAt,
               workflowName: workflow.name,
               workflowDescription: workflow.description,
@@ -71,21 +85,24 @@ export async function GET(request: NextRequest) {
               pausedStatus: pausedExecutions.status,
               pausedTotalPauseCount: pausedExecutions.totalPauseCount,
               pausedResumedCount: pausedExecutions.resumedCount,
+              deploymentVersion: workflowDeploymentVersion.version,
+              deploymentVersionName: workflowDeploymentVersion.name,
             }
           : {
-              // Basic mode - exclude large fields for better performance
               id: workflowExecutionLogs.id,
               workflowId: workflowExecutionLogs.workflowId,
               executionId: workflowExecutionLogs.executionId,
               stateSnapshotId: workflowExecutionLogs.stateSnapshotId,
+              deploymentVersionId: workflowExecutionLogs.deploymentVersionId,
               level: workflowExecutionLogs.level,
+              status: workflowExecutionLogs.status,
               trigger: workflowExecutionLogs.trigger,
               startedAt: workflowExecutionLogs.startedAt,
               endedAt: workflowExecutionLogs.endedAt,
               totalDurationMs: workflowExecutionLogs.totalDurationMs,
-              executionData: sql<null>`NULL`, // Exclude large execution data in basic mode
+              executionData: sql<null>`NULL`,
               cost: workflowExecutionLogs.cost,
-              files: sql<null>`NULL`, // Exclude files in basic mode
+              files: sql<null>`NULL`,
               createdAt: workflowExecutionLogs.createdAt,
               workflowName: workflow.name,
               workflowDescription: workflow.description,
@@ -98,7 +115,11 @@ export async function GET(request: NextRequest) {
               pausedStatus: pausedExecutions.status,
               pausedTotalPauseCount: pausedExecutions.totalPauseCount,
               pausedResumedCount: pausedExecutions.resumedCount,
+              deploymentVersion: workflowDeploymentVersion.version,
+              deploymentVersionName: sql<null>`NULL`,
             }
+
+      const workspaceFilter = eq(workflowExecutionLogs.workspaceId, params.workspaceId)
 
       const baseQuery = db
         .select(selectColumns)
@@ -107,132 +128,250 @@ export async function GET(request: NextRequest) {
           pausedExecutions,
           eq(pausedExecutions.executionId, workflowExecutionLogs.executionId)
         )
-        .innerJoin(
-          workflow,
-          and(
-            eq(workflowExecutionLogs.workflowId, workflow.id),
-            eq(workflow.workspaceId, params.workspaceId)
-          )
+        .leftJoin(
+          workflowDeploymentVersion,
+          eq(workflowDeploymentVersion.id, workflowExecutionLogs.deploymentVersionId)
         )
+        .leftJoin(workflow, eq(workflowExecutionLogs.workflowId, workflow.id))
         .innerJoin(
           permissions,
           and(
             eq(permissions.entityType, 'workspace'),
-            eq(permissions.entityId, workflow.workspaceId),
+            eq(permissions.entityId, workflowExecutionLogs.workspaceId),
             eq(permissions.userId, userId)
           )
         )
 
-      // Build additional conditions for the query
       let conditions: SQL | undefined
 
-      // Filter by level (supports comma-separated for OR conditions)
       if (params.level && params.level !== 'all') {
         const levels = params.level.split(',').filter(Boolean)
-        if (levels.length === 1) {
-          conditions = and(conditions, eq(workflowExecutionLogs.level, levels[0]))
-        } else if (levels.length > 1) {
-          conditions = and(conditions, inArray(workflowExecutionLogs.level, levels))
+        const levelConditions: SQL[] = []
+
+        for (const level of levels) {
+          if (level === 'error') {
+            levelConditions.push(eq(workflowExecutionLogs.level, 'error'))
+          } else if (level === 'info') {
+            const condition = and(
+              eq(workflowExecutionLogs.level, 'info'),
+              isNotNull(workflowExecutionLogs.endedAt)
+            )
+            if (condition) levelConditions.push(condition)
+          } else if (level === 'running') {
+            const condition = and(
+              eq(workflowExecutionLogs.level, 'info'),
+              isNull(workflowExecutionLogs.endedAt)
+            )
+            if (condition) levelConditions.push(condition)
+          } else if (level === 'pending') {
+            const condition = and(
+              eq(workflowExecutionLogs.level, 'info'),
+              or(
+                sql`(${pausedExecutions.totalPauseCount} > 0 AND ${pausedExecutions.resumedCount} < ${pausedExecutions.totalPauseCount})`,
+                and(
+                  isNotNull(pausedExecutions.status),
+                  sql`${pausedExecutions.status} != 'fully_resumed'`
+                )
+              )
+            )
+            if (condition) levelConditions.push(condition)
+          }
+        }
+
+        if (levelConditions.length > 0) {
+          conditions = and(
+            conditions,
+            levelConditions.length === 1 ? levelConditions[0] : or(...levelConditions)
+          )
         }
       }
 
-      // Filter by specific workflow IDs
-      if (params.workflowIds) {
-        const workflowIds = params.workflowIds.split(',').filter(Boolean)
-        if (workflowIds.length > 0) {
-          conditions = and(conditions, inArray(workflow.id, workflowIds))
-        }
+      // Apply common filters (workflowIds, folderIds, triggers, dates, search, cost, duration)
+      // Level filtering is handled above with advanced running/pending state logic
+      const commonFilters = buildFilterConditions(params, { useSimpleLevelFilter: false })
+      if (commonFilters) {
+        conditions = and(conditions, commonFilters)
       }
 
-      // Filter by folder IDs
-      if (params.folderIds) {
-        const folderIds = params.folderIds.split(',').filter(Boolean)
-        if (folderIds.length > 0) {
-          conditions = and(conditions, inArray(workflow.folderId, folderIds))
-        }
-      }
+      // Workflow-specific filters exclude job logs entirely
+      const hasWorkflowSpecificFilters = !!(
+        params.workflowIds ||
+        params.folderIds ||
+        params.workflowName ||
+        params.folderName
+      )
+      // If triggers filter is set and doesn't include 'mothership', skip job logs
+      const triggersList = params.triggers?.split(',').filter(Boolean) || []
+      const triggersExcludeJobs =
+        triggersList.length > 0 &&
+        !triggersList.includes('all') &&
+        !triggersList.includes('mothership')
+      const includeJobLogs = !hasWorkflowSpecificFilters && !triggersExcludeJobs
 
-      // Filter by triggers
-      if (params.triggers) {
-        const triggers = params.triggers.split(',').filter(Boolean)
-        if (triggers.length > 0 && !triggers.includes('all')) {
-          conditions = and(conditions, inArray(workflowExecutionLogs.trigger, triggers))
-        }
-      }
+      const fetchSize = params.limit + params.offset
 
-      // Filter by date range
-      if (params.startDate) {
-        conditions = and(
-          conditions,
-          gte(workflowExecutionLogs.startedAt, new Date(params.startDate))
-        )
-      }
-      if (params.endDate) {
-        conditions = and(conditions, lte(workflowExecutionLogs.startedAt, new Date(params.endDate)))
-      }
-
-      // Filter by search query
-      if (params.search) {
-        const searchTerm = `%${params.search}%`
-        // With message removed, restrict search to executionId only
-        conditions = and(conditions, sql`${workflowExecutionLogs.executionId} ILIKE ${searchTerm}`)
-      }
-
-      // Filter by workflow name (from advanced search input)
-      if (params.workflowName) {
-        const nameTerm = `%${params.workflowName}%`
-        conditions = and(conditions, sql`${workflow.name} ILIKE ${nameTerm}`)
-      }
-
-      // Filter by folder name (best-effort text match when present on workflows)
-      if (params.folderName) {
-        const folderTerm = `%${params.folderName}%`
-        conditions = and(conditions, sql`${workflow.name} ILIKE ${folderTerm}`)
-      }
-
-      // Execute the query using the optimized join
-      const logs = await baseQuery
-        .where(conditions)
+      const workflowLogs = await baseQuery
+        .where(and(workspaceFilter, conditions))
         .orderBy(desc(workflowExecutionLogs.startedAt))
-        .limit(params.limit)
-        .offset(params.offset)
+        .limit(fetchSize)
 
-      // Get total count for pagination using the same join structure
-      const countQuery = db
+      const workflowCountQuery = db
         .select({ count: sql<number>`count(*)` })
         .from(workflowExecutionLogs)
         .leftJoin(
           pausedExecutions,
           eq(pausedExecutions.executionId, workflowExecutionLogs.executionId)
         )
-        .innerJoin(
-          workflow,
-          and(
-            eq(workflowExecutionLogs.workflowId, workflow.id),
-            eq(workflow.workspaceId, params.workspaceId)
-          )
-        )
+        .leftJoin(workflow, eq(workflowExecutionLogs.workflowId, workflow.id))
         .innerJoin(
           permissions,
           and(
             eq(permissions.entityType, 'workspace'),
-            eq(permissions.entityId, workflow.workspaceId),
+            eq(permissions.entityId, workflowExecutionLogs.workspaceId),
             eq(permissions.userId, userId)
           )
         )
-        .where(conditions)
+        .where(and(eq(workflowExecutionLogs.workspaceId, params.workspaceId), conditions))
 
-      const countResult = await countQuery
+      // Build job log filters (subset of filters that apply to job logs)
+      let jobLogs: Array<{
+        id: string
+        executionId: string
+        level: string
+        status: string
+        trigger: string
+        startedAt: Date
+        endedAt: Date | null
+        totalDurationMs: number | null
+        executionData: unknown
+        cost: unknown
+        createdAt: Date
+        jobTitle: string | null
+      }> = []
+      let jobCount = 0
 
-      const count = countResult[0]?.count || 0
+      if (includeJobLogs) {
+        const jobConditions: SQL[] = [eq(jobExecutionLogs.workspaceId, params.workspaceId)]
 
-      // Block executions are now extracted from trace spans instead of separate table
+        // Permission check
+        jobConditions.push(
+          sql`EXISTS (SELECT 1 FROM ${permissions} WHERE ${permissions.entityType} = 'workspace' AND ${permissions.entityId} = ${jobExecutionLogs.workspaceId} AND ${permissions.userId} = ${userId})`
+        )
+
+        // Level filter
+        if (params.level && params.level !== 'all') {
+          const levels = params.level.split(',').filter(Boolean)
+          const jobLevelConditions: SQL[] = []
+          for (const level of levels) {
+            if (level === 'error') {
+              jobLevelConditions.push(eq(jobExecutionLogs.level, 'error'))
+            } else if (level === 'info') {
+              const c = and(eq(jobExecutionLogs.level, 'info'), isNotNull(jobExecutionLogs.endedAt))
+              if (c) jobLevelConditions.push(c)
+            }
+            // 'running' and 'pending' don't apply to job logs (they complete synchronously)
+          }
+          if (jobLevelConditions.length > 0) {
+            jobConditions.push(
+              jobLevelConditions.length === 1 ? jobLevelConditions[0] : or(...jobLevelConditions)!
+            )
+          }
+        }
+
+        // Trigger filter
+        if (triggersList.length > 0 && !triggersList.includes('all')) {
+          jobConditions.push(inArray(jobExecutionLogs.trigger, triggersList))
+        }
+
+        // Date filters
+        if (params.startDate) {
+          jobConditions.push(gte(jobExecutionLogs.startedAt, new Date(params.startDate)))
+        }
+        if (params.endDate) {
+          jobConditions.push(lte(jobExecutionLogs.startedAt, new Date(params.endDate)))
+        }
+
+        // Search by executionId
+        if (params.search) {
+          jobConditions.push(sql`${jobExecutionLogs.executionId} ILIKE ${`%${params.search}%`}`)
+        }
+        if (params.executionId) {
+          jobConditions.push(eq(jobExecutionLogs.executionId, params.executionId))
+        }
+
+        // Cost filter
+        if (params.costOperator && params.costValue !== undefined) {
+          const costField = sql`(${jobExecutionLogs.cost}->>'total')::numeric`
+          const ops = {
+            '=': sql`=`,
+            '>': sql`>`,
+            '<': sql`<`,
+            '>=': sql`>=`,
+            '<=': sql`<=`,
+            '!=': sql`!=`,
+          } as const
+          jobConditions.push(sql`${costField} ${ops[params.costOperator]} ${params.costValue}`)
+        }
+
+        // Duration filter
+        if (params.durationOperator && params.durationValue !== undefined) {
+          const durationOps: Record<
+            string,
+            (field: typeof jobExecutionLogs.totalDurationMs, val: number) => SQL | undefined
+          > = {
+            '=': (f, v) => eq(f, v),
+            '>': (f, v) => gt(f, v),
+            '<': (f, v) => lt(f, v),
+            '>=': (f, v) => gte(f, v),
+            '<=': (f, v) => lte(f, v),
+            '!=': (f, v) => ne(f, v),
+          }
+          const durationCond = durationOps[params.durationOperator]?.(
+            jobExecutionLogs.totalDurationMs,
+            params.durationValue
+          )
+          if (durationCond) jobConditions.push(durationCond)
+        }
+
+        const jobWhere = and(...jobConditions)
+
+        const [jobLogResults, jobCountResult] = await Promise.all([
+          db
+            .select({
+              id: jobExecutionLogs.id,
+              executionId: jobExecutionLogs.executionId,
+              level: jobExecutionLogs.level,
+              status: jobExecutionLogs.status,
+              trigger: jobExecutionLogs.trigger,
+              startedAt: jobExecutionLogs.startedAt,
+              endedAt: jobExecutionLogs.endedAt,
+              totalDurationMs: jobExecutionLogs.totalDurationMs,
+              executionData:
+                params.details === 'full' ? jobExecutionLogs.executionData : sql<null>`NULL`,
+              cost: jobExecutionLogs.cost,
+              createdAt: jobExecutionLogs.createdAt,
+              jobTitle: sql<string | null>`${jobExecutionLogs.executionData}->'trigger'->>'source'`,
+            })
+            .from(jobExecutionLogs)
+            .where(jobWhere)
+            .orderBy(desc(jobExecutionLogs.startedAt))
+            .limit(fetchSize),
+          db.select({ count: sql<number>`count(*)` }).from(jobExecutionLogs).where(jobWhere),
+        ])
+
+        jobLogs = jobLogResults as typeof jobLogs
+        jobCount = Number(jobCountResult[0]?.count || 0)
+      }
+
+      const workflowCountResult = await workflowCountQuery
+      const workflowCount = Number(workflowCountResult[0]?.count || 0)
+      const totalCount = workflowCount + jobCount
+
+      // Transform workflow logs to the unified shape
       const blockExecutionsByExecution: Record<string, any[]> = {}
 
-      // Create clean trace spans from block executions
       const createTraceSpans = (blockExecutions: any[]) => {
         return blockExecutions.map((block, index) => {
-          // For error blocks, include error information in the output
           let output = block.outputData
           if (block.status === 'error' && block.errorMessage) {
             output = {
@@ -261,7 +400,6 @@ export async function GET(request: NextRequest) {
         })
       }
 
-      // Extract cost information from block executions
       const extractCostSummary = (blockExecutions: any[]) => {
         let totalCost = 0
         let totalInputCost = 0
@@ -280,22 +418,22 @@ export async function GET(request: NextRequest) {
             totalPromptTokens += block.cost.tokens?.prompt || 0
             totalCompletionTokens += block.cost.tokens?.completion || 0
 
-            // Track per-model costs
             if (block.cost.model) {
               if (!models.has(block.cost.model)) {
                 models.set(block.cost.model, {
                   input: 0,
                   output: 0,
                   total: 0,
-                  tokens: { prompt: 0, completion: 0, total: 0 },
+                  tokens: { input: 0, output: 0, total: 0 },
                 })
               }
               const modelCost = models.get(block.cost.model)
               modelCost.input += Number(block.cost.input) || 0
               modelCost.output += Number(block.cost.output) || 0
               modelCost.total += Number(block.cost.total) || 0
-              modelCost.tokens.prompt += block.cost.tokens?.prompt || 0
-              modelCost.tokens.completion += block.cost.tokens?.completion || 0
+              modelCost.tokens.input += block.cost.tokens?.input || block.cost.tokens?.prompt || 0
+              modelCost.tokens.output +=
+                block.cost.tokens?.output || block.cost.tokens?.completion || 0
               modelCost.tokens.total += block.cost.tokens?.total || 0
             }
           }
@@ -307,60 +445,61 @@ export async function GET(request: NextRequest) {
           output: totalOutputCost,
           tokens: {
             total: totalTokens,
-            prompt: totalPromptTokens,
-            completion: totalCompletionTokens,
+            input: totalPromptTokens,
+            output: totalCompletionTokens,
           },
-          models: Object.fromEntries(models), // Convert Map to object for JSON serialization
+          models: Object.fromEntries(models),
         }
       }
 
-      // Transform to clean log format with workflow data included
-      const enhancedLogs = logs.map((log) => {
+      const transformedWorkflowLogs = workflowLogs.map((log) => {
         const blockExecutions = blockExecutionsByExecution[log.executionId] || []
 
-        // Only process trace spans and detailed cost in full mode
         let traceSpans = []
         let finalOutput: any
         let costSummary = (log.cost as any) || { total: 0 }
 
         if (params.details === 'full' && log.executionData) {
-          // Use stored trace spans if available, otherwise create from block executions
           const storedTraceSpans = (log.executionData as any)?.traceSpans
           traceSpans =
             storedTraceSpans && Array.isArray(storedTraceSpans) && storedTraceSpans.length > 0
               ? storedTraceSpans
               : createTraceSpans(blockExecutions)
 
-          // Prefer stored cost JSON; otherwise synthesize from blocks
           costSummary =
             log.cost && Object.keys(log.cost as any).length > 0
               ? (log.cost as any)
               : extractCostSummary(blockExecutions)
 
-          // Include finalOutput if present on executionData
           try {
             const fo = (log.executionData as any)?.finalOutput
             if (fo !== undefined) finalOutput = fo
           } catch {}
         }
 
-        const workflowSummary = {
-          id: log.workflowId,
-          name: log.workflowName,
-          description: log.workflowDescription,
-          color: log.workflowColor,
-          folderId: log.workflowFolderId,
-          userId: log.workflowUserId,
-          workspaceId: log.workflowWorkspaceId,
-          createdAt: log.workflowCreatedAt,
-          updatedAt: log.workflowUpdatedAt,
-        }
+        const workflowSummary = log.workflowId
+          ? {
+              id: log.workflowId,
+              name: log.workflowName,
+              description: log.workflowDescription,
+              color: log.workflowColor,
+              folderId: log.workflowFolderId,
+              userId: log.workflowUserId,
+              workspaceId: log.workflowWorkspaceId,
+              createdAt: log.workflowCreatedAt,
+              updatedAt: log.workflowUpdatedAt,
+            }
+          : null
 
         return {
           id: log.id,
           workflowId: log.workflowId,
           executionId: log.executionId,
+          deploymentVersionId: log.deploymentVersionId,
+          deploymentVersion: log.deploymentVersion ?? null,
+          deploymentVersionName: log.deploymentVersionName ?? null,
           level: log.level,
+          status: log.status,
           duration: log.totalDurationMs ? `${log.totalDurationMs}ms` : null,
           trigger: log.trigger,
           createdAt: log.startedAt.toISOString(),
@@ -391,13 +530,60 @@ export async function GET(request: NextRequest) {
             (log.pausedStatus && log.pausedStatus !== 'fully_resumed'),
         }
       })
+
+      // Transform job logs to the same shape
+      const transformedJobLogs = jobLogs.map((log) => {
+        const execData = log.executionData as any
+        const costSummary = (log.cost as any) || { total: 0 }
+
+        return {
+          id: log.id,
+          workflowId: null as string | null,
+          executionId: log.executionId,
+          deploymentVersionId: null as string | null,
+          deploymentVersion: null as number | null,
+          deploymentVersionName: null as string | null,
+          level: log.level,
+          status: log.status,
+          duration: log.totalDurationMs ? `${log.totalDurationMs}ms` : null,
+          trigger: log.trigger,
+          createdAt: log.startedAt.toISOString(),
+          files: undefined as any,
+          workflow: null as any,
+          jobTitle: log.jobTitle,
+          pauseSummary: {
+            status: null as string | null,
+            total: 0,
+            resumed: 0,
+          },
+          executionData:
+            params.details === 'full' && execData
+              ? {
+                  totalDuration: log.totalDurationMs,
+                  traceSpans: execData.traceSpans || [],
+                  blockExecutions: [],
+                  finalOutput: execData.finalOutput,
+                  enhanced: true,
+                  trigger: execData.trigger,
+                }
+              : undefined,
+          cost: params.details === 'full' ? costSummary : { total: costSummary?.total || 0 },
+          hasPendingPause: false,
+        }
+      })
+
+      // Merge, sort by createdAt (which is startedAt ISO string) desc, paginate
+      const allLogs = [...transformedWorkflowLogs, ...transformedJobLogs]
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(params.offset, params.offset + params.limit)
+
       return NextResponse.json(
         {
-          data: enhancedLogs,
-          total: Number(count),
+          data: allLogs,
+          total: totalCount,
           page: Math.floor(params.offset / params.limit) + 1,
           pageSize: params.limit,
-          totalPages: Math.ceil(Number(count) / params.limit),
+          totalPages: Math.ceil(totalCount / params.limit),
         },
         { status: 200 }
       )

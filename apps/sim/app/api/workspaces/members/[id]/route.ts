@@ -1,11 +1,13 @@
 import { db } from '@sim/db'
 import { permissions, workspace } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
+import { AuditAction, AuditResourceType, recordAudit } from '@/lib/audit/log'
 import { getSession } from '@/lib/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { hasWorkspaceAdminAccess } from '@/lib/permissions/utils'
+import { revokeWorkspaceCredentialMemberships } from '@/lib/credentials/access'
+import { hasWorkspaceAdminAccess } from '@/lib/workspaces/permissions/utils'
 
 const logger = createLogger('WorkspaceMemberAPI')
 const deleteMemberSchema = z.object({
@@ -100,6 +102,21 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
           eq(permissions.entityId, workspaceId)
         )
       )
+
+    await revokeWorkspaceCredentialMemberships(workspaceId, userId)
+
+    recordAudit({
+      workspaceId,
+      actorId: session.user.id,
+      actorName: session.user.name,
+      actorEmail: session.user.email,
+      action: AuditAction.MEMBER_REMOVED,
+      resourceType: AuditResourceType.WORKSPACE,
+      resourceId: workspaceId,
+      description: isSelf ? 'Left the workspace' : 'Removed a member from the workspace',
+      metadata: { removedUserId: userId, selfRemoval: isSelf },
+      request: req,
+    })
 
     return NextResponse.json({ success: true })
   } catch (error) {

@@ -1,10 +1,15 @@
+import { createLogger } from '@sim/logger'
 import * as yaml from 'js-yaml'
 import type { Chunk, ChunkerOptions } from '@/lib/chunkers/types'
-import { createLogger } from '@/lib/logs/console/logger'
 import { getAccurateTokenCount } from '@/lib/tokenization'
 import { estimateTokenCount } from '@/lib/tokenization/estimators'
 
 const logger = createLogger('JsonYamlChunker')
+
+type JsonPrimitive = string | number | boolean | null
+type JsonValue = JsonPrimitive | JsonObject | JsonArray
+type JsonObject = { [key: string]: JsonValue }
+type JsonArray = JsonValue[]
 
 function getTokenCount(text: string): number {
   try {
@@ -21,19 +26,20 @@ function getTokenCount(text: string): number {
  * Reduced limits to ensure we stay well under OpenAI's 8,191 token limit per embedding request
  */
 const JSON_YAML_CHUNKING_CONFIG = {
-  TARGET_CHUNK_SIZE: 1000, // Target tokens per chunk
-  MIN_CHUNK_SIZE: 100, // Minimum tokens per chunk
+  TARGET_CHUNK_SIZE: 1024, // Target tokens per chunk
+  MIN_CHARACTERS_PER_CHUNK: 100, // Minimum characters per chunk to filter tiny fragments
   MAX_CHUNK_SIZE: 1500, // Maximum tokens per chunk
   MAX_DEPTH_FOR_SPLITTING: 5, // Maximum depth to traverse for splitting
 }
 
 export class JsonYamlChunker {
-  private chunkSize: number
-  private minChunkSize: number
+  private chunkSize: number // in tokens
+  private minCharactersPerChunk: number // in characters
 
   constructor(options: ChunkerOptions = {}) {
-    this.chunkSize = options.chunkSize || JSON_YAML_CHUNKING_CONFIG.TARGET_CHUNK_SIZE
-    this.minChunkSize = options.minChunkSize || JSON_YAML_CHUNKING_CONFIG.MIN_CHUNK_SIZE
+    this.chunkSize = options.chunkSize ?? JSON_YAML_CHUNKING_CONFIG.TARGET_CHUNK_SIZE
+    this.minCharactersPerChunk =
+      options.minCharactersPerChunk ?? JSON_YAML_CHUNKING_CONFIG.MIN_CHARACTERS_PER_CHUNK
   }
 
   /**
@@ -58,11 +64,11 @@ export class JsonYamlChunker {
    */
   async chunk(content: string): Promise<Chunk[]> {
     try {
-      let data: any
+      let data: JsonValue
       try {
-        data = JSON.parse(content)
+        data = JSON.parse(content) as JsonValue
       } catch {
-        data = yaml.load(content)
+        data = yaml.load(content) as JsonValue
       }
       const chunks = this.chunkStructuredData(data)
 
@@ -85,7 +91,7 @@ export class JsonYamlChunker {
   /**
    * Chunk structured data based on its structure
    */
-  private chunkStructuredData(data: any, path: string[] = []): Chunk[] {
+  private chunkStructuredData(data: JsonValue, path: string[] = []): Chunk[] {
     const chunks: Chunk[] = []
 
     if (Array.isArray(data)) {
@@ -93,13 +99,14 @@ export class JsonYamlChunker {
     }
 
     if (typeof data === 'object' && data !== null) {
-      return this.chunkObject(data, path)
+      return this.chunkObject(data as JsonObject, path)
     }
 
     const content = JSON.stringify(data, null, 2)
     const tokenCount = getTokenCount(content)
 
-    if (tokenCount >= this.minChunkSize) {
+    // Filter tiny fragments using character count
+    if (content.length >= this.minCharactersPerChunk) {
       chunks.push({
         text: content,
         tokenCount,
@@ -116,9 +123,9 @@ export class JsonYamlChunker {
   /**
    * Chunk an array intelligently
    */
-  private chunkArray(arr: any[], path: string[]): Chunk[] {
+  private chunkArray(arr: JsonArray, path: string[]): Chunk[] {
     const chunks: Chunk[] = []
-    let currentBatch: any[] = []
+    let currentBatch: JsonValue[] = []
     let currentTokens = 0
 
     const contextHeader = path.length > 0 ? `// ${path.join('.')}\n` : ''
@@ -192,7 +199,7 @@ export class JsonYamlChunker {
   /**
    * Chunk an object intelligently
    */
-  private chunkObject(obj: Record<string, any>, path: string[]): Chunk[] {
+  private chunkObject(obj: JsonObject, path: string[]): Chunk[] {
     const chunks: Chunk[] = []
     const entries = Object.entries(obj)
 
@@ -211,7 +218,7 @@ export class JsonYamlChunker {
       return chunks
     }
 
-    let currentObj: Record<string, any> = {}
+    let currentObj: JsonObject = {}
     let currentTokens = 0
     let currentKeys: string[] = []
 
@@ -318,7 +325,8 @@ export class JsonYamlChunker {
       }
     }
 
-    if (currentChunk && currentTokens >= this.minChunkSize) {
+    // Filter tiny fragments using character count
+    if (currentChunk && currentChunk.length >= this.minCharactersPerChunk) {
       chunks.push({
         text: currentChunk,
         tokenCount: currentTokens,

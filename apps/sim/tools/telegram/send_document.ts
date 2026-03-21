@@ -24,8 +24,8 @@ export const telegramSendDocumentTool: ToolConfig<
     chatId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'Target Telegram chat ID',
+      visibility: 'user-or-llm',
+      description: 'Telegram chat ID (numeric, can be negative for groups)',
     },
     files: {
       type: 'file[]',
@@ -48,10 +48,15 @@ export const telegramSendDocumentTool: ToolConfig<
       'Content-Type': 'application/json',
     }),
     body: (params: TelegramSendDocumentParams) => {
+      let normalizedFiles: unknown[] | null = null
+      if (params.files) {
+        normalizedFiles = Array.isArray(params.files) ? params.files : [params.files]
+      }
+
       return {
         botToken: params.botToken,
         chatId: params.chatId,
-        files: params.files || null,
+        files: normalizedFiles,
         caption: params.caption,
       }
     },
@@ -70,6 +75,7 @@ export const telegramSendDocumentTool: ToolConfig<
 
   outputs: {
     message: { type: 'string', description: 'Success or error message' },
+    files: { type: 'file[]', description: 'Files attached to the message' },
     data: {
       type: 'object',
       description: 'Telegram message data including document',

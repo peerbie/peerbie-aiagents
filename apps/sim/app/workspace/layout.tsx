@@ -1,6 +1,6 @@
 'use client'
 
-import { useSession } from '@/lib/auth-client'
+import { useSession } from '@/lib/auth/auth-client'
 import { SocketProvider } from '@/app/workspace/providers/socket-provider'
 
 interface WorkspaceRootLayoutProps {
@@ -18,5 +18,9 @@ export default function WorkspaceRootLayout({ children }: WorkspaceRootLayoutPro
       }
     : undefined
 
-  return <SocketProvider user={user}>{children}</SocketProvider>
+  return (
+    <SocketProvider user={user}>
+      <div className='workspace-root'>{children}</div>
+    </SocketProvider>
+  )
 }

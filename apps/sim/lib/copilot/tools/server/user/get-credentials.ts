@@ -1,16 +1,16 @@
 import { db } from '@sim/db'
 import { account, user } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { eq } from 'drizzle-orm'
 import { jwtDecode } from 'jwt-decode'
 import { createPermissionError, verifyWorkflowAccess } from '@/lib/copilot/auth/permissions'
 import type { BaseServerTool } from '@/lib/copilot/tools/server/base-tool'
-import { getEnvironmentVariableKeys } from '@/lib/environment/utils'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { getPersonalAndWorkspaceEnv } from '@/lib/environment/utils'
+import { getAllOAuthServices } from '@/lib/oauth'
 import { refreshTokenIfNeeded } from '@/app/api/auth/oauth/utils'
 
 interface GetCredentialsParams {
-  userId?: string
   workflowId?: string
 }
 
@@ -26,8 +26,13 @@ export const getCredentialsServerTool: BaseServerTool<GetCredentialsParams, any>
 
     const authenticatedUserId = context.userId
 
+    let workspaceId: string | undefined
+
     if (params?.workflowId) {
-      const { hasAccess } = await verifyWorkflowAccess(authenticatedUserId, params.workflowId)
+      const { hasAccess, workspaceId: wId } = await verifyWorkflowAccess(
+        authenticatedUserId,
+        params.workflowId
+      )
 
       if (!hasAccess) {
         const errorMessage = createPermissionError('access credentials in')
@@ -37,6 +42,8 @@ export const getCredentialsServerTool: BaseServerTool<GetCredentialsParams, any>
         })
         throw new Error(errorMessage)
       }
+
+      workspaceId = wId
     }
 
     const userId = authenticatedUserId
@@ -55,28 +62,47 @@ export const getCredentialsServerTool: BaseServerTool<GetCredentialsParams, any>
       .limit(1)
     const userEmail = userRecord.length > 0 ? userRecord[0]?.email : null
 
-    const oauthCredentials: Array<{
+    // Get all available OAuth services
+    const allOAuthServices = getAllOAuthServices()
+
+    // Track connected provider IDs
+    const connectedProviderIds = new Set<string>()
+
+    const connectedCredentials: Array<{
       id: string
       name: string
       provider: string
+      serviceName: string
       lastUsed: string
       isDefault: boolean
       accessToken: string | null
     }> = []
     const requestId = generateRequestId()
+
     for (const acc of accounts) {
       const providerId = acc.providerId
+      connectedProviderIds.add(providerId)
+
       const [baseProvider, featureType = 'default'] = providerId.split('-')
       let displayName = ''
       if (acc.idToken) {
         try {
           const decoded = jwtDecode<{ email?: string; name?: string }>(acc.idToken)
           displayName = decoded.email || decoded.name || ''
-        } catch {}
+        } catch (error) {
+          logger.warn('Failed to decode JWT id token', {
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
       }
       if (!displayName && baseProvider === 'github') displayName = `${acc.accountId} (GitHub)`
       if (!displayName && userEmail) displayName = userEmail
       if (!displayName) displayName = `${acc.accountId} (${baseProvider})`
+
+      // Find the service name for this provider ID
+      const service = allOAuthServices.find((s) => s.providerId === providerId)
+      const serviceName = service?.name ?? providerId
+
       let accessToken: string | null = acc.accessToken ?? null
       try {
         const { accessToken: refreshedToken } = await refreshTokenIfNeeded(
@@ -85,34 +111,68 @@ export const getCredentialsServerTool: BaseServerTool<GetCredentialsParams, any>
           acc.id
         )
         accessToken = refreshedToken || accessToken
-      } catch {}
-      oauthCredentials.push({
+      } catch (error) {
+        logger.warn('Failed to refresh OAuth access token', {
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+      connectedCredentials.push({
         id: acc.id,
         name: displayName,
         provider: providerId,
+        serviceName,
         lastUsed: acc.updatedAt.toISOString(),
         isDefault: featureType === 'default',
         accessToken,
       })
     }
 
-    // Fetch environment variables
-    const envResult = await getEnvironmentVariableKeys(userId)
+    // Build list of not connected services
+    const notConnectedServices = allOAuthServices
+      .filter((service) => !connectedProviderIds.has(service.providerId))
+      .map((service) => ({
+        providerId: service.providerId,
+        name: service.name,
+        description: service.description,
+        baseProvider: service.baseProvider,
+      }))
+
+    // Fetch environment variables from both personal and workspace
+    const envResult = await getPersonalAndWorkspaceEnv(userId, workspaceId)
+
+    // Get all unique variable names from both personal and workspace
+    const personalVarNames = Object.keys(envResult.personalEncrypted)
+    const workspaceVarNames = Object.keys(envResult.workspaceEncrypted)
+    const allVarNames = [...new Set([...personalVarNames, ...workspaceVarNames])]
 
     logger.info('Fetched credentials', {
       userId,
-      oauthCount: oauthCredentials.length,
-      envVarCount: envResult.count,
+      workspaceId,
+      connectedCount: connectedCredentials.length,
+      notConnectedCount: notConnectedServices.length,
+      personalEnvVarCount: personalVarNames.length,
+      workspaceEnvVarCount: workspaceVarNames.length,
+      totalEnvVarCount: allVarNames.length,
+      conflicts: envResult.conflicts,
     })
 
     return {
       oauth: {
-        credentials: oauthCredentials,
-        total: oauthCredentials.length,
+        connected: {
+          credentials: connectedCredentials,
+          total: connectedCredentials.length,
+        },
+        notConnected: {
+          services: notConnectedServices,
+          total: notConnectedServices.length,
+        },
       },
       environment: {
-        variableNames: envResult.variableNames,
-        count: envResult.count,
+        variableNames: allVarNames,
+        count: allVarNames.length,
+        personalVariables: personalVarNames,
+        workspaceVariables: workspaceVarNames,
+        conflicts: envResult.conflicts,
       },
     }
   },

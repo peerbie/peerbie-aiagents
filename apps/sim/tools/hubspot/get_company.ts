@@ -1,5 +1,6 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type { HubSpotGetCompanyParams, HubSpotGetCompanyResponse } from '@/tools/hubspot/types'
+import { COMPANY_OBJECT_OUTPUT } from '@/tools/hubspot/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('HubSpotGetCompany')
@@ -26,27 +27,29 @@ export const hubspotGetCompanyTool: ToolConfig<HubSpotGetCompanyParams, HubSpotG
       companyId: {
         type: 'string',
         required: true,
-        visibility: 'user-only',
-        description: 'The ID or domain of the company to retrieve',
+        visibility: 'user-or-llm',
+        description: 'The HubSpot company ID (numeric string) or domain to retrieve',
       },
       idProperty: {
         type: 'string',
         required: false,
-        visibility: 'user-only',
+        visibility: 'user-or-llm',
         description:
           'Property to use as unique identifier (e.g., "domain"). If not specified, uses record ID',
       },
       properties: {
         type: 'string',
         required: false,
-        visibility: 'user-only',
-        description: 'Comma-separated list of properties to return',
+        visibility: 'user-or-llm',
+        description:
+          'Comma-separated list of HubSpot property names to return (e.g., "name,domain,industry")',
       },
       associations: {
         type: 'string',
         required: false,
-        visibility: 'user-only',
-        description: 'Comma-separated list of object types to retrieve associated IDs for',
+        visibility: 'user-or-llm',
+        description:
+          'Comma-separated list of object types to retrieve associated IDs for (e.g., "contacts,deals")',
       },
     },
 
@@ -93,31 +96,15 @@ export const hubspotGetCompanyTool: ToolConfig<HubSpotGetCompanyParams, HubSpotG
         success: true,
         output: {
           company: data,
-          metadata: {
-            operation: 'get_company' as const,
-            companyId: data.id,
-          },
+          companyId: data.id,
           success: true,
         },
       }
     },
 
     outputs: {
+      company: COMPANY_OBJECT_OUTPUT,
+      companyId: { type: 'string', description: 'The retrieved company ID' },
       success: { type: 'boolean', description: 'Operation success status' },
-      output: {
-        type: 'object',
-        description: 'Company data',
-        properties: {
-          company: {
-            type: 'object',
-            description: 'Company object with properties',
-          },
-          metadata: {
-            type: 'object',
-            description: 'Operation metadata',
-          },
-          success: { type: 'boolean', description: 'Operation success status' },
-        },
-      },
     },
   }

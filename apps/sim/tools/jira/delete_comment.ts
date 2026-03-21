@@ -1,22 +1,7 @@
+import type { JiraDeleteCommentParams, JiraDeleteCommentResponse } from '@/tools/jira/types'
+import { SUCCESS_OUTPUT, TIMESTAMP_OUTPUT } from '@/tools/jira/types'
 import { getJiraCloudId } from '@/tools/jira/utils'
-import type { ToolConfig, ToolResponse } from '@/tools/types'
-
-export interface JiraDeleteCommentParams {
-  accessToken: string
-  domain: string
-  issueKey: string
-  commentId: string
-  cloudId?: string
-}
-
-export interface JiraDeleteCommentResponse extends ToolResponse {
-  output: {
-    ts: string
-    issueKey: string
-    commentId: string
-    success: boolean
-  }
-}
+import type { ToolConfig } from '@/tools/types'
 
 export const jiraDeleteCommentTool: ToolConfig<JiraDeleteCommentParams, JiraDeleteCommentResponse> =
   {
@@ -135,13 +120,9 @@ export const jiraDeleteCommentTool: ToolConfig<JiraDeleteCommentParams, JiraDele
     },
 
     outputs: {
-      success: {
-        type: 'boolean',
-        description: 'Operation success status',
-      },
-      output: {
-        type: 'object',
-        description: 'Deletion details with timestamp, issue key, comment ID, and success status',
-      },
+      ts: TIMESTAMP_OUTPUT,
+      success: SUCCESS_OUTPUT,
+      issueKey: { type: 'string', description: 'Issue key' },
+      commentId: { type: 'string', description: 'Deleted comment ID' },
     },
   }

@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
-import { validateAlphanumericId, validateJiraCloudId } from '@/lib/security/input-validation'
+import { createLogger } from '@sim/logger'
+import { type NextRequest, NextResponse } from 'next/server'
+import { checkSessionOrInternalAuth } from '@/lib/auth/hybrid'
+import { validateAlphanumericId, validateJiraCloudId } from '@/lib/core/security/input-validation'
 import { getConfluenceCloudId } from '@/tools/confluence/utils'
 
 const logger = createLogger('ConfluenceAttachmentAPI')
@@ -8,8 +9,13 @@ const logger = createLogger('ConfluenceAttachmentAPI')
 export const dynamic = 'force-dynamic'
 
 // Delete an attachment
-export async function DELETE(request: Request) {
+export async function DELETE(request: NextRequest) {
   try {
+    const auth = await checkSessionOrInternalAuth(request)
+    if (!auth.success || !auth.userId) {
+      return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 })
+    }
+
     const { domain, accessToken, cloudId: providedCloudId, attachmentId } = await request.json()
 
     if (!domain) {

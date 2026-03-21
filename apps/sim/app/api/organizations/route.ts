@@ -1,10 +1,11 @@
 import { db } from '@sim/db'
 import { member, organization } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq, or } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
+import { AuditAction, AuditResourceType, recordAudit } from '@/lib/audit/log'
 import { getSession } from '@/lib/auth'
 import { createOrganizationForTeamPlan } from '@/lib/billing/organization'
-import { createLogger } from '@/lib/logs/console/logger'
 
 const logger = createLogger('OrganizationsAPI')
 
@@ -16,7 +17,6 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Get organizations where user is owner or admin
     const userOrganizations = await db
       .select({
         id: organization.id,
@@ -32,8 +32,15 @@ export async function GET() {
         )
       )
 
+    const anyMembership = await db
+      .select({ id: member.id })
+      .from(member)
+      .where(eq(member.userId, session.user.id))
+      .limit(1)
+
     return NextResponse.json({
       organizations: userOrganizations,
+      isMemberOfAnyOrg: anyMembership.length > 0,
     })
   } catch (error) {
     logger.error('Failed to fetch organizations', {
@@ -107,6 +114,19 @@ export async function POST(request: Request) {
     logger.info('Successfully created organization for team plan', {
       userId: user.id,
       organizationId,
+    })
+
+    recordAudit({
+      workspaceId: null,
+      actorId: user.id,
+      action: AuditAction.ORGANIZATION_CREATED,
+      resourceType: AuditResourceType.ORGANIZATION,
+      resourceId: organizationId,
+      actorName: user.name ?? undefined,
+      actorEmail: user.email ?? undefined,
+      resourceName: organizationName ?? undefined,
+      description: `Created organization "${organizationName}"`,
+      request,
     })
 
     return NextResponse.json({

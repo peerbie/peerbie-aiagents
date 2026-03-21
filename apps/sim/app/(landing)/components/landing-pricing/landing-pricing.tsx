@@ -1,6 +1,8 @@
 'use client'
 
+import type { ComponentType, SVGProps } from 'react'
 import { useState } from 'react'
+import { createLogger } from '@sim/logger'
 import type { LucideIcon } from 'lucide-react'
 import {
   ArrowRight,
@@ -9,22 +11,18 @@ import {
   Database,
   DollarSign,
   HardDrive,
-  Workflow,
+  RefreshCw,
+  Timer,
+  Zap,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
-import { createLogger } from '@/lib/logs/console/logger'
-import { cn } from '@/lib/utils'
-import { inter } from '@/app/_styles/fonts/inter/inter'
-import {
-  ENTERPRISE_PLAN_FEATURES,
-  PRO_PLAN_FEATURES,
-  TEAM_PLAN_FEATURES,
-} from '@/app/workspace/[workspaceId]/w/components/sidebar/components-new/settings-modal/components/subscription/plan-configs'
+import { cn } from '@/lib/core/utils/cn'
+import { ENTERPRISE_PLAN_FEATURES } from '@/app/workspace/[workspaceId]/settings/components/subscription/plan-configs'
 
 const logger = createLogger('LandingPricing')
 
 interface PricingFeature {
-  icon: LucideIcon
+  icon: LucideIcon | ComponentType<SVGProps<SVGSVGElement>>
   text: string
 }
 
@@ -37,20 +35,30 @@ interface PricingTier {
   featured?: boolean
 }
 
-/**
- * Free plan features with consistent icons
- */
 const FREE_PLAN_FEATURES: PricingFeature[] = [
-  { icon: DollarSign, text: '$10 usage limit' },
+  { icon: DollarSign, text: '1,000 credits (trial)' },
   { icon: HardDrive, text: '5GB file storage' },
-  { icon: Workflow, text: 'Public template access' },
+  { icon: Timer, text: '5 min execution limit' },
   { icon: Database, text: 'Limited log retention' },
   { icon: Code2, text: 'CLI/SDK Access' },
 ]
 
-/**
- * Available pricing tiers with their features and pricing
- */
+const PRO_LANDING_FEATURES: PricingFeature[] = [
+  { icon: DollarSign, text: '6,000 credits/mo' },
+  { icon: RefreshCw, text: '+50 daily refresh credits' },
+  { icon: Zap, text: '150 runs/min (sync)' },
+  { icon: Timer, text: '50 min sync execution limit' },
+  { icon: HardDrive, text: '50GB file storage' },
+]
+
+const MAX_LANDING_FEATURES: PricingFeature[] = [
+  { icon: DollarSign, text: '25,000 credits/mo' },
+  { icon: RefreshCw, text: '+200 daily refresh credits' },
+  { icon: Zap, text: '300 runs/min (sync)' },
+  { icon: Timer, text: '50 min sync execution limit' },
+  { icon: HardDrive, text: '500GB file storage' },
+]
+
 const pricingTiers: PricingTier[] = [
   {
     name: 'COMMUNITY',
@@ -62,16 +70,16 @@ const pricingTiers: PricingTier[] = [
   {
     name: 'PRO',
     tier: 'Pro',
-    price: '$20/mo',
-    features: PRO_PLAN_FEATURES,
+    price: '$25/mo',
+    features: PRO_LANDING_FEATURES,
     ctaText: 'Get Started',
     featured: true,
   },
   {
-    name: 'TEAM',
-    tier: 'Team',
-    price: '$40/mo',
-    features: TEAM_PLAN_FEATURES,
+    name: 'MAX',
+    tier: 'Max',
+    price: '$100/mo',
+    features: MAX_LANDING_FEATURES,
     ctaText: 'Get Started',
   },
   {
@@ -83,12 +91,6 @@ const pricingTiers: PricingTier[] = [
   },
 ]
 
-/**
- * Individual pricing card component
- * @param tier - The pricing tier data
- * @param index - The index of the card in the grid
- * @param isBeforeFeatured - Whether this card is immediately before a featured card
- */
 function PricingCard({
   tier,
   index,
@@ -105,10 +107,8 @@ function PricingCard({
     logger.info(`Pricing CTA clicked: ${tier.name}`)
 
     if (tier.ctaText === 'Contact Sales') {
-      // Open enterprise form in new tab
       window.open('https://form.typeform.com/to/jqCO12pF', '_blank')
     } else {
-      // Navigate to signup page for all "Get Started" buttons
       router.push('/signup')
     }
   }
@@ -116,7 +116,6 @@ function PricingCard({
   return (
     <div
       className={cn(
-        `${inter.className}`,
         'relative flex h-full flex-col justify-between bg-[#FEFEFE]',
         tier.featured ? 'p-0' : 'px-0 py-0',
         'sm:px-5 sm:pt-4 sm:pb-4',
@@ -228,7 +227,7 @@ function PricingCard({
  */
 export default function LandingPricing() {
   return (
-    <section id='pricing' className='px-4 pt-[19px] sm:px-0 sm:pt-0' aria-label='Pricing plans'>
+    <section id='pricing' className='px-4 pt-[23px] sm:px-0 sm:pt-[4px]' aria-label='Pricing plans'>
       <h2 className='sr-only'>Pricing Plans</h2>
       <div className='relative mx-auto w-full max-w-[1289px]'>
         <div className='grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-0 lg:grid-cols-4'>

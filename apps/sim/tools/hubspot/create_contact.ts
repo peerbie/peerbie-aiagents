@@ -1,8 +1,9 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   HubSpotCreateContactParams,
   HubSpotCreateContactResponse,
 } from '@/tools/hubspot/types'
+import { CONTACT_OBJECT_OUTPUT } from '@/tools/hubspot/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('HubSpotCreateContact')
@@ -32,16 +33,16 @@ export const hubspotCreateContactTool: ToolConfig<
     properties: {
       type: 'object',
       required: true,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description:
-        'Contact properties as JSON object. Must include at least one of: email, firstname, or lastname',
+        'Contact properties as JSON object. Must include at least one of: email, firstname, or lastname (e.g., {"email": "john@example.com", "firstname": "John", "lastname": "Doe"})',
     },
     associations: {
       type: 'array',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description:
-        'Array of associations to create with the contact (e.g., companies, deals). Each object should have "to" (with "id") and "types" (with "associationCategory" and "associationTypeId")',
+        'Array of associations to create with the contact as JSON. Each object should have "to.id" (company/deal ID) and "types" array with "associationCategory" and "associationTypeId"',
     },
   },
 
@@ -59,8 +60,17 @@ export const hubspotCreateContactTool: ToolConfig<
       }
     },
     body: (params) => {
+      let properties = params.properties
+      if (typeof properties === 'string') {
+        try {
+          properties = JSON.parse(properties)
+        } catch (e) {
+          throw new Error('Invalid JSON format for properties. Please provide a valid JSON object.')
+        }
+      }
+
       const body: any = {
-        properties: params.properties,
+        properties,
       }
 
       if (params.associations && params.associations.length > 0) {
@@ -83,31 +93,15 @@ export const hubspotCreateContactTool: ToolConfig<
       success: true,
       output: {
         contact: data,
-        metadata: {
-          operation: 'create_contact' as const,
-          contactId: data.id,
-        },
+        contactId: data.id,
         success: true,
       },
     }
   },
 
   outputs: {
+    contact: CONTACT_OBJECT_OUTPUT,
+    contactId: { type: 'string', description: 'The created contact ID' },
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Created contact data',
-      properties: {
-        contact: {
-          type: 'object',
-          description: 'Created contact object with properties and ID',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

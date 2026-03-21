@@ -1,5 +1,6 @@
-import { createLogger } from '@/lib/logs/console/logger'
-import { BlockType, HTTP } from '@/executor/consts'
+import { createLogger } from '@sim/logger'
+import { validateUrlWithDNS } from '@/lib/core/security/input-validation.server'
+import { BlockType, HTTP } from '@/executor/constants'
 import type { BlockHandler, ExecutionContext } from '@/executor/types'
 import type { SerializedBlock } from '@/serializer/types'
 import { executeTool } from '@/tools'
@@ -41,16 +42,9 @@ export class ApiBlockHandler implements BlockHandler {
         }
       }
 
-      if (!urlToValidate.match(/^https?:\/\//i)) {
-        throw new Error(
-          `Invalid URL: "${urlToValidate}" - URL must include protocol (try "https://${urlToValidate}")`
-        )
-      }
-
-      try {
-        new URL(urlToValidate)
-      } catch (e: any) {
-        throw new Error(`Invalid URL format: "${urlToValidate}" - ${e.message}`)
+      const urlValidation = await validateUrlWithDNS(urlToValidate, 'url')
+      if (!urlValidation.isValid) {
+        throw new Error(urlValidation.error)
       }
     }
 
@@ -78,9 +72,12 @@ export class ApiBlockHandler implements BlockHandler {
             workflowId: ctx.workflowId,
             workspaceId: ctx.workspaceId,
             executionId: ctx.executionId,
+            userId: ctx.userId,
+            isDeployedContext: ctx.isDeployedContext,
+            enforceCredentialAccess: ctx.enforceCredentialAccess,
+            callChain: ctx.callChain,
           },
         },
-        false,
         false,
         ctx
       )

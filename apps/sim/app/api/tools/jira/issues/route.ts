@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
-import { validateAlphanumericId, validateJiraCloudId } from '@/lib/security/input-validation'
+import { createLogger } from '@sim/logger'
+import { type NextRequest, NextResponse } from 'next/server'
+import { checkSessionOrInternalAuth } from '@/lib/auth/hybrid'
+import { validateAlphanumericId, validateJiraCloudId } from '@/lib/core/security/input-validation'
 import { getJiraCloudId } from '@/tools/jira/utils'
 
 export const dynamic = 'force-dynamic'
@@ -26,8 +27,13 @@ const validateRequiredParams = (domain: string | null, accessToken: string | nul
   return null
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
+    const auth = await checkSessionOrInternalAuth(request)
+    if (!auth.success || !auth.userId) {
+      return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 })
+    }
+
     const { domain, accessToken, issueKeys = [], cloudId: providedCloudId } = await request.json()
 
     const validationError = validateRequiredParams(domain || null, accessToken || null)
@@ -101,8 +107,13 @@ export async function POST(request: Request) {
   }
 }
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   try {
+    const auth = await checkSessionOrInternalAuth(request)
+    if (!auth.success || !auth.userId) {
+      return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 })
+    }
+
     const url = new URL(request.url)
     const domain = url.searchParams.get('domain')?.trim()
     const accessToken = url.searchParams.get('accessToken')

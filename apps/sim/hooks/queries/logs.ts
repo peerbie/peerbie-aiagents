@@ -1,6 +1,19 @@
-import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  type QueryClient,
+  useInfiniteQuery,
+  useQuery,
+} from '@tanstack/react-query'
+import { getEndDateFromTimeRange, getStartDateFromTimeRange } from '@/lib/logs/filters'
 import { parseQuery, queryToApiParams } from '@/lib/logs/query-parser'
-import type { LogsResponse, WorkflowLog } from '@/stores/logs/filters/types'
+import type {
+  DashboardStatsResponse,
+  SegmentStats,
+  WorkflowStats,
+} from '@/app/api/logs/stats/route'
+import type { LogsResponse, TimeRange, WorkflowLog } from '@/stores/logs/filters/types'
+
+export type { DashboardStatsResponse, SegmentStats, WorkflowStats }
 
 export const logKeys = {
   all: ['logs'] as const,
@@ -9,20 +22,17 @@ export const logKeys = {
     [...logKeys.lists(), workspaceId ?? '', filters] as const,
   details: () => [...logKeys.all, 'detail'] as const,
   detail: (logId: string | undefined) => [...logKeys.details(), logId ?? ''] as const,
-  metrics: () => [...logKeys.all, 'metrics'] as const,
-  executions: (workspaceId: string | undefined, filters: Record<string, any>) =>
-    [...logKeys.metrics(), 'executions', workspaceId ?? '', filters] as const,
-  workflowLogs: (
-    workspaceId: string | undefined,
-    workflowId: string | undefined,
-    filters: Record<string, any>
-  ) => [...logKeys.all, 'workflow-logs', workspaceId ?? '', workflowId ?? '', filters] as const,
-  globalLogs: (workspaceId: string | undefined, filters: Record<string, any>) =>
-    [...logKeys.all, 'global-logs', workspaceId ?? '', filters] as const,
+  stats: (workspaceId: string | undefined, filters: object) =>
+    [...logKeys.all, 'stats', workspaceId ?? '', filters] as const,
+  executionSnapshots: () => [...logKeys.all, 'executionSnapshot'] as const,
+  executionSnapshot: (executionId: string | undefined) =>
+    [...logKeys.executionSnapshots(), executionId ?? ''] as const,
 }
 
 interface LogFilters {
-  timeRange: string
+  timeRange: TimeRange
+  startDate?: string
+  endDate?: string
   level: string
   workflowIds: string[]
   folderIds: string[]
@@ -31,46 +41,11 @@ interface LogFilters {
   limit: number
 }
 
-async function fetchLogsPage(
-  workspaceId: string,
-  filters: LogFilters,
-  page: number
-): Promise<{ logs: WorkflowLog[]; hasMore: boolean; nextPage: number | undefined }> {
-  const queryParams = buildQueryParams(workspaceId, filters, page)
-  const response = await fetch(`/api/logs?${queryParams}`)
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch logs')
-  }
-
-  const apiData: LogsResponse = await response.json()
-  const hasMore = apiData.data.length === filters.limit && apiData.page < apiData.totalPages
-
-  return {
-    logs: apiData.data || [],
-    hasMore,
-    nextPage: hasMore ? page + 1 : undefined,
-  }
-}
-
-async function fetchLogDetail(logId: string): Promise<WorkflowLog> {
-  const response = await fetch(`/api/logs/${logId}`)
-
-  if (!response.ok) {
-    throw new Error('Failed to fetch log details')
-  }
-
-  const { data } = await response.json()
-  return data
-}
-
-function buildQueryParams(workspaceId: string, filters: LogFilters, page: number): string {
-  const params = new URLSearchParams()
-
-  params.set('workspaceId', workspaceId)
-  params.set('limit', filters.limit.toString())
-  params.set('offset', ((page - 1) * filters.limit).toString())
-
+/**
+ * Applies common filter parameters to a URLSearchParams object.
+ * Shared between paginated and non-paginated log fetches.
+ */
+function applyFilterParams(params: URLSearchParams, filters: Omit<LogFilters, 'limit'>): void {
   if (filters.level !== 'all') {
     params.set('level', filters.level)
   }
@@ -87,43 +62,14 @@ function buildQueryParams(workspaceId: string, filters: LogFilters, page: number
     params.set('folderIds', filters.folderIds.join(','))
   }
 
-  if (filters.timeRange !== 'All time') {
-    const now = new Date()
-    let startDate: Date
-
-    switch (filters.timeRange) {
-      case 'Past 30 minutes':
-        startDate = new Date(now.getTime() - 30 * 60 * 1000)
-        break
-      case 'Past hour':
-        startDate = new Date(now.getTime() - 60 * 60 * 1000)
-        break
-      case 'Past 6 hours':
-        startDate = new Date(now.getTime() - 6 * 60 * 60 * 1000)
-        break
-      case 'Past 12 hours':
-        startDate = new Date(now.getTime() - 12 * 60 * 60 * 1000)
-        break
-      case 'Past 24 hours':
-        startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-        break
-      case 'Past 3 days':
-        startDate = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000)
-        break
-      case 'Past 7 days':
-        startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-        break
-      case 'Past 14 days':
-        startDate = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
-        break
-      case 'Past 30 days':
-        startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
-        break
-      default:
-        startDate = new Date(0)
-    }
-
+  const startDate = getStartDateFromTimeRange(filters.timeRange, filters.startDate)
+  if (startDate) {
     params.set('startDate', startDate.toISOString())
+  }
+
+  const endDate = getEndDateFromTimeRange(filters.timeRange, filters.endDate)
+  if (endDate) {
+    params.set('endDate', endDate.toISOString())
   }
 
   if (filters.searchQuery.trim()) {
@@ -134,8 +80,52 @@ function buildQueryParams(workspaceId: string, filters: LogFilters, page: number
       params.set(key, value)
     }
   }
+}
+
+function buildQueryParams(workspaceId: string, filters: LogFilters, page: number): string {
+  const params = new URLSearchParams()
+
+  params.set('workspaceId', workspaceId)
+  params.set('limit', filters.limit.toString())
+  params.set('offset', ((page - 1) * filters.limit).toString())
+
+  applyFilterParams(params, filters)
 
   return params.toString()
+}
+
+async function fetchLogsPage(
+  workspaceId: string,
+  filters: LogFilters,
+  page: number,
+  signal?: AbortSignal
+): Promise<{ logs: WorkflowLog[]; hasMore: boolean; nextPage: number | undefined }> {
+  const queryParams = buildQueryParams(workspaceId, filters, page)
+  const response = await fetch(`/api/logs?${queryParams}`, { signal })
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch logs')
+  }
+
+  const apiData: LogsResponse = await response.json()
+  const hasMore = apiData.data.length === filters.limit && apiData.page < apiData.totalPages
+
+  return {
+    logs: apiData.data || [],
+    hasMore,
+    nextPage: hasMore ? page + 1 : undefined,
+  }
+}
+
+async function fetchLogDetail(logId: string, signal?: AbortSignal): Promise<WorkflowLog> {
+  const response = await fetch(`/api/logs/${logId}`, { signal })
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch log details')
+  }
+
+  const { data } = await response.json()
+  return data
 }
 
 interface UseLogsListOptions {
@@ -150,278 +140,136 @@ export function useLogsList(
 ) {
   return useInfiniteQuery({
     queryKey: logKeys.list(workspaceId, filters),
-    queryFn: ({ pageParam }) => fetchLogsPage(workspaceId as string, filters, pageParam),
+    queryFn: ({ pageParam, signal }) =>
+      fetchLogsPage(workspaceId as string, filters, pageParam, signal),
     enabled: Boolean(workspaceId) && (options?.enabled ?? true),
     refetchInterval: options?.refetchInterval ?? false,
-    staleTime: 0, // Always consider stale for real-time logs
+    staleTime: 0,
+    placeholderData: keepPreviousData,
     initialPageParam: 1,
     getNextPageParam: (lastPage) => lastPage.nextPage,
   })
 }
 
-export function useLogDetail(logId: string | undefined) {
+interface UseLogDetailOptions {
+  enabled?: boolean
+  refetchInterval?:
+    | number
+    | false
+    | ((query: { state: { data?: WorkflowLog } }) => number | false | undefined)
+}
+
+export function useLogDetail(logId: string | undefined, options?: UseLogDetailOptions) {
   return useQuery({
     queryKey: logKeys.detail(logId),
-    queryFn: () => fetchLogDetail(logId as string),
-    enabled: Boolean(logId),
-    staleTime: 30 * 1000, // Details can be slightly stale (30 seconds)
+    queryFn: ({ signal }) => fetchLogDetail(logId as string, signal),
+    enabled: Boolean(logId) && (options?.enabled ?? true),
+    refetchInterval: options?.refetchInterval ?? false,
+    staleTime: 30 * 1000,
     placeholderData: keepPreviousData,
   })
 }
 
-interface WorkflowSegment {
-  timestamp: string
-  hasExecutions: boolean
-  totalExecutions: number
-  successfulExecutions: number
-  successRate: number
-  avgDurationMs?: number
-  p50Ms?: number
-  p90Ms?: number
-  p99Ms?: number
-}
-
-interface WorkflowExecution {
-  workflowId: string
-  workflowName: string
-  segments: WorkflowSegment[]
-  overallSuccessRate: number
-}
-
-interface AggregateSegment {
-  timestamp: string
-  totalExecutions: number
-  successfulExecutions: number
-}
-
-interface ExecutionsMetricsResponse {
-  workflows: WorkflowExecution[]
-  aggregateSegments: AggregateSegment[]
-}
-
-interface DashboardMetricsFilters {
-  workspaceId: string
-  segments: number
-  startTime: string
-  endTime: string
-  workflowIds?: string[]
-  folderIds?: string[]
-  triggers?: string[]
-}
-
-async function fetchExecutionsMetrics(
-  filters: DashboardMetricsFilters
-): Promise<ExecutionsMetricsResponse> {
-  const params = new URLSearchParams({
-    segments: String(filters.segments),
-    startTime: filters.startTime,
-    endTime: filters.endTime,
+/**
+ * Prefetches log detail data on hover for instant panel rendering on click.
+ */
+export function prefetchLogDetail(queryClient: QueryClient, logId: string) {
+  queryClient.prefetchQuery({
+    queryKey: logKeys.detail(logId),
+    queryFn: () => fetchLogDetail(logId),
+    staleTime: 30 * 1000,
   })
+}
 
-  if (filters.workflowIds && filters.workflowIds.length > 0) {
-    params.set('workflowIds', filters.workflowIds.join(','))
-  }
+/**
+ * Fetches dashboard stats from the server-side aggregation endpoint.
+ * Uses SQL aggregation for efficient computation without arbitrary limits.
+ */
+async function fetchDashboardStats(
+  workspaceId: string,
+  filters: Omit<LogFilters, 'limit'>,
+  signal?: AbortSignal
+): Promise<DashboardStatsResponse> {
+  const params = new URLSearchParams()
+  params.set('workspaceId', workspaceId)
 
-  if (filters.folderIds && filters.folderIds.length > 0) {
-    params.set('folderIds', filters.folderIds.join(','))
-  }
+  applyFilterParams(params, filters)
 
-  if (filters.triggers && filters.triggers.length > 0) {
-    params.set('triggers', filters.triggers.join(','))
-  }
-
-  const response = await fetch(
-    `/api/workspaces/${filters.workspaceId}/metrics/executions?${params.toString()}`
-  )
+  const response = await fetch(`/api/logs/stats?${params.toString()}`, { signal })
 
   if (!response.ok) {
-    throw new Error('Failed to fetch execution metrics')
+    throw new Error('Failed to fetch dashboard stats')
   }
 
-  const data = await response.json()
-
-  const workflows: WorkflowExecution[] = (data.workflows || []).map((wf: any) => {
-    const segments = (wf.segments || []).map((s: any) => {
-      const total = s.totalExecutions || 0
-      const success = s.successfulExecutions || 0
-      const hasExecutions = total > 0
-      const successRate = hasExecutions ? (success / total) * 100 : 100
-      return {
-        timestamp: s.timestamp,
-        hasExecutions,
-        totalExecutions: total,
-        successfulExecutions: success,
-        successRate,
-        avgDurationMs: typeof s.avgDurationMs === 'number' ? s.avgDurationMs : 0,
-        p50Ms: typeof s.p50Ms === 'number' ? s.p50Ms : 0,
-        p90Ms: typeof s.p90Ms === 'number' ? s.p90Ms : 0,
-        p99Ms: typeof s.p99Ms === 'number' ? s.p99Ms : 0,
-      }
-    })
-
-    const totals = segments.reduce(
-      (acc: { total: number; success: number }, seg: WorkflowSegment) => {
-        acc.total += seg.totalExecutions
-        acc.success += seg.successfulExecutions
-        return acc
-      },
-      { total: 0, success: 0 }
-    )
-
-    const overallSuccessRate = totals.total > 0 ? (totals.success / totals.total) * 100 : 100
-
-    return {
-      workflowId: wf.workflowId,
-      workflowName: wf.workflowName,
-      segments,
-      overallSuccessRate,
-    }
-  })
-
-  const sortedWorkflows = workflows.sort((a, b) => {
-    const errA = a.overallSuccessRate < 100 ? 1 - a.overallSuccessRate / 100 : 0
-    const errB = b.overallSuccessRate < 100 ? 1 - b.overallSuccessRate / 100 : 0
-    return errB - errA
-  })
-
-  const segmentCount = filters.segments
-  const startTime = new Date(filters.startTime)
-  const endTime = new Date(filters.endTime)
-
-  const aggregateSegments: AggregateSegment[] = Array.from({ length: segmentCount }, (_, i) => {
-    const base = startTime.getTime()
-    const ts = new Date(base + Math.floor((i * (endTime.getTime() - base)) / segmentCount))
-    return {
-      timestamp: ts.toISOString(),
-      totalExecutions: 0,
-      successfulExecutions: 0,
-    }
-  })
-
-  for (const wf of data.workflows as any[]) {
-    wf.segments.forEach((s: any, i: number) => {
-      const index = Math.min(i, segmentCount - 1)
-      aggregateSegments[index].totalExecutions += s.totalExecutions || 0
-      aggregateSegments[index].successfulExecutions += s.successfulExecutions || 0
-    })
-  }
-
-  return {
-    workflows: sortedWorkflows,
-    aggregateSegments,
-  }
+  return response.json()
 }
 
-interface UseExecutionsMetricsOptions {
+interface UseDashboardStatsOptions {
   enabled?: boolean
   refetchInterval?: number | false
 }
 
-export function useExecutionsMetrics(
-  filters: DashboardMetricsFilters,
-  options?: UseExecutionsMetricsOptions
+/**
+ * Hook for fetching dashboard stats using server-side aggregation.
+ * No arbitrary limits - uses SQL aggregation for accurate metrics.
+ */
+export function useDashboardStats(
+  workspaceId: string | undefined,
+  filters: Omit<LogFilters, 'limit'>,
+  options?: UseDashboardStatsOptions
 ) {
   return useQuery({
-    queryKey: logKeys.executions(filters.workspaceId, filters),
-    queryFn: () => fetchExecutionsMetrics(filters),
-    enabled: Boolean(filters.workspaceId) && (options?.enabled ?? true),
+    queryKey: logKeys.stats(workspaceId, filters),
+    queryFn: ({ signal }) => fetchDashboardStats(workspaceId as string, filters, signal),
+    enabled: Boolean(workspaceId) && (options?.enabled ?? true),
     refetchInterval: options?.refetchInterval ?? false,
-    staleTime: 10 * 1000, // Metrics can be slightly stale (10 seconds)
+    staleTime: 0,
     placeholderData: keepPreviousData,
   })
 }
 
-interface DashboardLogsFilters {
-  workspaceId: string
-  startDate: string
-  endDate: string
-  workflowIds?: string[]
-  folderIds?: string[]
-  triggers?: string[]
-  limit: number
+export interface ExecutionSnapshotData {
+  executionId: string
+  workflowId: string
+  workflowState: Record<string, unknown>
+  childWorkflowSnapshots?: Record<string, Record<string, unknown>>
+  executionMetadata: {
+    trigger: string
+    startedAt: string
+    endedAt?: string
+    totalDurationMs?: number
+    cost: {
+      total: number | null
+      input: number | null
+      output: number | null
+    }
+    totalTokens: number | null
+  }
 }
 
-interface DashboardLogsPage {
-  logs: any[] // Will be mapped by the consumer
-  hasMore: boolean
-  nextPage: number | undefined
-}
-
-async function fetchDashboardLogsPage(
-  filters: DashboardLogsFilters,
-  page: number,
-  workflowId?: string
-): Promise<DashboardLogsPage> {
-  const params = new URLSearchParams({
-    limit: filters.limit.toString(),
-    offset: ((page - 1) * filters.limit).toString(),
-    workspaceId: filters.workspaceId,
-    startDate: filters.startDate,
-    endDate: filters.endDate,
-    order: 'desc',
-    details: 'full',
-  })
-
-  if (workflowId) {
-    params.set('workflowIds', workflowId)
-  } else if (filters.workflowIds && filters.workflowIds.length > 0) {
-    params.set('workflowIds', filters.workflowIds.join(','))
-  }
-
-  if (filters.folderIds && filters.folderIds.length > 0) {
-    params.set('folderIds', filters.folderIds.join(','))
-  }
-
-  if (filters.triggers && filters.triggers.length > 0) {
-    params.set('triggers', filters.triggers.join(','))
-  }
-
-  const response = await fetch(`/api/logs?${params.toString()}`)
+async function fetchExecutionSnapshot(
+  executionId: string,
+  signal?: AbortSignal
+): Promise<ExecutionSnapshotData> {
+  const response = await fetch(`/api/logs/execution/${executionId}`, { signal })
 
   if (!response.ok) {
-    throw new Error('Failed to fetch dashboard logs')
+    throw new Error(`Failed to fetch execution snapshot: ${response.statusText}`)
   }
 
   const data = await response.json()
-  const logs = data.data || []
-  const hasMore = logs.length === filters.limit
-
-  return {
-    logs,
-    hasMore,
-    nextPage: hasMore ? page + 1 : undefined,
+  if (!data) {
+    throw new Error('No execution snapshot data returned')
   }
+
+  return data
 }
 
-interface UseDashboardLogsOptions {
-  enabled?: boolean
-}
-
-export function useGlobalDashboardLogs(
-  filters: DashboardLogsFilters,
-  options?: UseDashboardLogsOptions
-) {
-  return useInfiniteQuery({
-    queryKey: logKeys.globalLogs(filters.workspaceId, filters),
-    queryFn: ({ pageParam }) => fetchDashboardLogsPage(filters, pageParam),
-    enabled: Boolean(filters.workspaceId) && (options?.enabled ?? true),
-    staleTime: 10 * 1000, // Slightly stale (10 seconds)
-    initialPageParam: 1,
-    getNextPageParam: (lastPage) => lastPage.nextPage,
-  })
-}
-
-export function useWorkflowDashboardLogs(
-  workflowId: string | undefined,
-  filters: DashboardLogsFilters,
-  options?: UseDashboardLogsOptions
-) {
-  return useInfiniteQuery({
-    queryKey: logKeys.workflowLogs(filters.workspaceId, workflowId, filters),
-    queryFn: ({ pageParam }) => fetchDashboardLogsPage(filters, pageParam, workflowId),
-    enabled: Boolean(filters.workspaceId) && Boolean(workflowId) && (options?.enabled ?? true),
-    staleTime: 10 * 1000, // Slightly stale (10 seconds)
-    initialPageParam: 1,
-    getNextPageParam: (lastPage) => lastPage.nextPage,
+export function useExecutionSnapshot(executionId: string | undefined) {
+  return useQuery({
+    queryKey: logKeys.executionSnapshot(executionId),
+    queryFn: ({ signal }) => fetchExecutionSnapshot(executionId as string, signal),
+    enabled: Boolean(executionId),
+    staleTime: 5 * 60 * 1000, // 5 minutes - execution snapshots don't change
   })
 }

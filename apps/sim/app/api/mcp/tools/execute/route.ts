@@ -1,5 +1,9 @@
+import { createLogger } from '@sim/logger'
 import type { NextRequest } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
+import { getHighestPrioritySubscription } from '@/lib/billing/core/plan'
+import { getExecutionTimeout } from '@/lib/core/execution-limits'
+import type { SubscriptionPlan } from '@/lib/core/rate-limiter/types'
+import { SIM_VIA_HEADER } from '@/lib/execution/call-chain'
 import { getParsedBody, withMcpAuth } from '@/lib/mcp/middleware'
 import { mcpService } from '@/lib/mcp/service'
 import type { McpTool, McpToolCall, McpToolResult } from '@/lib/mcp/types'
@@ -7,7 +11,6 @@ import {
   categorizeError,
   createMcpErrorResponse,
   createMcpSuccessResponse,
-  MCP_CONSTANTS,
   validateStringParam,
 } from '@/lib/mcp/utils'
 
@@ -15,7 +18,6 @@ const logger = createLogger('McpToolExecutionAPI')
 
 export const dynamic = 'force-dynamic'
 
-// Type definitions for improved type safety
 interface SchemaProperty {
   type: 'string' | 'number' | 'boolean' | 'object' | 'array'
   description?: string
@@ -31,9 +33,6 @@ interface ToolExecutionResult {
   error?: string
 }
 
-/**
- * Type guard to safely check if a schema property has a type field
- */
 function hasType(prop: unknown): prop is SchemaProperty {
   return typeof prop === 'object' && prop !== null && 'type' in prop
 }
@@ -57,7 +56,8 @@ export const POST = withMcpAuth('read')(
         userId: userId,
       })
 
-      const { serverId, toolName, arguments: args } = body
+      const { serverId, toolName, arguments: rawArgs } = body
+      const args = rawArgs || {}
 
       const serverIdValidation = validateStringParam(serverId, 'serverId')
       if (!serverIdValidation.isValid) {
@@ -75,22 +75,31 @@ export const POST = withMcpAuth('read')(
         `[${requestId}] Executing tool ${toolName} on server ${serverId} for user ${userId} in workspace ${workspaceId}`
       )
 
-      let tool = null
+      let tool: McpTool | null = null
       try {
-        const tools = await mcpService.discoverServerTools(userId, serverId, workspaceId)
-        tool = tools.find((t) => t.name === toolName)
+        if (body.toolSchema) {
+          tool = {
+            name: toolName,
+            inputSchema: body.toolSchema,
+            serverId: serverId,
+            serverName: 'provided-schema',
+          } as McpTool
+        } else {
+          const tools = await mcpService.discoverServerTools(userId, serverId, workspaceId)
+          tool = tools.find((t) => t.name === toolName) ?? null
 
-        if (!tool) {
-          return createMcpErrorResponse(
-            new Error(
-              `Tool ${toolName} not found on server ${serverId}. Available tools: ${tools.map((t) => t.name).join(', ')}`
-            ),
-            'Tool not found',
-            404
-          )
+          if (!tool) {
+            logger.warn(`[${requestId}] Tool ${toolName} not found on server ${serverId}`, {
+              availableTools: tools.map((t) => t.name),
+            })
+            return createMcpErrorResponse(
+              new Error('Tool not found'),
+              'Tool not found on the specified server',
+              404
+            )
+          }
         }
 
-        // Cast arguments to their expected types based on tool schema
         if (tool.inputSchema?.properties) {
           for (const [paramName, paramSchema] of Object.entries(tool.inputSchema.properties)) {
             const schema = paramSchema as any
@@ -100,7 +109,6 @@ export const POST = withMcpAuth('read')(
               continue
             }
 
-            // Cast numbers
             if (
               (schema.type === 'number' || schema.type === 'integer') &&
               typeof value === 'string'
@@ -110,42 +118,33 @@ export const POST = withMcpAuth('read')(
               if (!Number.isNaN(numValue)) {
                 args[paramName] = numValue
               }
-            }
-            // Cast booleans
-            else if (schema.type === 'boolean' && typeof value === 'string') {
+            } else if (schema.type === 'boolean' && typeof value === 'string') {
               if (value.toLowerCase() === 'true') {
                 args[paramName] = true
               } else if (value.toLowerCase() === 'false') {
                 args[paramName] = false
               }
-            }
-            // Cast arrays
-            else if (schema.type === 'array' && typeof value === 'string') {
+            } else if (schema.type === 'array' && typeof value === 'string') {
               const stringValue = value.trim()
               if (stringValue) {
                 try {
-                  // Try to parse as JSON first (handles ["item1", "item2"])
                   const parsed = JSON.parse(stringValue)
                   if (Array.isArray(parsed)) {
                     args[paramName] = parsed
                   } else {
-                    // JSON parsed but not an array, wrap in array
                     args[paramName] = [parsed]
                   }
-                } catch (error) {
-                  // JSON parsing failed - treat as comma-separated if contains commas, otherwise single item
+                } catch {
                   if (stringValue.includes(',')) {
                     args[paramName] = stringValue
                       .split(',')
                       .map((item) => item.trim())
                       .filter((item) => item)
                   } else {
-                    // Single item - wrap in array since schema expects array
                     args[paramName] = [stringValue]
                   }
                 }
               } else {
-                // Empty string becomes empty array
                 args[paramName] = []
               }
             }
@@ -172,16 +171,25 @@ export const POST = withMcpAuth('read')(
 
       const toolCall: McpToolCall = {
         name: toolName,
-        arguments: args || {},
+        arguments: args,
+      }
+
+      const userSubscription = await getHighestPrioritySubscription(userId)
+      const executionTimeout = getExecutionTimeout(
+        userSubscription?.plan as SubscriptionPlan | undefined,
+        'sync'
+      )
+
+      const simViaHeader = request.headers.get(SIM_VIA_HEADER)
+      const extraHeaders: Record<string, string> = {}
+      if (simViaHeader) {
+        extraHeaders[SIM_VIA_HEADER] = simViaHeader
       }
 
       const result = await Promise.race([
-        mcpService.executeTool(userId, serverId, toolCall, workspaceId),
+        mcpService.executeTool(userId, serverId, toolCall, workspaceId, extraHeaders),
         new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Tool execution timeout')),
-            MCP_CONSTANTS.EXECUTION_TIMEOUT
-          )
+          setTimeout(() => reject(new Error('Tool execution timeout')), executionTimeout)
         ),
       ])
 
@@ -197,17 +205,16 @@ export const POST = withMcpAuth('read')(
       }
       logger.info(`[${requestId}] Successfully executed tool ${toolName} on server ${serverId}`)
 
-      // Track MCP tool execution
       try {
-        const { trackPlatformEvent } = await import('@/lib/telemetry/tracer')
-        trackPlatformEvent('platform.mcp.tool_executed', {
-          'mcp.server_id': serverId,
-          'mcp.tool_name': toolName,
-          'mcp.execution_status': 'success',
-          'workspace.id': workspaceId,
+        const { PlatformEvents } = await import('@/lib/core/telemetry')
+        PlatformEvents.mcpToolExecuted({
+          serverId,
+          toolName,
+          status: 'success',
+          workspaceId,
         })
-      } catch (_e) {
-        // Silently fail
+      } catch {
+        // Telemetry failure is non-critical
       }
 
       return createMcpSuccessResponse(transformedResult)
@@ -220,12 +227,9 @@ export const POST = withMcpAuth('read')(
   }
 )
 
-/**
- * Validate tool arguments against schema
- */
 function validateToolArguments(tool: McpTool, args: Record<string, unknown>): string | null {
   if (!tool.inputSchema) {
-    return null // No schema to validate against
+    return null
   }
 
   const schema = tool.inputSchema
@@ -270,9 +274,6 @@ function validateToolArguments(tool: McpTool, args: Record<string, unknown>): st
   return null
 }
 
-/**
- * Transform MCP tool result to platform format
- */
 function transformToolResult(result: McpToolResult): ToolExecutionResult {
   if (result.isError) {
     return {

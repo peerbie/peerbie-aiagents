@@ -1,9 +1,9 @@
 import { db } from '@sim/db'
 import { permissions, workflow, workflowFolder, workspace as workspaceTable } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { eq } from 'drizzle-orm'
-import { createLogger } from '@/lib/logs/console/logger'
-import { getUserEntityPermissions } from '@/lib/permissions/utils'
-import { duplicateWorkflow } from '@/lib/workflows/duplicate'
+import { duplicateWorkflow } from '@/lib/workflows/persistence/duplicate'
+import { getUserEntityPermissions } from '@/lib/workspaces/permissions/utils'
 
 const logger = createLogger('WorkspaceDuplicate')
 
@@ -59,6 +59,7 @@ export async function duplicateWorkspace(
     await tx.insert(workspaceTable).values({
       id: newWorkspaceId,
       name,
+      color: sourceWorkspace.color,
       ownerId: userId,
       billedAccountUserId: userId,
       allowPersonalApiKeys: sourceWorkspace.allowPersonalApiKeys,

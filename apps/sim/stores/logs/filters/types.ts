@@ -29,6 +29,8 @@ export interface CostMetadata {
       output: number
       total: number
       tokens?: {
+        input?: number
+        output?: number
         prompt?: number
         completion?: number
         total?: number
@@ -39,6 +41,8 @@ export interface CostMetadata {
   output?: number
   total?: number
   tokens?: {
+    input?: number
+    output?: number
     prompt?: number
     completion?: number
     total?: number
@@ -82,6 +86,7 @@ export interface TraceSpan {
   children?: TraceSpan[]
   toolCalls?: ToolCall[]
   status?: 'success' | 'error'
+  errorHandled?: boolean
   tokens?: number | TokenInfo
   relativeStartMs?: number // Time in ms from the start of the parent span
   blockId?: string // Added to track the original block ID for relationship mapping
@@ -98,13 +103,17 @@ export interface TraceSpan {
 
 export interface WorkflowLog {
   id: string
-  workflowId: string
+  workflowId: string | null
   executionId?: string | null
+  deploymentVersion?: number | null
+  deploymentVersionName?: string | null
   level: string
+  status?: string | null
   duration: string | null
   trigger: string | null
   createdAt: string
   workflow?: WorkflowData | null
+  jobTitle?: string | null
   files?: Array<{
     id: string
     name: string
@@ -163,31 +172,53 @@ export type TimeRange =
   | 'Past 14 days'
   | 'Past 30 days'
   | 'All time'
-export type LogLevel = 'error' | 'info' | 'all'
-export type TriggerType = 'chat' | 'api' | 'webhook' | 'manual' | 'schedule' | 'all' | string
+  | 'Custom range'
 
+export type LogLevel =
+  | 'error'
+  | 'info'
+  | 'running'
+  | 'pending'
+  | 'cancelled'
+  | 'all'
+  | (string & {})
+/** Core trigger types for workflow execution */
+export const CORE_TRIGGER_TYPES = [
+  'manual',
+  'api',
+  'schedule',
+  'chat',
+  'webhook',
+  'mcp',
+  'a2a',
+  'copilot',
+  'mothership',
+  'workflow',
+] as const
+
+export type CoreTriggerType = (typeof CORE_TRIGGER_TYPES)[number]
+
+export type TriggerType = CoreTriggerType | 'all' | (string & {})
+
+/** Filter state for logs and dashboard views */
 export interface FilterState {
-  // Workspace context
   workspaceId: string
-
-  // View mode
   viewMode: 'logs' | 'dashboard'
-
-  // Filter states
   timeRange: TimeRange
+  startDate?: string
+  endDate?: string
   level: LogLevel
   workflowIds: string[]
   folderIds: string[]
   searchQuery: string
   triggers: TriggerType[]
+  isInitializing: boolean
 
-  // Internal state
-  _isInitializing: boolean
-
-  // Actions
   setWorkspaceId: (workspaceId: string) => void
   setViewMode: (viewMode: 'logs' | 'dashboard') => void
   setTimeRange: (timeRange: TimeRange) => void
+  setDateRange: (startDate: string | undefined, endDate: string | undefined) => void
+  clearDateRange: () => void
   setLevel: (level: LogLevel) => void
   setWorkflowIds: (workflowIds: string[]) => void
   toggleWorkflowId: (workflowId: string) => void
@@ -196,8 +227,7 @@ export interface FilterState {
   setSearchQuery: (query: string) => void
   setTriggers: (triggers: TriggerType[]) => void
   toggleTrigger: (trigger: TriggerType) => void
-
-  // URL synchronization methods
   initializeFromURL: () => void
   syncWithURL: () => void
+  resetFilters: () => void
 }

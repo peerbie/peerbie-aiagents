@@ -1,9 +1,9 @@
 import { db } from '@sim/db'
 import { chat } from '@sim/db/schema'
-import { eq } from 'drizzle-orm'
+import { createLogger } from '@sim/logger'
+import { and, eq, isNull } from 'drizzle-orm'
 import type { NextRequest } from 'next/server'
 import { z } from 'zod'
-import { createLogger } from '@/lib/logs/console/logger'
 import { createErrorResponse, createSuccessResponse } from '@/app/api/workflows/utils'
 
 const logger = createLogger('ChatValidateAPI')
@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
     const existingChat = await db
       .select({ id: chat.id })
       .from(chat)
-      .where(eq(chat.identifier, validatedIdentifier))
+      .where(and(eq(chat.identifier, validatedIdentifier), isNull(chat.archivedAt)))
       .limit(1)
 
     const isAvailable = existingChat.length === 0

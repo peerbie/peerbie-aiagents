@@ -45,7 +45,7 @@ export const apolloPeopleEnrichTool: ToolConfig<
       type: 'string',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Company domain (e.g., apollo.io)',
+      description: 'Company domain (e.g., "apollo.io", "acme.com")',
     },
     linkedin_url: {
       type: 'string',
@@ -107,15 +107,13 @@ export const apolloPeopleEnrichTool: ToolConfig<
       success: true,
       output: {
         person: data.person || {},
-        metadata: {
-          enriched: !!data.person,
-        },
+        enriched: !!data.person,
       },
     }
   },
 
   outputs: {
     person: { type: 'json', description: 'Enriched person data from Apollo' },
-    metadata: { type: 'json', description: 'Enrichment metadata including enriched status' },
+    enriched: { type: 'boolean', description: 'Whether the person was successfully enriched' },
   },
 }

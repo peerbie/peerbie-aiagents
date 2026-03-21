@@ -1,5 +1,6 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type { HubSpotGetUsersParams, HubSpotGetUsersResponse } from '@/tools/hubspot/types'
+import { USERS_ARRAY_OUTPUT } from '@/tools/hubspot/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('HubSpotGetUsers')
@@ -25,8 +26,8 @@ export const hubspotGetUsersTool: ToolConfig<HubSpotGetUsersParams, HubSpotGetUs
     limit: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Number of results to return (default: 100)',
+      visibility: 'user-or-llm',
+      description: 'Number of results to return (default: 100, max: 100)',
     },
   },
 
@@ -69,31 +70,15 @@ export const hubspotGetUsersTool: ToolConfig<HubSpotGetUsersParams, HubSpotGetUs
       success: true,
       output: {
         users,
-        metadata: {
-          operation: 'get_users' as const,
-          totalItems: users.length,
-        },
+        totalItems: users.length,
         success: true,
       },
     }
   },
 
   outputs: {
+    users: USERS_ARRAY_OUTPUT,
+    totalItems: { type: 'number', description: 'Total number of users returned' },
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Users data',
-      properties: {
-        users: {
-          type: 'array',
-          description: 'Array of user objects',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

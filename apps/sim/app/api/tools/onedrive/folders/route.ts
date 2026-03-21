@@ -1,11 +1,12 @@
 import { randomUUID } from 'crypto'
 import { db } from '@sim/db'
 import { account } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { eq } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { refreshAccessTokenIfNeeded } from '@/app/api/auth/oauth/utils'
+import { validateMicrosoftGraphId } from '@/lib/core/security/input-validation'
+import { refreshAccessTokenIfNeeded, resolveOAuthAccountId } from '@/app/api/auth/oauth/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -33,22 +34,49 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Credential ID is required' }, { status: 400 })
     }
 
-    const credentials = await db.select().from(account).where(eq(account.id, credentialId)).limit(1)
+    const credentialIdValidation = validateMicrosoftGraphId(credentialId, 'credentialId')
+    if (!credentialIdValidation.isValid) {
+      logger.warn(`[${requestId}] Invalid credential ID`, { error: credentialIdValidation.error })
+      return NextResponse.json({ error: credentialIdValidation.error }, { status: 400 })
+    }
+
+    const resolved = await resolveOAuthAccountId(credentialId)
+    if (!resolved) {
+      return NextResponse.json({ error: 'Credential not found' }, { status: 404 })
+    }
+
+    if (resolved.workspaceId) {
+      const { getUserEntityPermissions } = await import('@/lib/workspaces/permissions/utils')
+      const perm = await getUserEntityPermissions(
+        session.user.id,
+        'workspace',
+        resolved.workspaceId
+      )
+      if (perm === null) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
+    }
+
+    const credentials = await db
+      .select()
+      .from(account)
+      .where(eq(account.id, resolved.accountId))
+      .limit(1)
     if (!credentials.length) {
       return NextResponse.json({ error: 'Credential not found' }, { status: 404 })
     }
 
-    const credential = credentials[0]
-    if (credential.userId !== session.user.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
+    const accountRow = credentials[0]
 
-    const accessToken = await refreshAccessTokenIfNeeded(credentialId, session.user.id, requestId)
+    const accessToken = await refreshAccessTokenIfNeeded(
+      resolved.accountId,
+      accountRow.userId,
+      requestId
+    )
     if (!accessToken) {
       return NextResponse.json({ error: 'Failed to obtain valid access token' }, { status: 401 })
     }
 
-    // Build URL for OneDrive folders
     let url = `https://graph.microsoft.com/v1.0/me/drive/root/children?$filter=folder ne null&$select=id,name,folder,webUrl,createdDateTime,lastModifiedDateTime&$top=50`
 
     if (query) {
@@ -71,7 +99,7 @@ export async function GET(request: NextRequest) {
 
     const data = await response.json()
     const folders = (data.value || [])
-      .filter((item: MicrosoftGraphDriveItem) => item.folder) // Only folders
+      .filter((item: MicrosoftGraphDriveItem) => item.folder)
       .map((folder: MicrosoftGraphDriveItem) => ({
         id: folder.id,
         name: folder.name,

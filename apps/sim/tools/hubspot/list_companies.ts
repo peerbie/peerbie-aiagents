@@ -1,8 +1,9 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   HubSpotListCompaniesParams,
   HubSpotListCompaniesResponse,
 } from '@/tools/hubspot/types'
+import { COMPANIES_ARRAY_OUTPUT, METADATA_OUTPUT, PAGING_OUTPUT } from '@/tools/hubspot/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('HubSpotListCompanies')
@@ -31,26 +32,28 @@ export const hubspotListCompaniesTool: ToolConfig<
     limit: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Maximum number of results per page (max 100, default 100)',
     },
     after: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Pagination cursor for next page of results',
+      visibility: 'user-or-llm',
+      description: 'Pagination cursor for next page of results (from previous response)',
     },
     properties: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Comma-separated list of properties to return',
+      visibility: 'user-or-llm',
+      description:
+        'Comma-separated list of HubSpot property names to return (e.g., "name,domain,industry")',
     },
     associations: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Comma-separated list of object types to retrieve associated IDs for',
+      visibility: 'user-or-llm',
+      description:
+        'Comma-separated list of object types to retrieve associated IDs for (e.g., "contacts,deals")',
     },
   },
 
@@ -100,9 +103,8 @@ export const hubspotListCompaniesTool: ToolConfig<
       success: true,
       output: {
         companies: data.results || [],
-        paging: data.paging,
+        paging: data.paging ?? null,
         metadata: {
-          operation: 'list_companies' as const,
           totalReturned: data.results?.length || 0,
           hasMore: !!data.paging?.next,
         },
@@ -112,25 +114,9 @@ export const hubspotListCompaniesTool: ToolConfig<
   },
 
   outputs: {
+    companies: COMPANIES_ARRAY_OUTPUT,
+    paging: PAGING_OUTPUT,
+    metadata: METADATA_OUTPUT,
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Companies data',
-      properties: {
-        companies: {
-          type: 'array',
-          description: 'Array of company objects',
-        },
-        paging: {
-          type: 'object',
-          description: 'Pagination information',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

@@ -1,22 +1,7 @@
+import type { JiraAssignIssueParams, JiraAssignIssueResponse } from '@/tools/jira/types'
+import { SUCCESS_OUTPUT, TIMESTAMP_OUTPUT } from '@/tools/jira/types'
 import { getJiraCloudId } from '@/tools/jira/utils'
-import type { ToolConfig, ToolResponse } from '@/tools/types'
-
-export interface JiraAssignIssueParams {
-  accessToken: string
-  domain: string
-  issueKey: string
-  accountId: string
-  cloudId?: string
-}
-
-export interface JiraAssignIssueResponse extends ToolResponse {
-  output: {
-    ts: string
-    issueKey: string
-    assigneeId: string
-    success: boolean
-  }
-}
+import type { ToolConfig } from '@/tools/types'
 
 export const jiraAssignIssueTool: ToolConfig<JiraAssignIssueParams, JiraAssignIssueResponse> = {
   id: 'jira_assign_issue',
@@ -144,13 +129,12 @@ export const jiraAssignIssueTool: ToolConfig<JiraAssignIssueParams, JiraAssignIs
   },
 
   outputs: {
-    success: {
-      type: 'boolean',
-      description: 'Operation success status',
-    },
-    output: {
-      type: 'object',
-      description: 'Assignment details with timestamp, issue key, assignee ID, and success status',
+    ts: TIMESTAMP_OUTPUT,
+    success: SUCCESS_OUTPUT,
+    issueKey: { type: 'string', description: 'Issue key that was assigned' },
+    assigneeId: {
+      type: 'string',
+      description: 'Account ID of the assignee (use "-1" for auto-assign, null to unassign)',
     },
   },
 }

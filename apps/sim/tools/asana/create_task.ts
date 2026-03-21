@@ -22,8 +22,8 @@ export const asanaCreateTaskTool: ToolConfig<AsanaCreateTaskParams, AsanaCreateT
     workspace: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'Workspace GID where the task will be created',
+      visibility: 'user-or-llm',
+      description: 'Asana workspace GID (numeric string) where the task will be created',
     },
     name: {
       type: 'string',
@@ -86,34 +86,22 @@ export const asanaCreateTaskTool: ToolConfig<AsanaCreateTaskParams, AsanaCreateT
     }
 
     const data = JSON.parse(responseText)
-
-    if (data.success && data.output) {
-      return data
-    }
-
+    const { success, error, ...output } = data
     return {
-      success: data.success || false,
-      output: data.output || {
-        ts: new Date().toISOString(),
-        gid: 'unknown',
-        name: 'Task creation failed',
-        notes: '',
-        completed: false,
-        created_at: new Date().toISOString(),
-        permalink_url: '',
-      },
-      error: data.error,
+      success: success ?? true,
+      output,
+      error,
     }
   },
 
   outputs: {
-    success: {
-      type: 'boolean',
-      description: 'Operation success status',
-    },
-    output: {
-      type: 'object',
-      description: 'Created task details with timestamp, gid, name, notes, and permalink',
-    },
+    success: { type: 'boolean', description: 'Operation success status' },
+    ts: { type: 'string', description: 'Timestamp of the response' },
+    gid: { type: 'string', description: 'Task globally unique identifier' },
+    name: { type: 'string', description: 'Task name' },
+    notes: { type: 'string', description: 'Task notes or description' },
+    completed: { type: 'boolean', description: 'Whether the task is completed' },
+    created_at: { type: 'string', description: 'Task creation timestamp' },
+    permalink_url: { type: 'string', description: 'URL to the task in Asana' },
   },
 }

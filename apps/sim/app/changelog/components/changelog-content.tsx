@@ -1,7 +1,5 @@
 import { BookOpen, Github, Rss } from 'lucide-react'
 import Link from 'next/link'
-import { inter } from '@/app/_styles/fonts/inter/inter'
-import { soehne } from '@/app/_styles/fonts/soehne/soehne'
 import ChangelogList from '@/app/changelog/components/timeline-list'
 
 export interface ChangelogEntry {
@@ -46,45 +44,38 @@ export default async function ChangelogContent() {
   }
 
   return (
-    <div className='min-h-screen bg-background'>
+    <div className='min-h-screen'>
       <div className='relative grid md:grid-cols-2'>
         {/* Left intro panel */}
-        <div className='relative top-0 overflow-hidden border-border border-b px-6 py-16 sm:px-10 md:sticky md:h-dvh md:border-r md:border-b-0 md:px-12 md:py-24'>
-          <div className='absolute inset-0 bg-grid-pattern opacity-[0.03] dark:opacity-[0.06]' />
-          <div className='absolute inset-0 bg-gradient-to-tr from-background via-transparent to-background/60' />
-
+        <div className='relative top-0 overflow-hidden border-[#2A2A2A] border-b px-6 py-16 sm:px-10 md:sticky md:h-dvh md:border-r md:border-b-0 md:px-12 md:py-24'>
           <div className='relative mx-auto h-full max-w-xl md:flex md:flex-col md:justify-center'>
-            <h1
-              className={`${soehne.className} mt-6 font-semibold text-4xl tracking-tight sm:text-5xl`}
-            >
-              Changelog
-            </h1>
-            <p className={`${inter.className} mt-4 text-muted-foreground text-sm`}>
+            <h1 className='mt-6 font-[500] text-4xl tracking-tight sm:text-5xl'>Changelog</h1>
+            <p className='mt-4 text-[#999] text-sm'>
               Stay up-to-date with the latest features, improvements, and bug fixes in Sim. All
               changes are documented here with detailed release notes.
             </p>
-            <hr className='mt-6 border-border' />
+            <hr className='mt-6 border-[#2A2A2A]' />
 
             <div className='mt-6 flex flex-wrap items-center gap-3 text-sm'>
               <Link
                 href='https://github.com/simstudioai/sim/releases'
                 target='_blank'
                 rel='noopener noreferrer'
-                className='group inline-flex items-center justify-center gap-2 rounded-[10px] border border-[#6F3DFA] bg-gradient-to-b from-[#8357FF] to-[#6F3DFA] py-[6px] pr-[10px] pl-[12px] text-[14px] text-white shadow-[inset_0_2px_4px_0_#9B77FF] transition-all sm:text-[16px]'
+                className='inline-flex items-center gap-2 rounded-[5px] border border-[#FFFFFF] bg-[#FFFFFF] px-[9px] py-[5px] text-[13.5px] text-black transition-colors hover:border-[#E0E0E0] hover:bg-[#E0E0E0]'
               >
                 <Github className='h-4 w-4' />
                 View on GitHub
               </Link>
               <Link
                 href='https://docs.sim.ai'
-                className='inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 hover:bg-muted'
+                className='inline-flex items-center gap-2 rounded-[5px] border border-[#3d3d3d] px-[9px] py-[5px] text-[#ECECEC] text-[13.5px] transition-colors hover:bg-[#2A2A2A]'
               >
                 <BookOpen className='h-4 w-4' />
                 Documentation
               </Link>
               <Link
                 href='/changelog.xml'
-                className='inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 hover:bg-muted'
+                className='inline-flex items-center gap-2 rounded-[5px] border border-[#3d3d3d] px-[9px] py-[5px] text-[#ECECEC] text-[13.5px] transition-colors hover:bg-[#2A2A2A]'
               >
                 <Rss className='h-4 w-4' />
                 RSS Feed

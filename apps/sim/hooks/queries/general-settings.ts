@@ -1,6 +1,7 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createLogger } from '@/lib/logs/console/logger'
-import { useGeneralStore } from '@/stores/settings/general/store'
+import { createLogger } from '@sim/logger'
+import type { QueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { syncThemeToNextThemes } from '@/lib/core/utils/theme'
 
 const logger = createLogger('GeneralSettingsQuery')
 
@@ -17,82 +18,113 @@ export const generalSettingsKeys = {
  */
 export interface GeneralSettings {
   autoConnect: boolean
-  autoPan: boolean
-  consoleExpandedByDefault: boolean
-  showFloatingControls: boolean
   showTrainingControls: boolean
   superUserModeEnabled: boolean
   theme: 'light' | 'dark' | 'system'
   telemetryEnabled: boolean
   billingUsageNotificationsEnabled: boolean
   errorNotificationsEnabled: boolean
+  snapToGridSize: number
+  showActionBar: boolean
+}
+
+/**
+ * Map raw API response data to GeneralSettings with defaults.
+ * Shared by both client fetch and server prefetch to prevent shape drift.
+ */
+export function mapGeneralSettingsResponse(data: Record<string, unknown>): GeneralSettings {
+  return {
+    autoConnect: (data.autoConnect as boolean) ?? true,
+    showTrainingControls: (data.showTrainingControls as boolean) ?? false,
+    superUserModeEnabled: (data.superUserModeEnabled as boolean) ?? false,
+    theme: (data.theme as GeneralSettings['theme']) || 'system',
+    telemetryEnabled: (data.telemetryEnabled as boolean) ?? true,
+    billingUsageNotificationsEnabled: (data.billingUsageNotificationsEnabled as boolean) ?? true,
+    errorNotificationsEnabled: (data.errorNotificationsEnabled as boolean) ?? true,
+    snapToGridSize: (data.snapToGridSize as number) ?? 0,
+    showActionBar: (data.showActionBar as boolean) ?? true,
+  }
 }
 
 /**
  * Fetch general settings from API
  */
-async function fetchGeneralSettings(): Promise<GeneralSettings> {
-  const response = await fetch('/api/users/me/settings')
+async function fetchGeneralSettings(signal?: AbortSignal): Promise<GeneralSettings> {
+  const response = await fetch('/api/users/me/settings', { signal })
 
   if (!response.ok) {
     throw new Error('Failed to fetch general settings')
   }
 
   const { data } = await response.json()
-
-  return {
-    autoConnect: data.autoConnect ?? true,
-    autoPan: data.autoPan ?? true,
-    consoleExpandedByDefault: data.consoleExpandedByDefault ?? true,
-    showFloatingControls: data.showFloatingControls ?? true,
-    showTrainingControls: data.showTrainingControls ?? false,
-    superUserModeEnabled: data.superUserModeEnabled ?? true,
-    theme: data.theme || 'system',
-    telemetryEnabled: data.telemetryEnabled ?? true,
-    billingUsageNotificationsEnabled: data.billingUsageNotificationsEnabled ?? true,
-    errorNotificationsEnabled: data.errorNotificationsEnabled ?? true,
-  }
+  return mapGeneralSettingsResponse(data)
 }
 
 /**
- * Sync React Query cache to Zustand store
- * This ensures the rest of the app (which uses Zustand) stays in sync
- */
-function syncSettingsToZustand(settings: GeneralSettings) {
-  const { setSettings } = useGeneralStore.getState()
-
-  setSettings({
-    isAutoConnectEnabled: settings.autoConnect,
-    isAutoPanEnabled: settings.autoPan,
-    isConsoleExpandedByDefault: settings.consoleExpandedByDefault,
-    showFloatingControls: settings.showFloatingControls,
-    showTrainingControls: settings.showTrainingControls,
-    superUserModeEnabled: settings.superUserModeEnabled,
-    theme: settings.theme,
-    telemetryEnabled: settings.telemetryEnabled,
-    isBillingUsageNotificationsEnabled: settings.billingUsageNotificationsEnabled,
-    isErrorNotificationsEnabled: settings.errorNotificationsEnabled,
-  })
-}
-
-/**
- * Hook to fetch general settings
- * Also syncs to Zustand store to keep the rest of the app in sync
+ * Hook to fetch general settings.
+ * TanStack Query is now the single source of truth for general settings.
  */
 export function useGeneralSettings() {
-  const query = useQuery({
+  return useQuery({
     queryKey: generalSettingsKeys.settings(),
-    queryFn: fetchGeneralSettings,
-    staleTime: 60 * 60 * 1000, // 1 hour - settings rarely change
-    placeholderData: keepPreviousData, // Show cached data immediately while refetching
+    queryFn: async ({ signal }) => {
+      const settings = await fetchGeneralSettings(signal)
+      syncThemeToNextThemes(settings.theme)
+      return settings
+    },
+    staleTime: 60 * 60 * 1000,
   })
+}
 
-  // Sync to Zustand whenever React Query cache updates
-  if (query.data) {
-    syncSettingsToZustand(query.data)
-  }
+/**
+ * Prefetch general settings into a QueryClient cache.
+ * Use on hover to warm data before navigation.
+ */
+export function prefetchGeneralSettings(queryClient: QueryClient) {
+  queryClient.prefetchQuery({
+    queryKey: generalSettingsKeys.settings(),
+    queryFn: async () => {
+      const settings = await fetchGeneralSettings()
+      syncThemeToNextThemes(settings.theme)
+      return settings
+    },
+    staleTime: 60 * 60 * 1000,
+  })
+}
 
-  return query
+/**
+ * Convenience selector hooks for individual settings.
+ * These provide a simple API for components that only need a single setting value.
+ */
+
+export function useAutoConnect(): boolean {
+  const { data } = useGeneralSettings()
+  return data?.autoConnect ?? true
+}
+
+export function useShowTrainingControls(): boolean {
+  const { data } = useGeneralSettings()
+  return data?.showTrainingControls ?? false
+}
+
+export function useSnapToGridSize(): number {
+  const { data } = useGeneralSettings()
+  return data?.snapToGridSize ?? 0
+}
+
+export function useShowActionBar(): boolean {
+  const { data } = useGeneralSettings()
+  return data?.showActionBar ?? true
+}
+
+export function useBillingUsageNotifications(): boolean {
+  const { data } = useGeneralSettings()
+  return data?.billingUsageNotificationsEnabled ?? true
+}
+
+export function useErrorNotificationsEnabled(): boolean {
+  const { data } = useGeneralSettings()
+  return data?.errorNotificationsEnabled ?? true
 }
 
 /**
@@ -100,7 +132,7 @@ export function useGeneralSettings() {
  */
 interface UpdateSettingParams {
   key: keyof GeneralSettings
-  value: any
+  value: GeneralSettings[keyof GeneralSettings]
 }
 
 export function useUpdateGeneralSetting() {
@@ -132,9 +164,12 @@ export function useUpdateGeneralSetting() {
           ...previousSettings,
           [key]: value,
         }
+
         queryClient.setQueryData<GeneralSettings>(generalSettingsKeys.settings(), newSettings)
 
-        syncSettingsToZustand(newSettings)
+        if (key === 'theme') {
+          syncThemeToNextThemes(value as GeneralSettings['theme'])
+        }
       }
 
       return { previousSettings }
@@ -142,11 +177,11 @@ export function useUpdateGeneralSetting() {
     onError: (err, _variables, context) => {
       if (context?.previousSettings) {
         queryClient.setQueryData(generalSettingsKeys.settings(), context.previousSettings)
-        syncSettingsToZustand(context.previousSettings)
+        syncThemeToNextThemes(context.previousSettings.theme)
       }
       logger.error('Failed to update setting:', err)
     },
-    onSuccess: (_data, _variables, _context) => {
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: generalSettingsKeys.settings() })
     },
   })

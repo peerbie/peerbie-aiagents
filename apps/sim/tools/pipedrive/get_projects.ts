@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   PipedriveGetProjectsParams,
   PipedriveGetProjectsResponse,
@@ -26,20 +26,27 @@ export const pipedriveGetProjectsTool: ToolConfig<
     project_id: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Optional: ID of a specific project to retrieve',
+      visibility: 'user-or-llm',
+      description: 'Optional: ID of a specific project to retrieve (e.g., "123")',
     },
     status: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Filter by project status: open, completed, deleted (only for listing all)',
     },
     limit: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Number of results to return (default: 100, max: 500, only for listing all)',
+      visibility: 'user-or-llm',
+      description:
+        'Number of results to return (e.g., "50", default: 100, max: 500, only for listing all)',
+    },
+    cursor: {
+      type: 'string',
+      required: false,
+      visibility: 'user-or-llm',
+      description: 'For pagination, the marker representing the first item on the next page',
     },
   },
 
@@ -56,6 +63,7 @@ export const pipedriveGetProjectsTool: ToolConfig<
 
       if (params.status) queryParams.append('status', params.status)
       if (params.limit) queryParams.append('limit', params.limit)
+      if (params.cursor) queryParams.append('cursor', params.cursor)
 
       const queryString = queryParams.toString()
       return queryString ? `${baseUrl}?${queryString}` : baseUrl
@@ -86,10 +94,7 @@ export const pipedriveGetProjectsTool: ToolConfig<
       return {
         success: true,
         output: {
-          project: data.data,
-          metadata: {
-            operation: 'get_projects' as const,
-          },
+          project: data.data ?? null,
           success: true,
         },
       }
@@ -97,40 +102,47 @@ export const pipedriveGetProjectsTool: ToolConfig<
 
     // Otherwise, return list of projects
     const projects = data.data || []
+    const nextCursor = data.additional_data?.next_cursor ?? null
+    const hasMore = nextCursor !== null
 
     return {
       success: true,
       output: {
         projects,
-        metadata: {
-          operation: 'get_projects' as const,
-          totalItems: projects.length,
-        },
+        total_items: projects.length,
+        has_more: hasMore,
+        next_cursor: nextCursor,
         success: true,
       },
     }
   },
 
   outputs: {
-    success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Projects data or single project details',
-      properties: {
-        projects: {
-          type: 'array',
-          description: 'Array of project objects (when listing all)',
-        },
-        project: {
-          type: 'object',
-          description: 'Single project object (when project_id is provided)',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
+    projects: {
+      type: 'array',
+      description: 'Array of project objects (when listing all)',
+      optional: true,
     },
+    project: {
+      type: 'object',
+      description: 'Single project object (when project_id is provided)',
+      optional: true,
+    },
+    total_items: {
+      type: 'number',
+      description: 'Total number of projects returned',
+      optional: true,
+    },
+    has_more: {
+      type: 'boolean',
+      description: 'Whether more projects are available',
+      optional: true,
+    },
+    next_cursor: {
+      type: 'string',
+      description: 'Cursor for fetching the next page',
+      optional: true,
+    },
+    success: { type: 'boolean', description: 'Operation success status' },
   },
 }

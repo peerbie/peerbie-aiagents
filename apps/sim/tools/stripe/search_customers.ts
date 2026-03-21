@@ -1,4 +1,5 @@
 import type { CustomerListResponse, SearchCustomersParams } from '@/tools/stripe/types'
+import { CUSTOMER_OUTPUT, LIST_METADATA_OUTPUT_PROPERTIES } from '@/tools/stripe/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const stripeSearchCustomersTool: ToolConfig<SearchCustomersParams, CustomerListResponse> = {
@@ -58,12 +59,14 @@ export const stripeSearchCustomersTool: ToolConfig<SearchCustomersParams, Custom
 
   outputs: {
     customers: {
-      type: 'json',
+      type: 'array',
       description: 'Array of matching customer objects',
+      items: CUSTOMER_OUTPUT,
     },
     metadata: {
       type: 'json',
       description: 'Search metadata',
+      properties: LIST_METADATA_OUTPUT_PROPERTIES,
     },
   },
 }

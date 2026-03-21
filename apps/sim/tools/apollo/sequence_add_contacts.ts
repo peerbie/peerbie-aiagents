@@ -23,14 +23,15 @@ export const apolloSequenceAddContactsTool: ToolConfig<
     sequence_id: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'ID of the sequence to add contacts to',
+      visibility: 'user-or-llm',
+      description: 'ID of the sequence to add contacts to (e.g., "seq_abc123")',
     },
     contact_ids: {
       type: 'array',
       required: true,
       visibility: 'user-or-llm',
-      description: 'Array of contact IDs to add to the sequence',
+      description:
+        'Array of contact IDs to add to the sequence (e.g., ["con_abc123", "con_def456"])',
     },
     emailer_campaign_id: {
       type: 'string',
@@ -81,19 +82,15 @@ export const apolloSequenceAddContactsTool: ToolConfig<
       success: true,
       output: {
         contacts_added: data.contacts || params?.contact_ids || [],
-        metadata: {
-          sequence_id: params?.sequence_id || '',
-          total_added: data.contacts?.length || params?.contact_ids?.length || 0,
-        },
+        sequence_id: params?.sequence_id || '',
+        total_added: data.contacts?.length || params?.contact_ids?.length || 0,
       },
     }
   },
 
   outputs: {
     contacts_added: { type: 'json', description: 'Array of contact IDs added to the sequence' },
-    metadata: {
-      type: 'json',
-      description: 'Sequence metadata including sequence_id and total_added count',
-    },
+    sequence_id: { type: 'string', description: 'ID of the sequence contacts were added to' },
+    total_added: { type: 'number', description: 'Total number of contacts added' },
   },
 }

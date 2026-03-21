@@ -2,21 +2,26 @@
  * Autolayout Constants
  *
  * Layout algorithm specific constants for spacing, padding, and overlap detection.
- * Block dimensions are imported from the shared source: @/lib/blocks/block-dimensions
+ * Block dimensions are in @/lib/workflows/blocks/block-dimensions
  */
-
-// Re-export block dimensions for autolayout consumers
-export { BLOCK_DIMENSIONS, CONTAINER_DIMENSIONS } from '@/lib/blocks/block-dimensions'
 
 /**
  * Horizontal spacing between layers (columns)
  */
-export const DEFAULT_HORIZONTAL_SPACING = 550
+export const DEFAULT_HORIZONTAL_SPACING = 180
 
 /**
  * Vertical spacing between blocks in the same layer
  */
 export const DEFAULT_VERTICAL_SPACING = 200
+
+/**
+ * Default offset when duplicating blocks
+ */
+export const DEFAULT_DUPLICATE_OFFSET = {
+  x: 180,
+  y: 20,
+} as const
 
 /**
  * General container padding for layout calculations
@@ -69,26 +74,30 @@ export const AUTO_LAYOUT_EXCLUDED_TYPES = new Set(['note'])
 export const CONTAINER_BLOCK_TYPES = new Set(['loop', 'parallel'])
 
 /**
+ * Estimated height per subblock when no measured height is available.
+ * Used as a heuristic for new blocks that haven't been rendered yet.
+ */
+export const ESTIMATED_SUBBLOCK_HEIGHT = 45
+
+/**
+ * Bottom padding added to estimated block height
+ */
+export const ESTIMATED_BLOCK_BOTTOM_PADDING = 20
+
+/**
  * Default layout options
  */
 export const DEFAULT_LAYOUT_OPTIONS = {
   horizontalSpacing: DEFAULT_HORIZONTAL_SPACING,
   verticalSpacing: DEFAULT_VERTICAL_SPACING,
   padding: DEFAULT_LAYOUT_PADDING,
-  alignment: 'center' as const,
 }
 
 /**
- * Default horizontal spacing for containers (tighter than root level)
- */
-export const DEFAULT_CONTAINER_HORIZONTAL_SPACING = 400
-
-/**
- * Container-specific layout options (tighter spacing for nested layouts)
+ * Container-specific layout options (same spacing as root level for consistency)
  */
 export const CONTAINER_LAYOUT_OPTIONS = {
-  horizontalSpacing: DEFAULT_CONTAINER_HORIZONTAL_SPACING,
+  horizontalSpacing: DEFAULT_HORIZONTAL_SPACING,
   verticalSpacing: DEFAULT_VERTICAL_SPACING,
   padding: { x: CONTAINER_PADDING_X, y: CONTAINER_PADDING_Y },
-  alignment: 'center' as const,
 }

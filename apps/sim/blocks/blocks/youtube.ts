@@ -9,7 +9,7 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
   description: 'Interact with YouTube videos, channels, and playlists',
   authMode: AuthMode.ApiKey,
   longDescription:
-    'Integrate YouTube into the workflow. Can search for videos, get video details, get channel information, get all videos from a channel, get channel playlists, get playlist items, find related videos, and get video comments.',
+    'Integrate YouTube into the workflow. Can search for videos, get trending videos, get video details, get video categories, get channel information, get all videos from a channel, get channel playlists, get playlist items, and get video comments.',
   docsLink: 'https://docs.sim.ai/tools/youtube',
   category: 'tools',
   bgColor: '#FF0000',
@@ -21,12 +21,13 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       type: 'dropdown',
       options: [
         { label: 'Search Videos', id: 'youtube_search' },
+        { label: 'Get Trending Videos', id: 'youtube_trending' },
         { label: 'Get Video Details', id: 'youtube_video_details' },
+        { label: 'Get Video Categories', id: 'youtube_video_categories' },
         { label: 'Get Channel Info', id: 'youtube_channel_info' },
         { label: 'Get Channel Videos', id: 'youtube_channel_videos' },
         { label: 'Get Channel Playlists', id: 'youtube_channel_playlists' },
         { label: 'Get Playlist Items', id: 'youtube_playlist_items' },
-        { label: 'Get Related Videos', id: 'youtube_related_videos' },
         { label: 'Get Video Comments', id: 'youtube_comments' },
       ],
       value: () => 'youtube_search',
@@ -49,6 +50,15 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       step: 1,
       integer: true,
       condition: { field: 'operation', value: 'youtube_search' },
+      mode: 'advanced',
+    },
+    {
+      id: 'pageToken',
+      title: 'Page Token',
+      type: 'short-input',
+      placeholder: 'Token for pagination (from nextPageToken)',
+      condition: { field: 'operation', value: 'youtube_search' },
+      mode: 'advanced',
     },
     {
       id: 'channelId',
@@ -56,6 +66,21 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       type: 'short-input',
       placeholder: 'Filter results to a specific channel',
       condition: { field: 'operation', value: 'youtube_search' },
+      mode: 'advanced',
+    },
+    {
+      id: 'eventType',
+      title: 'Live Stream Filter',
+      type: 'dropdown',
+      options: [
+        { label: 'All Videos', id: '' },
+        { label: 'Currently Live', id: 'live' },
+        { label: 'Upcoming Streams', id: 'upcoming' },
+        { label: 'Past Streams', id: 'completed' },
+      ],
+      value: () => '',
+      condition: { field: 'operation', value: 'youtube_search' },
+      mode: 'advanced',
     },
     {
       id: 'publishedAfter',
@@ -63,6 +88,22 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       type: 'short-input',
       placeholder: '2024-01-01T00:00:00Z',
       condition: { field: 'operation', value: 'youtube_search' },
+      mode: 'advanced',
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate an ISO 8601 timestamp based on the user's description.
+The timestamp should be in the format: YYYY-MM-DDTHH:mm:ssZ (UTC timezone).
+This is for filtering YouTube videos published after this date.
+Examples:
+- "last month" -> Calculate 30 days ago at 00:00:00Z
+- "beginning of 2024" -> 2024-01-01T00:00:00Z
+- "last year" -> Calculate 1 year ago at 00:00:00Z
+- "past 7 days" -> Calculate 7 days ago at 00:00:00Z
+
+Return ONLY the timestamp string - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the start date (e.g., "last month", "beginning of 2024")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'publishedBefore',
@@ -70,6 +111,22 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       type: 'short-input',
       placeholder: '2024-12-31T23:59:59Z',
       condition: { field: 'operation', value: 'youtube_search' },
+      mode: 'advanced',
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate an ISO 8601 timestamp based on the user's description.
+The timestamp should be in the format: YYYY-MM-DDTHH:mm:ssZ (UTC timezone).
+This is for filtering YouTube videos published before this date.
+Examples:
+- "today" -> Today's date at 23:59:59Z
+- "end of 2024" -> 2024-12-31T23:59:59Z
+- "yesterday" -> Yesterday's date at 23:59:59Z
+- "end of last month" -> Last day of previous month at 23:59:59Z
+
+Return ONLY the timestamp string - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the end date (e.g., "today", "end of last year")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'videoDuration',
@@ -83,6 +140,7 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       ],
       value: () => 'any',
       condition: { field: 'operation', value: 'youtube_search' },
+      mode: 'advanced',
     },
     {
       id: 'order',
@@ -97,13 +155,15 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       ],
       value: () => 'relevance',
       condition: { field: 'operation', value: 'youtube_search' },
+      mode: 'advanced',
     },
     {
       id: 'videoCategoryId',
       title: 'Category ID',
       type: 'short-input',
-      placeholder: '10 for Music, 20 for Gaming',
+      placeholder: 'Use Get Video Categories to find IDs',
       condition: { field: 'operation', value: 'youtube_search' },
+      mode: 'advanced',
     },
     {
       id: 'videoDefinition',
@@ -116,6 +176,7 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       ],
       value: () => 'any',
       condition: { field: 'operation', value: 'youtube_search' },
+      mode: 'advanced',
     },
     {
       id: 'videoCaption',
@@ -128,13 +189,18 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       ],
       value: () => 'any',
       condition: { field: 'operation', value: 'youtube_search' },
+      mode: 'advanced',
     },
     {
       id: 'regionCode',
       title: 'Region Code',
       type: 'short-input',
       placeholder: 'US, GB, JP',
-      condition: { field: 'operation', value: 'youtube_search' },
+      condition: {
+        field: 'operation',
+        value: ['youtube_search', 'youtube_trending', 'youtube_video_categories'],
+      },
+      mode: 'advanced',
     },
     {
       id: 'relevanceLanguage',
@@ -142,6 +208,7 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       type: 'short-input',
       placeholder: 'en, es, fr',
       condition: { field: 'operation', value: 'youtube_search' },
+      mode: 'advanced',
     },
     {
       id: 'safeSearch',
@@ -154,6 +221,34 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       ],
       value: () => 'moderate',
       condition: { field: 'operation', value: 'youtube_search' },
+      mode: 'advanced',
+    },
+    // Get Trending Videos operation inputs
+    {
+      id: 'maxResults',
+      title: 'Max Results',
+      type: 'slider',
+      min: 1,
+      max: 50,
+      step: 1,
+      integer: true,
+      condition: { field: 'operation', value: 'youtube_trending' },
+    },
+    {
+      id: 'videoCategoryId',
+      title: 'Category ID',
+      type: 'short-input',
+      placeholder: 'Use Get Video Categories to find IDs',
+      condition: { field: 'operation', value: 'youtube_trending' },
+      mode: 'advanced',
+    },
+    {
+      id: 'pageToken',
+      title: 'Page Token',
+      type: 'short-input',
+      placeholder: 'Token for pagination (from nextPageToken)',
+      condition: { field: 'operation', value: 'youtube_trending' },
+      mode: 'advanced',
     },
     // Get Video Details operation inputs
     {
@@ -163,6 +258,15 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       placeholder: 'Enter YouTube video ID',
       required: true,
       condition: { field: 'operation', value: 'youtube_video_details' },
+    },
+    // Get Video Categories operation inputs
+    {
+      id: 'hl',
+      title: 'Language',
+      type: 'short-input',
+      placeholder: 'en, es, fr (for category names)',
+      condition: { field: 'operation', value: 'youtube_video_categories' },
+      mode: 'advanced',
     },
     // Get Channel Info operation inputs
     {
@@ -211,6 +315,15 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       ],
       value: () => 'date',
       condition: { field: 'operation', value: 'youtube_channel_videos' },
+      mode: 'advanced',
+    },
+    {
+      id: 'pageToken',
+      title: 'Page Token',
+      type: 'short-input',
+      placeholder: 'Token for pagination (from nextPageToken)',
+      condition: { field: 'operation', value: 'youtube_channel_videos' },
+      mode: 'advanced',
     },
     // Get Channel Playlists operation inputs
     {
@@ -231,6 +344,14 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       integer: true,
       condition: { field: 'operation', value: 'youtube_channel_playlists' },
     },
+    {
+      id: 'pageToken',
+      title: 'Page Token',
+      type: 'short-input',
+      placeholder: 'Token for pagination (from nextPageToken)',
+      condition: { field: 'operation', value: 'youtube_channel_playlists' },
+      mode: 'advanced',
+    },
     // Get Playlist Items operation inputs
     {
       id: 'playlistId',
@@ -250,24 +371,13 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       integer: true,
       condition: { field: 'operation', value: 'youtube_playlist_items' },
     },
-    // Get Related Videos operation inputs
     {
-      id: 'videoId',
-      title: 'Video ID',
+      id: 'pageToken',
+      title: 'Page Token',
       type: 'short-input',
-      placeholder: 'Enter YouTube video ID to find related videos',
-      required: true,
-      condition: { field: 'operation', value: 'youtube_related_videos' },
-    },
-    {
-      id: 'maxResults',
-      title: 'Max Results',
-      type: 'slider',
-      min: 1,
-      max: 50,
-      step: 1,
-      integer: true,
-      condition: { field: 'operation', value: 'youtube_related_videos' },
+      placeholder: 'Token for pagination (from nextPageToken)',
+      condition: { field: 'operation', value: 'youtube_playlist_items' },
+      mode: 'advanced',
     },
     // Get Video Comments operation inputs
     {
@@ -298,6 +408,15 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
       ],
       value: () => 'relevance',
       condition: { field: 'operation', value: 'youtube_comments' },
+      mode: 'advanced',
+    },
+    {
+      id: 'pageToken',
+      title: 'Page Token',
+      type: 'short-input',
+      placeholder: 'Token for pagination (from nextPageToken)',
+      condition: { field: 'operation', value: 'youtube_comments' },
+      mode: 'advanced',
     },
     // API Key (common to all operations)
     {
@@ -311,27 +430,27 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
   ],
   tools: {
     access: [
-      'youtube_search',
-      'youtube_video_details',
       'youtube_channel_info',
-      'youtube_channel_videos',
       'youtube_channel_playlists',
-      'youtube_playlist_items',
-      'youtube_related_videos',
+      'youtube_channel_videos',
       'youtube_comments',
+      'youtube_playlist_items',
+      'youtube_search',
+      'youtube_trending',
+      'youtube_video_categories',
+      'youtube_video_details',
     ],
     config: {
       tool: (params) => {
-        // Convert numeric parameters
-        if (params.maxResults) {
-          params.maxResults = Number(params.maxResults)
-        }
-
         switch (params.operation) {
           case 'youtube_search':
             return 'youtube_search'
+          case 'youtube_trending':
+            return 'youtube_trending'
           case 'youtube_video_details':
             return 'youtube_video_details'
+          case 'youtube_video_categories':
+            return 'youtube_video_categories'
           case 'youtube_channel_info':
             return 'youtube_channel_info'
           case 'youtube_channel_videos':
@@ -340,13 +459,16 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
             return 'youtube_channel_playlists'
           case 'youtube_playlist_items':
             return 'youtube_playlist_items'
-          case 'youtube_related_videos':
-            return 'youtube_related_videos'
           case 'youtube_comments':
             return 'youtube_comments'
           default:
             return 'youtube_search'
         }
+      },
+      params: (params) => {
+        const result: Record<string, unknown> = {}
+        if (params.maxResults) result.maxResults = Number(params.maxResults)
+        return result
       },
     },
   },
@@ -356,6 +478,7 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
     // Search Videos
     query: { type: 'string', description: 'Search query' },
     maxResults: { type: 'number', description: 'Maximum number of results' },
+    pageToken: { type: 'string', description: 'Page token for pagination' },
     // Search Filters
     publishedAfter: { type: 'string', description: 'Published after date (RFC 3339)' },
     publishedBefore: { type: 'string', description: 'Published before date (RFC 3339)' },
@@ -363,9 +486,11 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
     videoCategoryId: { type: 'string', description: 'YouTube category ID' },
     videoDefinition: { type: 'string', description: 'Video quality filter' },
     videoCaption: { type: 'string', description: 'Caption availability filter' },
+    eventType: { type: 'string', description: 'Live stream filter (live/upcoming/completed)' },
     regionCode: { type: 'string', description: 'Region code (ISO 3166-1)' },
     relevanceLanguage: { type: 'string', description: 'Language code (ISO 639-1)' },
     safeSearch: { type: 'string', description: 'Safe search level' },
+    hl: { type: 'string', description: 'Language for category names' },
     // Video Details & Comments
     videoId: { type: 'string', description: 'YouTube video ID' },
     // Channel Info
@@ -377,7 +502,7 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
     order: { type: 'string', description: 'Sort order' },
   },
   outputs: {
-    // Search Videos & Playlist Items
+    // Search Videos, Trending, Playlist Items, Captions, Categories
     items: { type: 'json', description: 'List of items returned' },
     totalResults: { type: 'number', description: 'Total number of results' },
     nextPageToken: { type: 'string', description: 'Token for next page' },
@@ -392,11 +517,33 @@ export const YouTubeBlock: BlockConfig<YouTubeResponse> = {
     viewCount: { type: 'number', description: 'View count' },
     likeCount: { type: 'number', description: 'Like count' },
     commentCount: { type: 'number', description: 'Comment count' },
+    favoriteCount: { type: 'number', description: 'Favorite count' },
     thumbnail: { type: 'string', description: 'Thumbnail URL' },
     tags: { type: 'json', description: 'Video tags' },
+    categoryId: { type: 'string', description: 'Video category ID' },
+    definition: { type: 'string', description: 'Video definition (hd/sd)' },
+    caption: { type: 'string', description: 'Has captions (true/false)' },
+    licensedContent: { type: 'boolean', description: 'Is licensed content' },
+    privacyStatus: { type: 'string', description: 'Privacy status' },
+    liveBroadcastContent: { type: 'string', description: 'Live broadcast status' },
+    defaultLanguage: { type: 'string', description: 'Default language' },
+    defaultAudioLanguage: { type: 'string', description: 'Default audio language' },
+    // Live Streaming Details
+    isLiveContent: { type: 'boolean', description: 'Whether video is/was a live stream' },
+    scheduledStartTime: { type: 'string', description: 'Scheduled start time for live streams' },
+    actualStartTime: { type: 'string', description: 'Actual start time of live stream' },
+    actualEndTime: { type: 'string', description: 'End time of live stream' },
+    concurrentViewers: { type: 'number', description: 'Current viewers (live only)' },
+    activeLiveChatId: { type: 'string', description: 'Live chat ID' },
     // Channel Info
     subscriberCount: { type: 'number', description: 'Subscriber count' },
     videoCount: { type: 'number', description: 'Total video count' },
     customUrl: { type: 'string', description: 'Channel custom URL' },
+    country: { type: 'string', description: 'Channel country' },
+    uploadsPlaylistId: { type: 'string', description: 'Uploads playlist ID' },
+    bannerImageUrl: { type: 'string', description: 'Channel banner URL' },
+    hiddenSubscriberCount: { type: 'boolean', description: 'Is subscriber count hidden' },
+    // Video Categories
+    assignable: { type: 'boolean', description: 'Whether category can be assigned' },
   },
 }

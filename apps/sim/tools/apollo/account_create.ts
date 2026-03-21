@@ -21,7 +21,7 @@ export const apolloAccountCreateTool: ToolConfig<
       type: 'string',
       required: true,
       visibility: 'user-or-llm',
-      description: 'Company name',
+      description: 'Company name (e.g., "Acme Corporation")',
     },
     website_url: {
       type: 'string',
@@ -71,16 +71,14 @@ export const apolloAccountCreateTool: ToolConfig<
     return {
       success: true,
       output: {
-        account: data.account || {},
-        metadata: {
-          created: !!data.account,
-        },
+        account: data.account ?? null,
+        created: !!data.account,
       },
     }
   },
 
   outputs: {
-    account: { type: 'json', description: 'Created account data from Apollo' },
-    metadata: { type: 'json', description: 'Creation metadata including created status' },
+    account: { type: 'json', description: 'Created account data from Apollo', optional: true },
+    created: { type: 'boolean', description: 'Whether the account was successfully created' },
   },
 }

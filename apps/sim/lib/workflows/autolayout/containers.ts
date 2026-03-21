@@ -1,5 +1,4 @@
-import { CONTAINER_DIMENSIONS } from '@/lib/blocks/block-dimensions'
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import {
   CONTAINER_PADDING_X,
   CONTAINER_PADDING_Y,
@@ -8,6 +7,7 @@ import {
 import { layoutBlocksCore } from '@/lib/workflows/autolayout/core'
 import type { Edge, LayoutOptions } from '@/lib/workflows/autolayout/types'
 import { filterLayoutEligibleBlockIds, getBlocksByParent } from '@/lib/workflows/autolayout/utils'
+import { CONTAINER_DIMENSIONS } from '@/lib/workflows/blocks/block-dimensions'
 import type { BlockState } from '@/stores/workflows/workflow/types'
 
 const logger = createLogger('AutoLayout:Containers')
@@ -28,16 +28,13 @@ export function layoutContainers(
 ): void {
   const { children } = getBlocksByParent(blocks)
 
-  // Build container-specific layout options
-  // If horizontalSpacing provided, reduce by 15% for tighter container layout
-  // Otherwise use the default container spacing (400)
   const containerOptions: LayoutOptions = {
     horizontalSpacing: options.horizontalSpacing
       ? options.horizontalSpacing * 0.85
       : DEFAULT_CONTAINER_HORIZONTAL_SPACING,
     verticalSpacing: options.verticalSpacing ?? DEFAULT_VERTICAL_SPACING,
     padding: { x: CONTAINER_PADDING_X, y: CONTAINER_PADDING_Y },
-    alignment: options.alignment,
+    gridSize: options.gridSize,
   }
 
   for (const [parentId, childIds] of children.entries()) {
@@ -60,18 +57,15 @@ export function layoutContainers(
       continue
     }
 
-    // Use the shared core layout function with container options
     const { nodes, dimensions } = layoutBlocksCore(childBlocks, childEdges, {
       isContainer: true,
       layoutOptions: containerOptions,
     })
 
-    // Apply positions back to blocks
     for (const node of nodes.values()) {
       blocks[node.id].position = node.position
     }
 
-    // Update container dimensions
     const calculatedWidth = dimensions.width
     const calculatedHeight = dimensions.height
 

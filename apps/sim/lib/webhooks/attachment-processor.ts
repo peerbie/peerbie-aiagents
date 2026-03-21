@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import { uploadFileFromRawData } from '@/lib/uploads/contexts/execution'
 import type { UserFile } from '@/executor/types'
 
@@ -77,7 +77,7 @@ export class WebhookAttachmentProcessor {
       userId?: string
     }
   ): Promise<UserFile> {
-    return uploadFileFromRawData(
+    const userFile = await uploadFileFromRawData(
       {
         name: attachment.name,
         data: attachment.data,
@@ -86,5 +86,14 @@ export class WebhookAttachmentProcessor {
       executionContext,
       executionContext.userId
     )
+
+    if (userFile.base64) {
+      return userFile
+    }
+
+    return {
+      ...userFile,
+      base64: attachment.data.toString('base64'),
+    }
   }
 }

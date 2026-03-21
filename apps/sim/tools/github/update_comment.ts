@@ -1,4 +1,5 @@
 import type { IssueCommentResponse, UpdateCommentParams } from '@/tools/github/types'
+import { COMMENT_OUTPUT_PROPERTIES, USER_OUTPUT } from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const updateCommentTool: ToolConfig<UpdateCommentParams, IssueCommentResponse> = {
@@ -99,5 +100,33 @@ export const updateCommentTool: ToolConfig<UpdateCommentParams, IssueCommentResp
         },
       },
     },
+  },
+}
+
+export const updateCommentV2Tool: ToolConfig = {
+  id: 'github_update_comment_v2',
+  name: updateCommentTool.name,
+  description: updateCommentTool.description,
+  version: '2.0.0',
+  params: updateCommentTool.params,
+  request: updateCommentTool.request,
+  oauth: updateCommentTool.oauth,
+  transformResponse: async (response: Response) => {
+    const comment = await response.json()
+    return {
+      success: true,
+      output: {
+        id: comment.id,
+        body: comment.body,
+        html_url: comment.html_url,
+        user: comment.user,
+        created_at: comment.created_at,
+        updated_at: comment.updated_at,
+      },
+    }
+  },
+  outputs: {
+    ...COMMENT_OUTPUT_PROPERTIES,
+    user: USER_OUTPUT,
   },
 }

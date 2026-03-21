@@ -2,9 +2,11 @@
  * Sim OpenTelemetry - Server-side Instrumentation
  */
 
+import type { Attributes, Context, Link, SpanKind } from '@opentelemetry/api'
 import { DiagConsoleLogger, DiagLogLevel, diag } from '@opentelemetry/api'
-import { env } from './lib/env'
-import { createLogger } from './lib/logs/console/logger'
+import type { Sampler, SamplingResult } from '@opentelemetry/sdk-trace-base'
+import { createLogger } from '@sim/logger'
+import { env } from './lib/core/config/env'
 
 diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.ERROR)
 
@@ -24,8 +26,25 @@ const DEFAULT_TELEMETRY_CONFIG = {
 }
 
 /**
- * Initialize OpenTelemetry SDK with proper configuration
+ * Span name prefixes we want to KEEP
  */
+const ALLOWED_SPAN_PREFIXES = [
+  'platform.', // Our platform events
+  'gen_ai.', // GenAI semantic convention spans
+  'workflow.', // Workflow execution spans
+  'block.', // Block execution spans
+  'http.client.', // Our API block HTTP calls
+  'function.', // Function block execution
+  'router.', // Router block evaluation
+  'condition.', // Condition block evaluation
+  'loop.', // Loop block execution
+  'parallel.', // Parallel block execution
+]
+
+function isBusinessSpan(spanName: string): boolean {
+  return ALLOWED_SPAN_PREFIXES.some((prefix) => spanName.startsWith(prefix))
+}
+
 async function initializeOpenTelemetry() {
   try {
     if (env.NEXT_TELEMETRY_DISABLED === '1') {
@@ -52,17 +71,43 @@ async function initializeOpenTelemetry() {
     )
     const { OTLPTraceExporter } = await import('@opentelemetry/exporter-trace-otlp-http')
     const { BatchSpanProcessor } = await import('@opentelemetry/sdk-trace-node')
-    const { ParentBasedSampler, TraceIdRatioBasedSampler } = await import(
+    const { ParentBasedSampler, TraceIdRatioBasedSampler, SamplingDecision } = await import(
       '@opentelemetry/sdk-trace-base'
     )
+
+    const createBusinessSpanSampler = (baseSampler: Sampler): Sampler => ({
+      shouldSample(
+        context: Context,
+        traceId: string,
+        spanName: string,
+        spanKind: SpanKind,
+        attributes: Attributes,
+        links: Link[]
+      ): SamplingResult {
+        if (attributes['next.span_type']) {
+          return { decision: SamplingDecision.NOT_RECORD }
+        }
+
+        if (isBusinessSpan(spanName)) {
+          return baseSampler.shouldSample(context, traceId, spanName, spanKind, attributes, links)
+        }
+
+        return { decision: SamplingDecision.NOT_RECORD }
+      },
+
+      toString(): string {
+        return `BusinessSpanSampler{baseSampler=${baseSampler.toString()}}`
+      },
+    })
 
     const exporter = new OTLPTraceExporter({
       url: telemetryConfig.endpoint,
       headers: {},
-      timeoutMillis: telemetryConfig.batchSettings.exportTimeoutMillis,
+      timeoutMillis: Math.min(telemetryConfig.batchSettings.exportTimeoutMillis, 10000),
+      keepAlive: false,
     })
 
-    const spanProcessor = new BatchSpanProcessor(exporter, {
+    const batchProcessor = new BatchSpanProcessor(exporter, {
       maxQueueSize: telemetryConfig.batchSettings.maxQueueSize,
       maxExportBatchSize: telemetryConfig.batchSettings.maxExportBatchSize,
       scheduledDelayMillis: telemetryConfig.batchSettings.scheduledDelayMillis,
@@ -81,13 +126,14 @@ async function initializeOpenTelemetry() {
       })
     )
 
-    const sampler = new ParentBasedSampler({
-      root: new TraceIdRatioBasedSampler(0.1), // 10% sampling for root spans
+    const baseSampler = new ParentBasedSampler({
+      root: new TraceIdRatioBasedSampler(0.1),
     })
+    const sampler = createBusinessSpanSampler(baseSampler)
 
     const sdk = new NodeSDK({
       resource,
-      spanProcessor,
+      spanProcessor: batchProcessor,
       sampler,
       traceExporter: exporter,
     })
@@ -106,7 +152,7 @@ async function initializeOpenTelemetry() {
     process.on('SIGTERM', shutdownHandler)
     process.on('SIGINT', shutdownHandler)
 
-    logger.info('OpenTelemetry instrumentation initialized')
+    logger.info('OpenTelemetry instrumentation initialized with business span filtering')
   } catch (error) {
     logger.error('Failed to initialize OpenTelemetry instrumentation', error)
   }
@@ -114,4 +160,7 @@ async function initializeOpenTelemetry() {
 
 export async function register() {
   await initializeOpenTelemetry()
+
+  const { startMemoryTelemetry } = await import('./lib/monitoring/memory-telemetry')
+  startMemoryTelemetry()
 }

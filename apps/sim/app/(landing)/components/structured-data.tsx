@@ -6,9 +6,9 @@ export default function StructuredData() {
         '@type': 'Organization',
         '@id': 'https://sim.ai/#organization',
         name: 'Sim',
-        alternateName: 'Sim Studio',
+        alternateName: 'Sim',
         description:
-          'Open-source AI agent workflow builder used by developers at trail-blazing startups to Fortune 500 companies',
+          'Sim is the open-source platform to build AI agents and run your agentic workforce. Connect 1,000+ integrations and LLMs to deploy and orchestrate agentic workflows.',
         url: 'https://sim.ai',
         logo: {
           '@type': 'ImageObject',
@@ -36,30 +36,19 @@ export default function StructuredData() {
         '@type': 'WebSite',
         '@id': 'https://sim.ai/#website',
         url: 'https://sim.ai',
-        name: 'Sim - AI Agent Workflow Builder',
+        name: 'Sim — Build AI Agents & Run Your Agentic Workforce',
         description:
-          'Open-source AI agent workflow builder. 60,000+ developers build and deploy agentic workflows. SOC2 and HIPAA compliant.',
+          'Sim is the open-source platform to build AI agents and run your agentic workforce. Connect 1,000+ integrations and LLMs to deploy and orchestrate agentic workflows. Join 100,000+ builders.',
         publisher: {
           '@id': 'https://sim.ai/#organization',
         },
-        potentialAction: [
-          {
-            '@type': 'SearchAction',
-            '@id': 'https://sim.ai/#searchaction',
-            target: {
-              '@type': 'EntryPoint',
-              urlTemplate: 'https://sim.ai/search?q={search_term_string}',
-            },
-            'query-input': 'required name=search_term_string',
-          },
-        ],
         inLanguage: 'en-US',
       },
       {
         '@type': 'WebPage',
         '@id': 'https://sim.ai/#webpage',
         url: 'https://sim.ai',
-        name: 'Sim - Workflows for LLMs | Build AI Agent Workflows',
+        name: 'Sim — Build AI Agents & Run Your Agentic Workforce',
         isPartOf: {
           '@id': 'https://sim.ai/#website',
         },
@@ -69,7 +58,7 @@ export default function StructuredData() {
         datePublished: '2024-01-01T00:00:00+00:00',
         dateModified: new Date().toISOString(),
         description:
-          'Build and deploy AI agent workflows with Sim. Visual drag-and-drop interface for creating powerful LLM-powered automations.',
+          'Sim is the open-source platform to build AI agents and run your agentic workforce. Connect 1,000+ integrations and LLMs to deploy and orchestrate agentic workflows. Create agents, workflows, knowledge bases, tables, and docs.',
         breadcrumb: {
           '@id': 'https://sim.ai/#breadcrumb',
         },
@@ -96,9 +85,9 @@ export default function StructuredData() {
       {
         '@type': 'SoftwareApplication',
         '@id': 'https://sim.ai/#software',
-        name: 'Sim - AI Agent Workflow Builder',
+        name: 'Sim — Build AI Agents & Run Your Agentic Workforce',
         description:
-          'Open-source AI agent workflow builder used by 60,000+ developers. Build agentic workflows with visual drag-and-drop interface. SOC2 and HIPAA compliant. Integrate with 100+ apps.',
+          'Sim is the open-source platform to build AI agents and run your agentic workforce. Connect 1,000+ integrations and LLMs to deploy and orchestrate agentic workflows. Create agents, workflows, knowledge bases, tables, and docs. Trusted by over 100,000 builders. SOC2 and HIPAA compliant.',
         applicationCategory: 'DeveloperApplication',
         applicationSubCategory: 'AI Development Tools',
         operatingSystem: 'Web, Windows, macOS, Linux',
@@ -110,7 +99,7 @@ export default function StructuredData() {
             name: 'Community Plan',
             price: '0',
             priceCurrency: 'USD',
-            priceValidUntil: '2025-12-31',
+            priceValidUntil: '2026-12-31',
             itemCondition: 'https://schema.org/NewCondition',
             availability: 'https://schema.org/InStock',
             seller: {
@@ -134,7 +123,7 @@ export default function StructuredData() {
               unitText: 'MONTH',
               billingIncrement: 1,
             },
-            priceValidUntil: '2025-12-31',
+            priceValidUntil: '2026-12-31',
             itemCondition: 'https://schema.org/NewCondition',
             availability: 'https://schema.org/InStock',
             seller: {
@@ -154,7 +143,7 @@ export default function StructuredData() {
               unitText: 'MONTH',
               billingIncrement: 1,
             },
-            priceValidUntil: '2025-12-31',
+            priceValidUntil: '2026-12-31',
             itemCondition: 'https://schema.org/NewCondition',
             availability: 'https://schema.org/InStock',
             seller: {
@@ -170,12 +159,13 @@ export default function StructuredData() {
           worstRating: '1',
         },
         featureList: [
-          'Visual workflow builder',
-          'Drag-and-drop interface',
-          '100+ integrations',
-          'AI model support (OpenAI, Anthropic, Google, xAI, Mistral, Perplexity)',
-          'Real-time collaboration',
-          'Version control',
+          'AI agent creation',
+          'Agentic workflow orchestration',
+          '1,000+ integrations',
+          'LLM orchestration (OpenAI, Anthropic, Google, xAI, Mistral, Perplexity)',
+          'Knowledge base creation',
+          'Table creation',
+          'Document creation',
           'API access',
           'Custom functions',
           'Scheduled workflows',
@@ -184,8 +174,8 @@ export default function StructuredData() {
         screenshot: [
           {
             '@type': 'ImageObject',
-            url: 'https://sim.ai/screenshots/workflow-builder.png',
-            caption: 'Sim workflow builder interface',
+            url: 'https://sim.ai/logo/426-240/primary/small.png',
+            caption: 'Sim — build AI agents and run your agentic workforce',
           },
         ],
       },
@@ -198,7 +188,7 @@ export default function StructuredData() {
             name: 'What is Sim?',
             acceptedAnswer: {
               '@type': 'Answer',
-              text: 'Sim is an open-source AI agent workflow builder used by 60,000+ developers at trail-blazing startups to Fortune 500 companies. It provides a visual drag-and-drop interface for building and deploying agentic workflows. Sim is SOC2 and HIPAA compliant.',
+              text: 'Sim is the open-source platform to build AI agents and run your agentic workforce. Teams connect 1,000+ integrations and LLMs to deploy and orchestrate agentic workflows. Create agents, workflows, knowledge bases, tables, and docs. Trusted by over 100,000 builders. SOC2 and HIPAA compliant.',
             },
           },
           {
@@ -214,7 +204,7 @@ export default function StructuredData() {
             name: 'Do I need coding skills to use Sim?',
             acceptedAnswer: {
               '@type': 'Answer',
-              text: 'No coding skills are required! Sim features a visual drag-and-drop interface that makes it easy to build AI workflows. However, developers can also use custom functions and our API for advanced use cases.',
+              text: 'No coding skills are required. Sim provides a visual interface for building AI agents and agentic workflows. Developers can also use custom functions, the API, and the CLI/SDK for advanced use cases.',
             },
           },
         ],
@@ -223,16 +213,9 @@ export default function StructuredData() {
   }
 
   return (
-    <>
-      <script
-        type='application/ld+json'
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
-      />
-      {/* LLM-friendly semantic HTML comments */}
-      {/* About: Sim is a visual workflow builder for AI agents and large language models (LLMs) */}
-      {/* Purpose: Enable users to create AI-powered automations without coding */}
-      {/* Features: Drag-and-drop interface, 100+ integrations, multi-model support */}
-      {/* Use cases: Email automation, chatbots, data analysis, content generation */}
-    </>
+    <script
+      type='application/ld+json'
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
+    />
   )
 }

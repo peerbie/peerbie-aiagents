@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { StartBlockPath } from '@/lib/workflows/triggers'
+import { StartBlockPath } from '@/lib/workflows/triggers/triggers'
 import type { UserFile } from '@/executor/types'
 import {
   buildResolutionFromBlock,
@@ -33,14 +33,14 @@ function createBlock(
 }
 
 describe('start-block utilities', () => {
-  it('buildResolutionFromBlock returns null when metadata id missing', () => {
+  it.concurrent('buildResolutionFromBlock returns null when metadata id missing', () => {
     const block = createBlock('api_trigger')
     ;(block.metadata as Record<string, unknown>).id = undefined
 
     expect(buildResolutionFromBlock(block)).toBeNull()
   })
 
-  it('resolveExecutorStartBlock prefers unified start block', () => {
+  it.concurrent('resolveExecutorStartBlock prefers unified start block', () => {
     const blocks = [
       createBlock('api_trigger', 'api'),
       createBlock('starter', 'starter'),
@@ -56,7 +56,7 @@ describe('start-block utilities', () => {
     expect(resolution?.path).toBe(StartBlockPath.UNIFIED)
   })
 
-  it('buildStartBlockOutput normalizes unified start payload', () => {
+  it.concurrent('buildStartBlockOutput normalizes unified start payload', () => {
     const block = createBlock('start_trigger', 'start')
     const resolution = {
       blockId: 'start',
@@ -67,7 +67,6 @@ describe('start-block utilities', () => {
     const output = buildStartBlockOutput({
       resolution,
       workflowInput: { payload: 'value' },
-      isDeployedExecution: true,
     })
 
     expect(output.payload).toBe('value')
@@ -75,7 +74,7 @@ describe('start-block utilities', () => {
     expect(output.conversationId).toBeUndefined()
   })
 
-  it('buildStartBlockOutput uses trigger schema for API triggers', () => {
+  it.concurrent('buildStartBlockOutput uses trigger schema for API triggers', () => {
     const apiBlock = createBlock('api_trigger', 'api', {
       subBlocks: {
         inputFormat: {
@@ -113,11 +112,218 @@ describe('start-block utilities', () => {
         },
         files,
       },
-      isDeployedExecution: false,
     })
 
     expect(output.name).toBe('Ada')
     expect(output.input).toEqual({ name: 'Ada', count: 5 })
     expect(output.files).toEqual(files)
+  })
+
+  describe('inputFormat default values', () => {
+    it.concurrent('uses default value when runtime does not provide the field', () => {
+      const block = createBlock('start_trigger', 'start', {
+        subBlocks: {
+          inputFormat: {
+            value: [
+              { name: 'input', type: 'string' },
+              { name: 'customField', type: 'string', value: 'defaultValue' },
+            ],
+          },
+        },
+      })
+
+      const resolution = {
+        blockId: 'start',
+        block,
+        path: StartBlockPath.UNIFIED,
+      } as const
+
+      const output = buildStartBlockOutput({
+        resolution,
+        workflowInput: { input: 'hello' },
+      })
+
+      expect(output.input).toBe('hello')
+      expect(output.customField).toBe('defaultValue')
+    })
+
+    it.concurrent('runtime value overrides default value', () => {
+      const block = createBlock('start_trigger', 'start', {
+        subBlocks: {
+          inputFormat: {
+            value: [{ name: 'customField', type: 'string', value: 'defaultValue' }],
+          },
+        },
+      })
+
+      const resolution = {
+        blockId: 'start',
+        block,
+        path: StartBlockPath.UNIFIED,
+      } as const
+
+      const output = buildStartBlockOutput({
+        resolution,
+        workflowInput: { customField: 'runtimeValue' },
+      })
+
+      expect(output.customField).toBe('runtimeValue')
+    })
+
+    it.concurrent('empty string from runtime overrides default value', () => {
+      const block = createBlock('start_trigger', 'start', {
+        subBlocks: {
+          inputFormat: {
+            value: [{ name: 'customField', type: 'string', value: 'defaultValue' }],
+          },
+        },
+      })
+
+      const resolution = {
+        blockId: 'start',
+        block,
+        path: StartBlockPath.UNIFIED,
+      } as const
+
+      const output = buildStartBlockOutput({
+        resolution,
+        workflowInput: { customField: '' },
+      })
+
+      expect(output.customField).toBe('')
+    })
+
+    it.concurrent('null from runtime does not override default value', () => {
+      const block = createBlock('start_trigger', 'start', {
+        subBlocks: {
+          inputFormat: {
+            value: [{ name: 'customField', type: 'string', value: 'defaultValue' }],
+          },
+        },
+      })
+
+      const resolution = {
+        blockId: 'start',
+        block,
+        path: StartBlockPath.UNIFIED,
+      } as const
+
+      const output = buildStartBlockOutput({
+        resolution,
+        workflowInput: { customField: null },
+      })
+
+      expect(output.customField).toBe('defaultValue')
+    })
+
+    it.concurrent('preserves coerced types for unified start payload', () => {
+      const block = createBlock('start_trigger', 'start', {
+        subBlocks: {
+          inputFormat: {
+            value: [
+              { name: 'conversation_id', type: 'number' },
+              { name: 'sender', type: 'object' },
+              { name: 'is_active', type: 'boolean' },
+            ],
+          },
+        },
+      })
+
+      const resolution = {
+        blockId: 'start',
+        block,
+        path: StartBlockPath.UNIFIED,
+      } as const
+
+      const output = buildStartBlockOutput({
+        resolution,
+        workflowInput: {
+          conversation_id: '149',
+          sender: '{"id":10,"email":"user@example.com"}',
+          is_active: 'true',
+        },
+      })
+
+      expect(output.conversation_id).toBe(149)
+      expect(output.sender).toEqual({ id: 10, email: 'user@example.com' })
+      expect(output.is_active).toBe(true)
+    })
+
+    it.concurrent(
+      'prefers coerced inputFormat values over duplicated top-level workflowInput keys',
+      () => {
+        const block = createBlock('start_trigger', 'start', {
+          subBlocks: {
+            inputFormat: {
+              value: [
+                { name: 'conversation_id', type: 'number' },
+                { name: 'sender', type: 'object' },
+                { name: 'is_active', type: 'boolean' },
+              ],
+            },
+          },
+        })
+
+        const resolution = {
+          blockId: 'start',
+          block,
+          path: StartBlockPath.UNIFIED,
+        } as const
+
+        const output = buildStartBlockOutput({
+          resolution,
+          workflowInput: {
+            input: {
+              conversation_id: '149',
+              sender: '{"id":10,"email":"user@example.com"}',
+              is_active: 'false',
+            },
+            conversation_id: '150',
+            sender: '{"id":99,"email":"wrong@example.com"}',
+            is_active: 'true',
+            extra: 'keep-me',
+          },
+        })
+
+        expect(output.conversation_id).toBe(149)
+        expect(output.sender).toEqual({ id: 10, email: 'user@example.com' })
+        expect(output.is_active).toBe(false)
+        expect(output.extra).toBe('keep-me')
+      }
+    )
+  })
+
+  describe('EXTERNAL_TRIGGER path', () => {
+    it.concurrent('preserves coerced types for integration trigger payload', () => {
+      const block = createBlock('webhook', 'start', {
+        subBlocks: {
+          inputFormat: {
+            value: [
+              { name: 'count', type: 'number' },
+              { name: 'payload', type: 'object' },
+            ],
+          },
+        },
+      })
+
+      const resolution = {
+        blockId: 'start',
+        block,
+        path: StartBlockPath.EXTERNAL_TRIGGER,
+      } as const
+
+      const output = buildStartBlockOutput({
+        resolution,
+        workflowInput: {
+          count: '5',
+          payload: '{"event":"push"}',
+          extra: 'untouched',
+        },
+      })
+
+      expect(output.count).toBe(5)
+      expect(output.payload).toEqual({ event: 'push' })
+      expect(output.extra).toBe('untouched')
+    })
   })
 })

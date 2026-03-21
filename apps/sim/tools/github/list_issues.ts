@@ -1,4 +1,10 @@
 import type { IssuesListResponse, ListIssuesParams } from '@/tools/github/types'
+import {
+  ISSUE_OUTPUT_PROPERTIES,
+  LABEL_OUTPUT,
+  MILESTONE_OUTPUT,
+  USER_OUTPUT,
+} from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const listIssuesTool: ToolConfig<ListIssuesParams, IssuesListResponse> = {
@@ -165,5 +171,59 @@ ${transformedIssues
         total_count: { type: 'number', description: 'Total number of issues returned' },
       },
     },
+  },
+}
+
+export const listIssuesV2Tool: ToolConfig<ListIssuesParams, any> = {
+  id: 'github_list_issues_v2',
+  name: listIssuesTool.name,
+  description: listIssuesTool.description,
+  version: '2.0.0',
+  params: listIssuesTool.params,
+  request: listIssuesTool.request,
+
+  transformResponse: async (response: Response) => {
+    const issues = await response.json()
+    const items = issues.map((issue: any) => ({
+      ...issue,
+      body: issue.body ?? null,
+      milestone: issue.milestone ?? null,
+      closed_at: issue.closed_at ?? null,
+      labels: issue.labels ?? [],
+      assignees: issue.assignees ?? [],
+    }))
+    return {
+      success: true,
+      output: {
+        items,
+        count: issues.length,
+      },
+    }
+  },
+
+  outputs: {
+    items: {
+      type: 'array',
+      description: 'Array of issue objects from GitHub API',
+      items: {
+        type: 'object',
+        properties: {
+          ...ISSUE_OUTPUT_PROPERTIES,
+          user: USER_OUTPUT,
+          labels: {
+            type: 'array',
+            description: 'Array of label objects',
+            items: LABEL_OUTPUT,
+          },
+          assignees: {
+            type: 'array',
+            description: 'Array of assignee objects',
+            items: USER_OUTPUT,
+          },
+          milestone: { ...MILESTONE_OUTPUT, optional: true },
+        },
+      },
+    },
+    count: { type: 'number', description: 'Number of issues returned' },
   },
 }

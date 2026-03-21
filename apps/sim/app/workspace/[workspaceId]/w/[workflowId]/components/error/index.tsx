@@ -1,9 +1,13 @@
 'use client'
 
 import { Component, type ReactNode, useEffect } from 'react'
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
+import { RefreshCw } from 'lucide-react'
+import { ReactFlowProvider } from 'reactflow'
+import { Button } from '@/components/emcn'
 import { Panel } from '@/app/workspace/[workspaceId]/w/[workflowId]/components'
-import { SidebarNew } from '@/app/workspace/[workspaceId]/w/components/sidebar/sidebar-new'
+import { usePreventZoom } from '@/app/workspace/[workspaceId]/w/[workflowId]/hooks'
+import { Sidebar } from '@/app/workspace/[workspaceId]/w/components/sidebar/sidebar'
 
 const logger = createLogger('ErrorBoundary')
 
@@ -18,37 +22,47 @@ interface ErrorUIProps {
 }
 
 export function ErrorUI({
-  title = 'Workflow Error',
-  message = 'This workflow encountered an error and is currently unavailable. Please try again later or create a new workflow.',
+  title = 'Something went wrong',
+  message = 'An unexpected error occurred. Please try again or refresh the page.',
   onReset,
   fullScreen = false,
 }: ErrorUIProps) {
-  const containerClass = fullScreen
-    ? 'flex flex-col w-full h-screen bg-[var(--surface-1)]'
-    : 'flex flex-col w-full h-full bg-[var(--surface-1)]'
+  const preventZoomRef = usePreventZoom()
+
+  if (!fullScreen) {
+    return (
+      <div className='flex h-full flex-1 items-center justify-center'>
+        <div className='flex flex-col items-center gap-[16px] text-center'>
+          <div className='flex flex-col gap-[8px]'>
+            <h2 className='font-semibold text-[16px] text-[var(--text-primary)]'>{title}</h2>
+            <p className='max-w-[300px] text-[13px] text-[var(--text-tertiary)]'>{message}</p>
+          </div>
+          <Button variant='default' size='sm' onClick={onReset ?? (() => window.location.reload())}>
+            <RefreshCw className='mr-[6px] h-[14px] w-[14px]' />
+            Try again
+          </Button>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className={containerClass}>
-      {/* Sidebar */}
-      <SidebarNew />
+    <div ref={preventZoomRef} className='flex h-screen w-full flex-col bg-[var(--surface-1)]'>
+      <Sidebar />
 
-      {/* Main content area */}
       <div className='relative flex flex-1'>
-        {/* Error message */}
         <div className='pointer-events-none absolute inset-0 flex items-center justify-center'>
           <div className='pointer-events-none flex flex-col items-center gap-[16px]'>
-            {/* Title */}
             <h3 className='font-semibold text-[16px] text-[var(--text-primary)]'>{title}</h3>
-
-            {/* Message */}
-            <p className='max-w-md text-center font-medium text-[14px] text-[var(--text-tertiary)]'>
+            <p className='max-w-sm text-center font-medium text-[14px] text-[var(--text-tertiary)]'>
               {message}
             </p>
           </div>
         </div>
 
-        {/* Panel */}
-        <Panel />
+        <ReactFlowProvider>
+          <Panel />
+        </ReactFlowProvider>
       </div>
     </div>
   )

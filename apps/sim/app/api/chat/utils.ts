@@ -1,39 +1,46 @@
 import { db } from '@sim/db'
 import { chat, workflow } from '@sim/db/schema'
-import { eq } from 'drizzle-orm'
+import { createLogger } from '@sim/logger'
+import { and, eq, isNull } from 'drizzle-orm'
 import type { NextRequest, NextResponse } from 'next/server'
-import { isDev } from '@/lib/environment'
-import { createLogger } from '@/lib/logs/console/logger'
-import { hasAdminPermission } from '@/lib/permissions/utils'
-import { decryptSecret } from '@/lib/utils'
+import {
+  isEmailAllowed,
+  setDeploymentAuthCookie,
+  validateAuthToken,
+} from '@/lib/core/security/deployment'
+import { decryptSecret } from '@/lib/core/security/encryption'
+import { authorizeWorkflowByWorkspacePermission } from '@/lib/workflows/utils'
 
 const logger = createLogger('ChatAuthUtils')
 
+export function setChatAuthCookie(
+  response: NextResponse,
+  chatId: string,
+  type: string,
+  encryptedPassword?: string | null
+): void {
+  setDeploymentAuthCookie(response, 'chat', chatId, type, encryptedPassword)
+}
+
 /**
  * Check if user has permission to create a chat for a specific workflow
- * Either the user owns the workflow directly OR has admin permission for the workflow's workspace
  */
 export async function checkWorkflowAccessForChatCreation(
   workflowId: string,
   userId: string
 ): Promise<{ hasAccess: boolean; workflow?: any }> {
-  const workflowData = await db.select().from(workflow).where(eq(workflow.id, workflowId)).limit(1)
+  const authorization = await authorizeWorkflowByWorkspacePermission({
+    workflowId,
+    userId,
+    action: 'admin',
+  })
 
-  if (workflowData.length === 0) {
+  if (!authorization.workflow) {
     return { hasAccess: false }
   }
 
-  const workflowRecord = workflowData[0]
-
-  if (workflowRecord.userId === userId) {
-    return { hasAccess: true, workflow: workflowRecord }
-  }
-
-  if (workflowRecord.workspaceId) {
-    const hasAdmin = await hasAdminPermission(userId, workflowRecord.workspaceId)
-    if (hasAdmin) {
-      return { hasAccess: true, workflow: workflowRecord }
-    }
+  if (authorization.allowed) {
+    return { hasAccess: true, workflow: authorization.workflow }
   }
 
   return { hasAccess: false }
@@ -41,12 +48,11 @@ export async function checkWorkflowAccessForChatCreation(
 
 /**
  * Check if user has access to view/edit/delete a specific chat
- * Either the user owns the chat directly OR has admin permission for the workflow's workspace
  */
 export async function checkChatAccess(
   chatId: string,
   userId: string
-): Promise<{ hasAccess: boolean; chat?: any }> {
+): Promise<{ hasAccess: boolean; chat?: any; workspaceId?: string }> {
   const chatData = await db
     .select({
       chat: chat,
@@ -54,7 +60,7 @@ export async function checkChatAccess(
     })
     .from(chat)
     .innerJoin(workflow, eq(chat.workflowId, workflow.id))
-    .where(eq(chat.id, chatId))
+    .where(and(eq(chat.id, chatId), isNull(chat.archivedAt)))
     .limit(1)
 
   if (chatData.length === 0) {
@@ -62,72 +68,19 @@ export async function checkChatAccess(
   }
 
   const { chat: chatRecord, workflowWorkspaceId } = chatData[0]
-
-  if (chatRecord.userId === userId) {
-    return { hasAccess: true, chat: chatRecord }
+  if (!workflowWorkspaceId) {
+    return { hasAccess: false }
   }
 
-  if (workflowWorkspaceId) {
-    const hasAdmin = await hasAdminPermission(userId, workflowWorkspaceId)
-    if (hasAdmin) {
-      return { hasAccess: true, chat: chatRecord }
-    }
-  }
-
-  return { hasAccess: false }
-}
-
-const encryptAuthToken = (chatId: string, type: string): string => {
-  return Buffer.from(`${chatId}:${type}:${Date.now()}`).toString('base64')
-}
-
-export const validateAuthToken = (token: string, chatId: string): boolean => {
-  try {
-    const decoded = Buffer.from(token, 'base64').toString()
-    const [storedId, _type, timestamp] = decoded.split(':')
-
-    if (storedId !== chatId) {
-      return false
-    }
-
-    const createdAt = Number.parseInt(timestamp)
-    const now = Date.now()
-    const expireTime = 24 * 60 * 60 * 1000 // 24 hours
-
-    if (now - createdAt > expireTime) {
-      return false
-    }
-
-    return true
-  } catch (_e) {
-    return false
-  }
-}
-
-export const setChatAuthCookie = (response: NextResponse, chatId: string, type: string): void => {
-  const token = encryptAuthToken(chatId, type)
-  response.cookies.set({
-    name: `chat_auth_${chatId}`,
-    value: token,
-    httpOnly: true,
-    secure: !isDev,
-    sameSite: 'lax',
-    path: '/',
-    maxAge: 60 * 60 * 24, // 24 hours
+  const authorization = await authorizeWorkflowByWorkspacePermission({
+    workflowId: chatRecord.workflowId,
+    userId,
+    action: 'admin',
   })
-}
 
-export function addCorsHeaders(response: NextResponse, request: NextRequest) {
-  const origin = request.headers.get('origin') || ''
-
-  if (isDev && origin.includes('localhost')) {
-    response.headers.set('Access-Control-Allow-Origin', origin)
-    response.headers.set('Access-Control-Allow-Credentials', 'true')
-    response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-    response.headers.set('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With')
-  }
-
-  return response
+  return authorization.allowed
+    ? { hasAccess: true, chat: chatRecord, workspaceId: workflowWorkspaceId }
+    : { hasAccess: false }
 }
 
 export async function validateChatAuth(
@@ -145,7 +98,7 @@ export async function validateChatAuth(
   const cookieName = `chat_auth_${deployment.id}`
   const authCookie = request.cookies.get(cookieName)
 
-  if (authCookie && validateAuthToken(authCookie.value, deployment.id)) {
+  if (authCookie && validateAuthToken(authCookie.value, deployment.id, deployment.password)) {
     return { authorized: true }
   }
 
@@ -208,12 +161,7 @@ export async function validateChatAuth(
 
       const allowedEmails = deployment.allowedEmails || []
 
-      if (allowedEmails.includes(email)) {
-        return { authorized: false, error: 'otp_required' }
-      }
-
-      const domain = email.split('@')[1]
-      if (domain && allowedEmails.some((allowed: string) => allowed === `@${domain}`)) {
+      if (isEmailAllowed(email, allowedEmails)) {
         return { authorized: false, error: 'otp_required' }
       }
 
@@ -247,20 +195,15 @@ export async function validateChatAuth(
 
         const allowedEmails = deployment.allowedEmails || []
 
-        if (allowedEmails.includes(email)) {
-          return { authorized: true }
-        }
-
-        const domain = email.split('@')[1]
-        if (domain && allowedEmails.some((allowed: string) => allowed === `@${domain}`)) {
+        if (isEmailAllowed(email, allowedEmails)) {
           return { authorized: true }
         }
 
         return { authorized: false, error: 'Email not authorized for SSO access' }
       }
 
-      const { auth } = await import('@/lib/auth')
-      const session = await auth.api.getSession({ headers: request.headers })
+      const { getSession } = await import('@/lib/auth')
+      const session = await getSession()
 
       if (!session || !session.user) {
         return { authorized: false, error: 'auth_required_sso' }
@@ -273,12 +216,7 @@ export async function validateChatAuth(
 
       const allowedEmails = deployment.allowedEmails || []
 
-      if (allowedEmails.includes(userEmail)) {
-        return { authorized: true }
-      }
-
-      const domain = userEmail.split('@')[1]
-      if (domain && allowedEmails.some((allowed: string) => allowed === `@${domain}`)) {
+      if (isEmailAllowed(userEmail, allowedEmails)) {
         return { authorized: true }
       }
 

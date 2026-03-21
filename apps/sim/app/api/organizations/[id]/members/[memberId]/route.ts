@@ -1,12 +1,13 @@
 import { db } from '@sim/db'
-import { member, subscription as subscriptionTable, user, userStats } from '@sim/db/schema'
+import { member, user, userStats } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
+import { AuditAction, AuditResourceType, recordAudit } from '@/lib/audit/log'
 import { getSession } from '@/lib/auth'
 import { getUserUsageData } from '@/lib/billing/core/usage'
-import { requireStripeClient } from '@/lib/billing/stripe-client'
-import { createLogger } from '@/lib/logs/console/logger'
+import { removeUserFromOrganization } from '@/lib/billing/organizations/membership'
 
 const logger = createLogger('OrganizationMemberAPI')
 
@@ -35,7 +36,6 @@ export async function GET(
     const url = new URL(request.url)
     const includeUsage = url.searchParams.get('include') === 'usage'
 
-    // Verify user has access to this organization
     const userMember = await db
       .select()
       .from(member)
@@ -52,7 +52,6 @@ export async function GET(
     const userRole = userMember[0].role
     const hasAdminAccess = ['owner', 'admin'].includes(userRole)
 
-    // Get target member details
     const memberQuery = db
       .select({
         id: member.id,
@@ -74,7 +73,6 @@ export async function GET(
       return NextResponse.json({ error: 'Member not found' }, { status: 404 })
     }
 
-    // Check if user can view this member's details
     const canViewDetails = hasAdminAccess || session.user.id === memberId
 
     if (!canViewDetails) {
@@ -83,7 +81,6 @@ export async function GET(
 
     let memberData = memberEntry[0]
 
-    // Include usage data if requested and user has permission
     if (includeUsage && hasAdminAccess) {
       const usageData = await db
         .select({
@@ -175,10 +172,16 @@ export async function PUT(
       return NextResponse.json({ error: 'Forbidden - Admin access required' }, { status: 403 })
     }
 
-    // Check if target member exists
     const targetMember = await db
-      .select()
+      .select({
+        id: member.id,
+        role: member.role,
+        userId: member.userId,
+        email: user.email,
+        name: user.name,
+      })
       .from(member)
+      .innerJoin(user, eq(member.userId, user.id))
       .where(and(eq(member.organizationId, organizationId), eq(member.userId, memberId)))
       .limit(1)
 
@@ -186,12 +189,10 @@ export async function PUT(
       return NextResponse.json({ error: 'Member not found' }, { status: 404 })
     }
 
-    // Prevent changing owner role
     if (targetMember[0].role === 'owner') {
       return NextResponse.json({ error: 'Cannot change owner role' }, { status: 400 })
     }
 
-    // Prevent non-owners from promoting to admin
     if (role === 'admin' && userMember[0].role !== 'owner') {
       return NextResponse.json(
         { error: 'Only owners can promote members to admin' },
@@ -199,12 +200,10 @@ export async function PUT(
       )
     }
 
-    // Prevent admins from changing other admins' roles - only owners can modify admin roles
     if (targetMember[0].role === 'admin' && userMember[0].role !== 'owner') {
       return NextResponse.json({ error: 'Only owners can change admin roles' }, { status: 403 })
     }
 
-    // Update member role
     const updatedMember = await db
       .update(member)
       .set({ role })
@@ -220,6 +219,24 @@ export async function PUT(
       memberId,
       newRole: role,
       updatedBy: session.user.id,
+    })
+
+    recordAudit({
+      workspaceId: null,
+      actorId: session.user.id,
+      action: AuditAction.ORG_MEMBER_ROLE_CHANGED,
+      resourceType: AuditResourceType.ORGANIZATION,
+      resourceId: organizationId,
+      actorName: session.user.name ?? undefined,
+      actorEmail: session.user.email ?? undefined,
+      description: `Changed role for member ${memberId} to ${role}`,
+      metadata: {
+        targetUserId: memberId,
+        targetEmail: targetMember[0].email ?? undefined,
+        targetName: targetMember[0].name ?? undefined,
+        changes: [{ field: 'role', from: targetMember[0].role, to: role }],
+      },
+      request,
     })
 
     return NextResponse.json({
@@ -258,9 +275,8 @@ export async function DELETE(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { id: organizationId, memberId } = await params
+    const { id: organizationId, memberId: targetUserId } = await params
 
-    // Verify user has admin access
     const userMember = await db
       .select()
       .from(member)
@@ -275,171 +291,76 @@ export async function DELETE(
     }
 
     const canRemoveMembers =
-      ['owner', 'admin'].includes(userMember[0].role) || session.user.id === memberId
+      ['owner', 'admin'].includes(userMember[0].role) || session.user.id === targetUserId
 
     if (!canRemoveMembers) {
       return NextResponse.json({ error: 'Forbidden - Insufficient permissions' }, { status: 403 })
     }
 
-    // Check if target member exists
     const targetMember = await db
-      .select()
+      .select({ id: member.id, role: member.role, email: user.email, name: user.name })
       .from(member)
-      .where(and(eq(member.organizationId, organizationId), eq(member.userId, memberId)))
+      .innerJoin(user, eq(member.userId, user.id))
+      .where(and(eq(member.organizationId, organizationId), eq(member.userId, targetUserId)))
       .limit(1)
 
     if (targetMember.length === 0) {
       return NextResponse.json({ error: 'Member not found' }, { status: 404 })
     }
 
-    // Prevent removing the owner
-    if (targetMember[0].role === 'owner') {
-      return NextResponse.json({ error: 'Cannot remove organization owner' }, { status: 400 })
-    }
+    const result = await removeUserFromOrganization({
+      userId: targetUserId,
+      organizationId,
+      memberId: targetMember[0].id,
+    })
 
-    // Remove member
-    const removedMember = await db
-      .delete(member)
-      .where(and(eq(member.organizationId, organizationId), eq(member.userId, memberId)))
-      .returning()
-
-    if (removedMember.length === 0) {
-      return NextResponse.json({ error: 'Failed to remove member' }, { status: 500 })
+    if (!result.success) {
+      if (result.error === 'Cannot remove organization owner') {
+        return NextResponse.json({ error: result.error }, { status: 400 })
+      }
+      if (result.error === 'Member not found') {
+        return NextResponse.json({ error: result.error }, { status: 404 })
+      }
+      return NextResponse.json({ error: result.error }, { status: 500 })
     }
 
     logger.info('Organization member removed', {
       organizationId,
-      removedMemberId: memberId,
+      removedMemberId: targetUserId,
       removedBy: session.user.id,
-      wasSelfRemoval: session.user.id === memberId,
+      wasSelfRemoval: session.user.id === targetUserId,
+      billingActions: result.billingActions,
     })
 
-    // If the removed user left their last paid team and has a personal Pro set to cancel_at_period_end, restore it
-    try {
-      const remainingPaidTeams = await db
-        .select({ orgId: member.organizationId })
-        .from(member)
-        .where(eq(member.userId, memberId))
-
-      let hasAnyPaidTeam = false
-      if (remainingPaidTeams.length > 0) {
-        const orgIds = remainingPaidTeams.map((m) => m.orgId)
-        const orgPaidSubs = await db
-          .select()
-          .from(subscriptionTable)
-          .where(and(eq(subscriptionTable.status, 'active'), eq(subscriptionTable.plan, 'team')))
-
-        hasAnyPaidTeam = orgPaidSubs.some((s) => orgIds.includes(s.referenceId))
-      }
-
-      if (!hasAnyPaidTeam) {
-        const personalProRows = await db
-          .select()
-          .from(subscriptionTable)
-          .where(
-            and(
-              eq(subscriptionTable.referenceId, memberId),
-              eq(subscriptionTable.status, 'active'),
-              eq(subscriptionTable.plan, 'pro')
-            )
-          )
-          .limit(1)
-
-        const personalPro = personalProRows[0]
-        if (
-          personalPro &&
-          personalPro.cancelAtPeriodEnd === true &&
-          personalPro.stripeSubscriptionId
-        ) {
-          try {
-            const stripe = requireStripeClient()
-            await stripe.subscriptions.update(personalPro.stripeSubscriptionId, {
-              cancel_at_period_end: false,
-            })
-          } catch (stripeError) {
-            logger.error('Stripe restore cancel_at_period_end failed for personal Pro', {
-              userId: memberId,
-              stripeSubscriptionId: personalPro.stripeSubscriptionId,
-              error: stripeError,
-            })
-          }
-
-          try {
-            await db
-              .update(subscriptionTable)
-              .set({ cancelAtPeriodEnd: false })
-              .where(eq(subscriptionTable.id, personalPro.id))
-
-            logger.info('Restored personal Pro after leaving last paid team', {
-              userId: memberId,
-              personalSubscriptionId: personalPro.id,
-            })
-          } catch (dbError) {
-            logger.error('DB update failed when restoring personal Pro', {
-              userId: memberId,
-              subscriptionId: personalPro.id,
-              error: dbError,
-            })
-          }
-
-          // Also restore the snapshotted Pro usage back to currentPeriodCost
-          try {
-            const userStatsRows = await db
-              .select({
-                currentPeriodCost: userStats.currentPeriodCost,
-                proPeriodCostSnapshot: userStats.proPeriodCostSnapshot,
-              })
-              .from(userStats)
-              .where(eq(userStats.userId, memberId))
-              .limit(1)
-
-            if (userStatsRows.length > 0) {
-              const currentUsage = userStatsRows[0].currentPeriodCost || '0'
-              const snapshotUsage = userStatsRows[0].proPeriodCostSnapshot || '0'
-
-              const currentNum = Number.parseFloat(currentUsage)
-              const snapshotNum = Number.parseFloat(snapshotUsage)
-              const restoredUsage = (currentNum + snapshotNum).toString()
-
-              await db
-                .update(userStats)
-                .set({
-                  currentPeriodCost: restoredUsage,
-                  proPeriodCostSnapshot: '0', // Clear the snapshot
-                })
-                .where(eq(userStats.userId, memberId))
-
-              logger.info('Restored Pro usage after leaving team', {
-                userId: memberId,
-                previousUsage: currentUsage,
-                snapshotUsage: snapshotUsage,
-                restoredUsage: restoredUsage,
-              })
-            }
-          } catch (usageRestoreError) {
-            logger.error('Failed to restore Pro usage after leaving team', {
-              userId: memberId,
-              error: usageRestoreError,
-            })
-          }
-        }
-      }
-    } catch (postRemoveError) {
-      logger.error('Post-removal personal Pro restore check failed', {
-        organizationId,
-        memberId,
-        error: postRemoveError,
-      })
-    }
+    recordAudit({
+      workspaceId: null,
+      actorId: session.user.id,
+      action: AuditAction.ORG_MEMBER_REMOVED,
+      resourceType: AuditResourceType.ORGANIZATION,
+      resourceId: organizationId,
+      actorName: session.user.name ?? undefined,
+      actorEmail: session.user.email ?? undefined,
+      description:
+        session.user.id === targetUserId
+          ? 'Left the organization'
+          : `Removed member ${targetUserId} from organization`,
+      metadata: {
+        targetUserId,
+        targetEmail: targetMember[0].email ?? undefined,
+        targetName: targetMember[0].name ?? undefined,
+        wasSelfRemoval: session.user.id === targetUserId,
+      },
+      request,
+    })
 
     return NextResponse.json({
       success: true,
       message:
-        session.user.id === memberId
+        session.user.id === targetUserId
           ? 'You have left the organization'
           : 'Member removed successfully',
       data: {
-        removedMemberId: memberId,
+        removedMemberId: targetUserId,
         removedBy: session.user.id,
         removedAt: new Date().toISOString(),
       },

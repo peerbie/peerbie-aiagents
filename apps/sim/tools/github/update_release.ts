@@ -1,4 +1,9 @@
 import type { ReleaseResponse, UpdateReleaseParams } from '@/tools/github/types'
+import {
+  RELEASE_ASSET_OUTPUT_PROPERTIES,
+  RELEASE_OUTPUT_PROPERTIES,
+  USER_OUTPUT,
+} from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const updateReleaseTool: ToolConfig<UpdateReleaseParams, ReleaseResponse> = {
@@ -155,6 +160,53 @@ Download URLs:
         prerelease: { type: 'boolean', description: 'Whether this is a prerelease' },
         created_at: { type: 'string', description: 'Creation timestamp' },
         published_at: { type: 'string', description: 'Publication timestamp' },
+      },
+    },
+  },
+}
+
+export const updateReleaseV2Tool: ToolConfig = {
+  id: 'github_update_release_v2',
+  name: updateReleaseTool.name,
+  description: updateReleaseTool.description,
+  version: '2.0.0',
+  params: updateReleaseTool.params,
+  request: updateReleaseTool.request,
+  oauth: updateReleaseTool.oauth,
+  transformResponse: async (response: Response) => {
+    const data = await response.json()
+    return {
+      success: true,
+      output: {
+        id: data.id,
+        tag_name: data.tag_name,
+        name: data.name,
+        body: data.body ?? null,
+        html_url: data.html_url,
+        tarball_url: data.tarball_url,
+        zipball_url: data.zipball_url,
+        draft: data.draft,
+        prerelease: data.prerelease,
+        author: data.author,
+        assets: data.assets,
+        target_commitish: data.target_commitish,
+        created_at: data.created_at,
+        published_at: data.published_at ?? null,
+      },
+    }
+  },
+  outputs: {
+    ...RELEASE_OUTPUT_PROPERTIES,
+    author: USER_OUTPUT,
+    assets: {
+      type: 'array',
+      description: 'Release assets',
+      items: {
+        type: 'object',
+        properties: {
+          ...RELEASE_ASSET_OUTPUT_PROPERTIES,
+          uploader: USER_OUTPUT,
+        },
       },
     },
   },

@@ -1,8 +1,8 @@
 import { existsSync } from 'fs'
 import { mkdir } from 'fs/promises'
 import path, { join } from 'path'
-import { env } from '@/lib/env'
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
+import { env } from '@/lib/core/config/env'
 import { getStorageProvider, USE_BLOB_STORAGE, USE_S3_STORAGE } from '@/lib/uploads/config'
 
 const logger = createLogger('UploadsSetup')
@@ -107,5 +107,3 @@ if (typeof process !== 'undefined') {
     logger.info(`S3 copilot bucket: ${env.S3_COPILOT_BUCKET_NAME}`)
   }
 }
-
-export default ensureUploadsDirectory

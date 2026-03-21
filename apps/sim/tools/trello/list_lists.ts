@@ -1,4 +1,4 @@
-import { env } from '@/lib/env'
+import { env } from '@/lib/core/config/env'
 import type { TrelloListListsParams, TrelloListListsResponse } from '@/tools/trello/types'
 import type { ToolConfig } from '@/tools/types'
 
@@ -24,7 +24,7 @@ export const trelloListListsTool: ToolConfig<TrelloListListsParams, TrelloListLi
       type: 'string',
       required: true,
       visibility: 'user-or-llm',
-      description: 'ID of the board to list lists from',
+      description: 'Trello board ID (24-character hex string)',
     },
   },
 
@@ -77,12 +77,10 @@ export const trelloListListsTool: ToolConfig<TrelloListListsParams, TrelloListLi
   },
 
   outputs: {
-    success: { type: 'boolean', description: 'Whether the operation was successful' },
     lists: {
       type: 'array',
       description: 'Array of list objects with id, name, closed, pos, and idBoard',
     },
     count: { type: 'number', description: 'Number of lists returned' },
-    error: { type: 'string', description: 'Error message if operation failed' },
   },
 }

@@ -1,73 +1,62 @@
-import { useCallback, useState } from 'react'
-import { createLogger } from '@/lib/logs/console/logger'
-import { useWorkflowRegistry } from '@/stores/workflows/registry/store'
-
-const logger = createLogger('useDeployment')
+import { useCallback } from 'react'
+import { runPreDeployChecks } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/deploy/hooks/use-predeploy-checks'
+import { useDeployWorkflow } from '@/hooks/queries/deployments'
+import { useNotificationStore } from '@/stores/notifications'
+import { mergeSubblockState } from '@/stores/workflows/utils'
+import { useWorkflowStore } from '@/stores/workflows/workflow/store'
 
 interface UseDeploymentProps {
   workflowId: string | null
   isDeployed: boolean
-  refetchDeployedState: () => Promise<void>
 }
 
 /**
- * Hook to manage deployment operations (deploy, undeploy, redeploy)
+ * Hook to manage the deploy button click in the editor header.
+ * First deploy: runs pre-deploy checks, then deploys via mutation and opens modal.
+ * Already deployed: opens modal directly (validation happens on Update in modal).
  */
-export function useDeployment({
-  workflowId,
-  isDeployed,
-  refetchDeployedState,
-}: UseDeploymentProps) {
-  const [isDeploying, setIsDeploying] = useState(false)
-  const setDeploymentStatus = useWorkflowRegistry((state) => state.setDeploymentStatus)
+export function useDeployment({ workflowId, isDeployed }: UseDeploymentProps) {
+  const { mutateAsync, isPending: isDeploying } = useDeployWorkflow()
+  const addNotification = useNotificationStore((state) => state.addNotification)
 
-  /**
-   * Handle initial deployment and open modal
-   */
   const handleDeployClick = useCallback(async () => {
     if (!workflowId) return { success: false, shouldOpenModal: false }
 
-    // If undeployed, deploy first then open modal
-    if (!isDeployed) {
-      setIsDeploying(true)
-      try {
-        const response = await fetch(`/api/workflows/${workflowId}/deploy`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            deployChatEnabled: false,
-          }),
-        })
-
-        if (response.ok) {
-          const responseData = await response.json()
-          const isDeployedStatus = responseData.isDeployed ?? false
-          const deployedAtTime = responseData.deployedAt
-            ? new Date(responseData.deployedAt)
-            : undefined
-          setDeploymentStatus(
-            workflowId,
-            isDeployedStatus,
-            deployedAtTime,
-            responseData.apiKey || ''
-          )
-          await refetchDeployedState()
-          return { success: true, shouldOpenModal: true }
-        }
-        return { success: false, shouldOpenModal: true }
-      } catch (error) {
-        logger.error('Error deploying workflow:', error)
-        return { success: false, shouldOpenModal: true }
-      } finally {
-        setIsDeploying(false)
-      }
+    if (isDeployed) {
+      return { success: true, shouldOpenModal: true }
     }
 
-    // If already deployed, just signal to open modal
-    return { success: true, shouldOpenModal: true }
-  }, [workflowId, isDeployed, refetchDeployedState, setDeploymentStatus])
+    const { blocks, edges, loops, parallels } = useWorkflowStore.getState()
+    const liveBlocks = mergeSubblockState(blocks, workflowId)
+    const checkResult = runPreDeployChecks({
+      blocks: liveBlocks,
+      edges,
+      loops,
+      parallels,
+      workflowId,
+    })
+    if (!checkResult.passed) {
+      addNotification({
+        level: 'error',
+        message: checkResult.error || 'Pre-deploy validation failed',
+        workflowId,
+      })
+      return { success: false, shouldOpenModal: false }
+    }
+
+    try {
+      await mutateAsync({ workflowId, deployChatEnabled: false })
+      return { success: true, shouldOpenModal: true }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Failed to deploy workflow'
+      addNotification({
+        level: 'error',
+        message: errorMessage,
+        workflowId,
+      })
+      return { success: false, shouldOpenModal: false }
+    }
+  }, [workflowId, isDeployed, addNotification, mutateAsync])
 
   return {
     isDeploying,

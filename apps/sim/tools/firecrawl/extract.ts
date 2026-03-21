@@ -1,11 +1,12 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
+import { DEFAULT_EXECUTION_TIMEOUT_MS } from '@/lib/core/execution-limits'
 import type { ExtractParams, ExtractResponse } from '@/tools/firecrawl/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('FirecrawlExtractTool')
 
-const POLL_INTERVAL_MS = 5000 // 5 seconds between polls
-const MAX_POLL_TIME_MS = 300000 // 5 minutes maximum polling time
+const POLL_INTERVAL_MS = 5000
+const MAX_POLL_TIME_MS = DEFAULT_EXECUTION_TIMEOUT_MS
 
 export const extractTool: ToolConfig<ExtractParams, ExtractResponse> = {
   id: 'firecrawl_extract',
@@ -19,7 +20,8 @@ export const extractTool: ToolConfig<ExtractParams, ExtractResponse> = {
       type: 'json',
       required: true,
       visibility: 'user-or-llm',
-      description: 'Array of URLs to extract data from (supports glob format)',
+      description:
+        'Array of URLs to extract data from (e.g., ["https://example.com/page1", "https://example.com/page2"] or ["https://example.com/*"])',
     },
     prompt: {
       type: 'string',
@@ -77,6 +79,34 @@ export const extractTool: ToolConfig<ExtractParams, ExtractResponse> = {
     },
   },
 
+  hosting: {
+    envKeyPrefix: 'FIRECRAWL_API_KEY',
+    apiKeyParam: 'apiKey',
+    byokProviderId: 'firecrawl',
+    pricing: {
+      type: 'custom',
+      getCost: (_params, output) => {
+        if (output.creditsUsed == null) {
+          throw new Error('Firecrawl response missing creditsUsed field')
+        }
+
+        const creditsUsed = Number(output.creditsUsed)
+        if (Number.isNaN(creditsUsed)) {
+          throw new Error('Firecrawl response returned a non-numeric creditsUsed field')
+        }
+
+        return {
+          cost: creditsUsed * 0.001,
+          metadata: { creditsUsed },
+        }
+      },
+    },
+    rateLimit: {
+      mode: 'per_request',
+      requestsPerMinute: 100,
+    },
+  },
+
   request: {
     method: 'POST',
     url: 'https://api.firecrawl.dev/v2/extract',
@@ -89,15 +119,16 @@ export const extractTool: ToolConfig<ExtractParams, ExtractResponse> = {
         urls: params.urls,
       }
 
-      if (params.prompt != null) body.prompt = params.prompt
-      if (params.schema != null) body.schema = params.schema
-      if (params.enableWebSearch != null) body.enableWebSearch = params.enableWebSearch
-      if (params.ignoreSitemap != null) body.ignoreSitemap = params.ignoreSitemap
-      if (params.includeSubdomains != null) body.includeSubdomains = params.includeSubdomains
-      if (params.showSources != null) body.showSources = params.showSources
-      if (params.ignoreInvalidURLs != null) body.ignoreInvalidURLs = params.ignoreInvalidURLs
+      if (params.prompt) body.prompt = params.prompt
+      if (params.schema) body.schema = params.schema
+      if (typeof params.enableWebSearch === 'boolean') body.enableWebSearch = params.enableWebSearch
+      if (typeof params.ignoreSitemap === 'boolean') body.ignoreSitemap = params.ignoreSitemap
+      if (typeof params.includeSubdomains === 'boolean')
+        body.includeSubdomains = params.includeSubdomains
+      if (typeof params.showSources === 'boolean') body.showSources = params.showSources
+      if (typeof params.ignoreInvalidURLs === 'boolean')
+        body.ignoreInvalidURLs = params.ignoreInvalidURLs
 
-      // Add scrapeOptions, filtering out null/undefined values
       if (params.scrapeOptions != null) {
         const cleanedScrapeOptions = Object.entries(params.scrapeOptions).reduce(
           (acc, [key, val]) => {
@@ -161,7 +192,7 @@ export const extractTool: ToolConfig<ExtractParams, ExtractResponse> = {
             jobId,
             success: true,
             data: extractData.data || {},
-            warning: extractData.warning,
+            creditsUsed: extractData.creditsUsed,
           }
           return result
         }
@@ -208,21 +239,6 @@ export const extractTool: ToolConfig<ExtractParams, ExtractResponse> = {
     data: {
       type: 'object',
       description: 'Extracted structured data according to the schema or prompt',
-    },
-    sources: {
-      type: 'array',
-      description: 'Data sources (only if showSources is enabled)',
-      items: {
-        type: 'object',
-        properties: {
-          url: { type: 'string', description: 'Source URL' },
-          title: { type: 'string', description: 'Source title' },
-        },
-      },
-    },
-    warning: {
-      type: 'string',
-      description: 'Warning messages from the extraction operation',
     },
   },
 }

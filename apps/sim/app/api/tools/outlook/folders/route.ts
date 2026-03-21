@@ -1,11 +1,12 @@
 import { db } from '@sim/db'
 import { account } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { eq } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
-import { refreshAccessTokenIfNeeded } from '@/app/api/auth/oauth/utils'
+import { validateAlphanumericId } from '@/lib/core/security/input-validation'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { refreshAccessTokenIfNeeded, resolveOAuthAccountId } from '@/app/api/auth/oauth/utils'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,8 +30,13 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Credential ID is required' }, { status: 400 })
     }
 
+    const credentialIdValidation = validateAlphanumericId(credentialId, 'credentialId')
+    if (!credentialIdValidation.isValid) {
+      logger.warn('Invalid credentialId format', { error: credentialIdValidation.error })
+      return NextResponse.json({ error: credentialIdValidation.error }, { status: 400 })
+    }
+
     try {
-      // Ensure we have a session for permission checks
       const sessionUserId = session?.user?.id || ''
 
       if (!sessionUserId) {
@@ -38,8 +44,28 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
       }
 
-      // Resolve the credential owner to support collaborator-owned credentials
-      const creds = await db.select().from(account).where(eq(account.id, credentialId)).limit(1)
+      const resolved = await resolveOAuthAccountId(credentialId)
+      if (!resolved) {
+        return NextResponse.json({ error: 'Credential not found' }, { status: 404 })
+      }
+
+      if (resolved.workspaceId) {
+        const { getUserEntityPermissions } = await import('@/lib/workspaces/permissions/utils')
+        const perm = await getUserEntityPermissions(
+          session!.user!.id,
+          'workspace',
+          resolved.workspaceId
+        )
+        if (perm === null) {
+          return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+        }
+      }
+
+      const creds = await db
+        .select()
+        .from(account)
+        .where(eq(account.id, resolved.accountId))
+        .limit(1)
       if (!creds.length) {
         logger.warn('Credential not found', { credentialId })
         return NextResponse.json({ error: 'Credential not found' }, { status: 404 })
@@ -47,7 +73,7 @@ export async function GET(request: Request) {
       const credentialOwnerUserId = creds[0].userId
 
       const accessToken = await refreshAccessTokenIfNeeded(
-        credentialId,
+        resolved.accountId,
         credentialOwnerUserId,
         generateRequestId()
       )
@@ -79,7 +105,6 @@ export async function GET(request: Request) {
           endpoint: 'https://graph.microsoft.com/v1.0/me/mailFolders',
         })
 
-        // Check for auth errors specifically
         if (response.status === 401) {
           return NextResponse.json(
             {
@@ -96,7 +121,6 @@ export async function GET(request: Request) {
       const data = await response.json()
       const folders = data.value || []
 
-      // Transform folders to match the expected format
       const transformedFolders = folders.map((folder: OutlookFolder) => ({
         id: folder.id,
         name: folder.displayName,
@@ -111,7 +135,6 @@ export async function GET(request: Request) {
     } catch (innerError) {
       logger.error('Error during API requests:', innerError)
 
-      // Check if it's an authentication error
       const errorMessage = innerError instanceof Error ? innerError.message : String(innerError)
       if (
         errorMessage.includes('auth') ||

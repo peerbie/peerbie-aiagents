@@ -1,8 +1,8 @@
 import { randomUUID } from 'crypto'
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
 import { getSession } from '@/lib/auth'
 import { getNextAvailableSlot, getTagDefinitions } from '@/lib/knowledge/tags/service'
-import { createLogger } from '@/lib/logs/console/logger'
 import { checkKnowledgeBaseAccess } from '@/app/api/knowledge/utils'
 
 const logger = createLogger('NextAvailableSlotAPI')
@@ -30,7 +30,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const accessCheck = await checkKnowledgeBaseAccess(knowledgeBaseId, session.user.id)
     if (!accessCheck.hasAccess) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      return NextResponse.json(
+        { error: accessCheck.notFound ? 'Not found' : 'Forbidden' },
+        { status: accessCheck.notFound ? 404 : 403 }
+      )
     }
 
     // Get existing definitions once and reuse

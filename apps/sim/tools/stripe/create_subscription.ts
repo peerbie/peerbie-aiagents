@@ -1,4 +1,5 @@
 import type { CreateSubscriptionParams, SubscriptionResponse } from '@/tools/stripe/types'
+import { SUBSCRIPTION_METADATA_OUTPUT_PROPERTIES, SUBSCRIPTION_OUTPUT } from '@/tools/stripe/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const stripeCreateSubscriptionTool: ToolConfig<
@@ -113,12 +114,13 @@ export const stripeCreateSubscriptionTool: ToolConfig<
 
   outputs: {
     subscription: {
-      type: 'json',
+      ...SUBSCRIPTION_OUTPUT,
       description: 'The created subscription object',
     },
     metadata: {
       type: 'json',
       description: 'Subscription metadata including ID, status, and customer',
+      properties: SUBSCRIPTION_METADATA_OUTPUT_PROPERTIES,
     },
   },
 }

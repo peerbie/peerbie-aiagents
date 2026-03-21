@@ -1,8 +1,9 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   HubSpotCreateCompanyParams,
   HubSpotCreateCompanyResponse,
 } from '@/tools/hubspot/types'
+import { COMPANY_OBJECT_OUTPUT } from '@/tools/hubspot/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('HubSpotCreateCompany')
@@ -31,14 +32,16 @@ export const hubspotCreateCompanyTool: ToolConfig<
     properties: {
       type: 'object',
       required: true,
-      visibility: 'user-only',
-      description: 'Company properties as JSON object (e.g., name, domain, city, industry)',
+      visibility: 'user-or-llm',
+      description:
+        'Company properties as JSON object (e.g., {"name": "Acme Inc", "domain": "acme.com", "industry": "Technology"})',
     },
     associations: {
       type: 'array',
       required: false,
-      visibility: 'user-only',
-      description: 'Array of associations to create with the company',
+      visibility: 'user-or-llm',
+      description:
+        'Array of associations to create with the company as JSON (each with "to.id" and "types" containing "associationCategory" and "associationTypeId")',
     },
   },
 
@@ -56,8 +59,17 @@ export const hubspotCreateCompanyTool: ToolConfig<
       }
     },
     body: (params) => {
+      let properties = params.properties
+      if (typeof properties === 'string') {
+        try {
+          properties = JSON.parse(properties)
+        } catch (e) {
+          throw new Error('Invalid JSON format for properties. Please provide a valid JSON object.')
+        }
+      }
+
       const body: any = {
-        properties: params.properties,
+        properties,
       }
 
       if (params.associations && params.associations.length > 0) {
@@ -80,31 +92,15 @@ export const hubspotCreateCompanyTool: ToolConfig<
       success: true,
       output: {
         company: data,
-        metadata: {
-          operation: 'create_company' as const,
-          companyId: data.id,
-        },
+        companyId: data.id,
         success: true,
       },
     }
   },
 
   outputs: {
+    company: COMPANY_OBJECT_OUTPUT,
+    companyId: { type: 'string', description: 'The created company ID' },
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Created company data',
-      properties: {
-        company: {
-          type: 'object',
-          description: 'Created company object with properties and ID',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

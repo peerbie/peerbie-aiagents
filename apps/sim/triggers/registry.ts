@@ -1,10 +1,74 @@
 import { airtableWebhookTrigger } from '@/triggers/airtable'
 import {
+  ashbyApplicationSubmitTrigger,
+  ashbyCandidateDeleteTrigger,
+  ashbyCandidateHireTrigger,
+  ashbyCandidateStageChangeTrigger,
+  ashbyJobCreateTrigger,
+  ashbyOfferCreateTrigger,
+} from '@/triggers/ashby'
+import {
+  attioCommentCreatedTrigger,
+  attioCommentDeletedTrigger,
+  attioCommentResolvedTrigger,
+  attioCommentUnresolvedTrigger,
+  attioListEntryCreatedTrigger,
+  attioListEntryDeletedTrigger,
+  attioListEntryUpdatedTrigger,
+  attioNoteCreatedTrigger,
+  attioNoteDeletedTrigger,
+  attioNoteUpdatedTrigger,
+  attioRecordCreatedTrigger,
+  attioRecordDeletedTrigger,
+  attioRecordMergedTrigger,
+  attioRecordUpdatedTrigger,
+  attioTaskCreatedTrigger,
+  attioTaskDeletedTrigger,
+  attioTaskUpdatedTrigger,
+  attioWebhookTrigger,
+} from '@/triggers/attio'
+import {
+  calcomBookingCancelledTrigger,
+  calcomBookingCreatedTrigger,
+  calcomBookingPaidTrigger,
+  calcomBookingRejectedTrigger,
+  calcomBookingRequestedTrigger,
+  calcomBookingRescheduledTrigger,
+  calcomMeetingEndedTrigger,
+  calcomRecordingReadyTrigger,
+  calcomWebhookTrigger,
+} from '@/triggers/calcom'
+import {
   calendlyInviteeCanceledTrigger,
   calendlyInviteeCreatedTrigger,
   calendlyRoutingFormSubmittedTrigger,
   calendlyWebhookTrigger,
 } from '@/triggers/calendly'
+import {
+  circlebackMeetingCompletedTrigger,
+  circlebackMeetingNotesTrigger,
+  circlebackWebhookTrigger,
+} from '@/triggers/circleback'
+import {
+  confluenceAttachmentCreatedTrigger,
+  confluenceAttachmentRemovedTrigger,
+  confluenceBlogCreatedTrigger,
+  confluenceBlogRemovedTrigger,
+  confluenceBlogUpdatedTrigger,
+  confluenceCommentCreatedTrigger,
+  confluenceCommentRemovedTrigger,
+  confluenceLabelAddedTrigger,
+  confluenceLabelRemovedTrigger,
+  confluencePageCreatedTrigger,
+  confluencePageMovedTrigger,
+  confluencePageRemovedTrigger,
+  confluencePageUpdatedTrigger,
+  confluenceSpaceCreatedTrigger,
+  confluenceSpaceUpdatedTrigger,
+  confluenceWebhookTrigger,
+} from '@/triggers/confluence'
+import { fathomNewMeetingTrigger, fathomWebhookTrigger } from '@/triggers/fathom'
+import { firefliesTranscriptionCompleteTrigger } from '@/triggers/fireflies'
 import { genericWebhookTrigger } from '@/triggers/generic'
 import {
   githubIssueClosedTrigger,
@@ -22,6 +86,16 @@ import {
 } from '@/triggers/github'
 import { gmailPollingTrigger } from '@/triggers/gmail'
 import { googleFormsWebhookTrigger } from '@/triggers/googleforms'
+import {
+  grainHighlightCreatedTrigger,
+  grainHighlightUpdatedTrigger,
+  grainItemAddedTrigger,
+  grainItemUpdatedTrigger,
+  grainRecordingCreatedTrigger,
+  grainRecordingUpdatedTrigger,
+  grainStoryCreatedTrigger,
+  grainWebhookTrigger,
+} from '@/triggers/grain'
 import {
   hubspotCompanyCreatedTrigger,
   hubspotCompanyDeletedTrigger,
@@ -42,6 +116,7 @@ import {
   hubspotTicketDeletedTrigger,
   hubspotTicketPropertyChangedTrigger,
 } from '@/triggers/hubspot'
+import { imapPollingTrigger } from '@/triggers/imap'
 import {
   jiraIssueCommentedTrigger,
   jiraIssueCreatedTrigger,
@@ -50,6 +125,17 @@ import {
   jiraWebhookTrigger,
   jiraWorklogCreatedTrigger,
 } from '@/triggers/jira'
+import {
+  lemlistEmailBouncedTrigger,
+  lemlistEmailClickedTrigger,
+  lemlistEmailOpenedTrigger,
+  lemlistEmailRepliedTrigger,
+  lemlistEmailSentTrigger,
+  lemlistInterestedTrigger,
+  lemlistLinkedInRepliedTrigger,
+  lemlistNotInterestedTrigger,
+  lemlistWebhookTrigger,
+} from '@/triggers/lemlist'
 import {
   linearCommentCreatedTrigger,
   linearCommentUpdatedTrigger,
@@ -72,6 +158,7 @@ import {
   microsoftTeamsWebhookTrigger,
 } from '@/triggers/microsoftteams'
 import { outlookPollingTrigger } from '@/triggers/outlook'
+import { rssPollingTrigger } from '@/triggers/rss'
 import { slackWebhookTrigger } from '@/triggers/slack'
 import { stripeWebhookTrigger } from '@/triggers/stripe'
 import { telegramWebhookTrigger } from '@/triggers/telegram'
@@ -89,10 +176,59 @@ import { whatsappWebhookTrigger } from '@/triggers/whatsapp'
 export const TRIGGER_REGISTRY: TriggerRegistry = {
   slack_webhook: slackWebhookTrigger,
   airtable_webhook: airtableWebhookTrigger,
+  ashby_application_submit: ashbyApplicationSubmitTrigger,
+  ashby_candidate_stage_change: ashbyCandidateStageChangeTrigger,
+  ashby_candidate_hire: ashbyCandidateHireTrigger,
+  ashby_candidate_delete: ashbyCandidateDeleteTrigger,
+  ashby_job_create: ashbyJobCreateTrigger,
+  ashby_offer_create: ashbyOfferCreateTrigger,
+  attio_webhook: attioWebhookTrigger,
+  attio_record_created: attioRecordCreatedTrigger,
+  attio_record_updated: attioRecordUpdatedTrigger,
+  attio_record_deleted: attioRecordDeletedTrigger,
+  attio_record_merged: attioRecordMergedTrigger,
+  attio_note_created: attioNoteCreatedTrigger,
+  attio_note_updated: attioNoteUpdatedTrigger,
+  attio_note_deleted: attioNoteDeletedTrigger,
+  attio_task_created: attioTaskCreatedTrigger,
+  attio_task_updated: attioTaskUpdatedTrigger,
+  attio_task_deleted: attioTaskDeletedTrigger,
+  attio_comment_created: attioCommentCreatedTrigger,
+  attio_comment_resolved: attioCommentResolvedTrigger,
+  attio_comment_unresolved: attioCommentUnresolvedTrigger,
+  attio_comment_deleted: attioCommentDeletedTrigger,
+  attio_list_entry_created: attioListEntryCreatedTrigger,
+  attio_list_entry_updated: attioListEntryUpdatedTrigger,
+  attio_list_entry_deleted: attioListEntryDeletedTrigger,
   calendly_webhook: calendlyWebhookTrigger,
   calendly_invitee_created: calendlyInviteeCreatedTrigger,
   calendly_invitee_canceled: calendlyInviteeCanceledTrigger,
   calendly_routing_form_submitted: calendlyRoutingFormSubmittedTrigger,
+  calcom_booking_created: calcomBookingCreatedTrigger,
+  calcom_booking_cancelled: calcomBookingCancelledTrigger,
+  calcom_booking_rescheduled: calcomBookingRescheduledTrigger,
+  calcom_booking_requested: calcomBookingRequestedTrigger,
+  calcom_booking_rejected: calcomBookingRejectedTrigger,
+  calcom_booking_paid: calcomBookingPaidTrigger,
+  calcom_meeting_ended: calcomMeetingEndedTrigger,
+  calcom_recording_ready: calcomRecordingReadyTrigger,
+  calcom_webhook: calcomWebhookTrigger,
+  confluence_webhook: confluenceWebhookTrigger,
+  confluence_page_created: confluencePageCreatedTrigger,
+  confluence_page_updated: confluencePageUpdatedTrigger,
+  confluence_page_removed: confluencePageRemovedTrigger,
+  confluence_page_moved: confluencePageMovedTrigger,
+  confluence_comment_created: confluenceCommentCreatedTrigger,
+  confluence_comment_removed: confluenceCommentRemovedTrigger,
+  confluence_blog_created: confluenceBlogCreatedTrigger,
+  confluence_blog_updated: confluenceBlogUpdatedTrigger,
+  confluence_blog_removed: confluenceBlogRemovedTrigger,
+  confluence_attachment_created: confluenceAttachmentCreatedTrigger,
+  confluence_attachment_removed: confluenceAttachmentRemovedTrigger,
+  confluence_space_created: confluenceSpaceCreatedTrigger,
+  confluence_space_updated: confluenceSpaceUpdatedTrigger,
+  confluence_label_added: confluenceLabelAddedTrigger,
+  confluence_label_removed: confluenceLabelRemovedTrigger,
   generic_webhook: genericWebhookTrigger,
   github_webhook: githubWebhookTrigger,
   github_issue_opened: githubIssueOpenedTrigger,
@@ -106,13 +242,36 @@ export const TRIGGER_REGISTRY: TriggerRegistry = {
   github_push: githubPushTrigger,
   github_release_published: githubReleasePublishedTrigger,
   github_workflow_run: githubWorkflowRunTrigger,
+  fireflies_transcription_complete: firefliesTranscriptionCompleteTrigger,
+  fathom_new_meeting: fathomNewMeetingTrigger,
+  fathom_webhook: fathomWebhookTrigger,
   gmail_poller: gmailPollingTrigger,
+  grain_webhook: grainWebhookTrigger,
+  grain_item_added: grainItemAddedTrigger,
+  grain_item_updated: grainItemUpdatedTrigger,
+  grain_recording_created: grainRecordingCreatedTrigger,
+  grain_recording_updated: grainRecordingUpdatedTrigger,
+  grain_highlight_created: grainHighlightCreatedTrigger,
+  grain_highlight_updated: grainHighlightUpdatedTrigger,
+  grain_story_created: grainStoryCreatedTrigger,
+  circleback_meeting_completed: circlebackMeetingCompletedTrigger,
+  circleback_meeting_notes: circlebackMeetingNotesTrigger,
+  circleback_webhook: circlebackWebhookTrigger,
   jira_webhook: jiraWebhookTrigger,
   jira_issue_created: jiraIssueCreatedTrigger,
   jira_issue_updated: jiraIssueUpdatedTrigger,
   jira_issue_deleted: jiraIssueDeletedTrigger,
   jira_issue_commented: jiraIssueCommentedTrigger,
   jira_worklog_created: jiraWorklogCreatedTrigger,
+  lemlist_webhook: lemlistWebhookTrigger,
+  lemlist_email_replied: lemlistEmailRepliedTrigger,
+  lemlist_email_opened: lemlistEmailOpenedTrigger,
+  lemlist_email_clicked: lemlistEmailClickedTrigger,
+  lemlist_email_sent: lemlistEmailSentTrigger,
+  lemlist_email_bounced: lemlistEmailBouncedTrigger,
+  lemlist_linkedin_replied: lemlistLinkedInRepliedTrigger,
+  lemlist_interested: lemlistInterestedTrigger,
+  lemlist_not_interested: lemlistNotInterestedTrigger,
   linear_webhook: linearWebhookTrigger,
   linear_issue_created: linearIssueCreatedTrigger,
   linear_issue_updated: linearIssueUpdatedTrigger,
@@ -131,6 +290,7 @@ export const TRIGGER_REGISTRY: TriggerRegistry = {
   microsoftteams_webhook: microsoftTeamsWebhookTrigger,
   microsoftteams_chat_subscription: microsoftTeamsChatSubscriptionTrigger,
   outlook_poller: outlookPollingTrigger,
+  rss_poller: rssPollingTrigger,
   stripe_webhook: stripeWebhookTrigger,
   telegram_webhook: telegramWebhookTrigger,
   typeform_webhook: typeformWebhookTrigger,
@@ -159,4 +319,5 @@ export const TRIGGER_REGISTRY: TriggerRegistry = {
   hubspot_ticket_created: hubspotTicketCreatedTrigger,
   hubspot_ticket_deleted: hubspotTicketDeletedTrigger,
   hubspot_ticket_property_changed: hubspotTicketPropertyChangedTrigger,
+  imap_poller: imapPollingTrigger,
 }

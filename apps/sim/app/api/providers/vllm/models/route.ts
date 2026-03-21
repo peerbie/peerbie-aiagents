@@ -1,13 +1,19 @@
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
-import { env } from '@/lib/env'
-import { createLogger } from '@/lib/logs/console/logger'
+import { env } from '@/lib/core/config/env'
+import { filterBlacklistedModels, isProviderBlacklisted } from '@/providers/utils'
 
 const logger = createLogger('VLLMModelsAPI')
 
 /**
  * Get available vLLM models
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
+  if (isProviderBlacklisted('vllm')) {
+    logger.info('vLLM provider is blacklisted, returning empty models')
+    return NextResponse.json({ models: [] })
+  }
+
   const baseUrl = (env.VLLM_BASE_URL || '').replace(/\/$/, '')
 
   if (!baseUrl) {
@@ -20,10 +26,16 @@ export async function GET(request: NextRequest) {
       baseUrl,
     })
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+
+    if (env.VLLM_API_KEY) {
+      headers.Authorization = `Bearer ${env.VLLM_API_KEY}`
+    }
+
     const response = await fetch(`${baseUrl}/v1/models`, {
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       next: { revalidate: 60 },
     })
 
@@ -36,10 +48,12 @@ export async function GET(request: NextRequest) {
     }
 
     const data = (await response.json()) as { data: Array<{ id: string }> }
-    const models = data.data.map((model) => `vllm/${model.id}`)
+    const allModels = data.data.map((model) => `vllm/${model.id}`)
+    const models = filterBlacklistedModels(allModels)
 
     logger.info('Successfully fetched vLLM models', {
       count: models.length,
+      filtered: allModels.length - models.length,
       models,
     })
 
@@ -50,7 +64,6 @@ export async function GET(request: NextRequest) {
       baseUrl,
     })
 
-    // Return empty array instead of error to avoid breaking the UI
     return NextResponse.json({ models: [] })
   }
 }

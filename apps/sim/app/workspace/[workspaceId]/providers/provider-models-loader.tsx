@@ -1,21 +1,21 @@
 'use client'
 
 import { useEffect } from 'react'
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import { useProviderModels } from '@/hooks/queries/providers'
 import {
   updateOllamaProviderModels,
   updateOpenRouterProviderModels,
   updateVLLMProviderModels,
 } from '@/providers/utils'
-import { useProvidersStore } from '@/stores/providers/store'
-import type { ProviderName } from '@/stores/providers/types'
+import { type ProviderName, useProvidersStore } from '@/stores/providers'
 
 const logger = createLogger('ProviderModelsLoader')
 
 function useSyncProvider(provider: ProviderName) {
   const setProviderModels = useProvidersStore((state) => state.setProviderModels)
   const setProviderLoading = useProvidersStore((state) => state.setProviderLoading)
+  const setOpenRouterModelInfo = useProvidersStore((state) => state.setOpenRouterModelInfo)
   const { data, isLoading, isFetching, error } = useProviderModels(provider)
 
   useEffect(() => {
@@ -27,18 +27,21 @@ function useSyncProvider(provider: ProviderName) {
 
     try {
       if (provider === 'ollama') {
-        updateOllamaProviderModels(data)
+        updateOllamaProviderModels(data.models)
       } else if (provider === 'vllm') {
-        updateVLLMProviderModels(data)
+        updateVLLMProviderModels(data.models)
       } else if (provider === 'openrouter') {
-        void updateOpenRouterProviderModels(data)
+        void updateOpenRouterProviderModels(data.models)
+        if (data.modelInfo) {
+          setOpenRouterModelInfo(data.modelInfo)
+        }
       }
     } catch (syncError) {
       logger.warn(`Failed to sync provider definitions for ${provider}`, syncError as Error)
     }
 
-    setProviderModels(provider, data)
-  }, [provider, data, setProviderModels])
+    setProviderModels(provider, data.models)
+  }, [provider, data, setProviderModels, setOpenRouterModelInfo])
 
   useEffect(() => {
     if (error) {

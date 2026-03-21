@@ -1,4 +1,5 @@
 import type { CustomerResponse, UpdateCustomerParams } from '@/tools/stripe/types'
+import { CUSTOMER_METADATA_OUTPUT_PROPERTIES, CUSTOMER_OUTPUT } from '@/tools/stripe/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const stripeUpdateCustomerTool: ToolConfig<UpdateCustomerParams, CustomerResponse> = {
@@ -97,8 +98,8 @@ export const stripeUpdateCustomerTool: ToolConfig<UpdateCustomerParams, Customer
         customer: data,
         metadata: {
           id: data.id,
-          email: data.email,
-          name: data.name,
+          email: data.email ?? null,
+          name: data.name ?? null,
         },
       },
     }
@@ -106,12 +107,13 @@ export const stripeUpdateCustomerTool: ToolConfig<UpdateCustomerParams, Customer
 
   outputs: {
     customer: {
-      type: 'json',
+      ...CUSTOMER_OUTPUT,
       description: 'The updated customer object',
     },
     metadata: {
       type: 'json',
       description: 'Customer metadata',
+      properties: CUSTOMER_METADATA_OUTPUT_PROPERTIES,
     },
   },
 }

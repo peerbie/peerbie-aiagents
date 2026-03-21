@@ -1,6 +1,6 @@
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
-import { checkHybridAuth } from '@/lib/auth/hybrid'
-import { createLogger } from '@/lib/logs/console/logger'
+import { checkSessionOrInternalAuth } from '@/lib/auth/hybrid'
 import type { StorageContext } from '@/lib/uploads/config'
 import { hasCloudStorage } from '@/lib/uploads/core/storage-service'
 import { verifyFileAccess } from '@/app/api/files/authorization'
@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic'
 
 export async function POST(request: NextRequest) {
   try {
-    const authResult = await checkHybridAuth(request, { requireWorkflowId: false })
+    const authResult = await checkSessionOrInternalAuth(request, { requireWorkflowId: false })
 
     if (!authResult.success || !authResult.userId) {
       logger.warn('Unauthorized download URL request', {
@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
       throw new FileNotFoundError(`File not found: ${key}`)
     }
 
-    const { getBaseUrl } = await import('@/lib/urls/utils')
+    const { getBaseUrl } = await import('@/lib/core/utils/urls')
     const downloadUrl = `${getBaseUrl()}/api/files/serve/${encodeURIComponent(key)}?context=${storageContext}`
 
     logger.info(`Generated download URL for ${storageContext} file: ${key}`)

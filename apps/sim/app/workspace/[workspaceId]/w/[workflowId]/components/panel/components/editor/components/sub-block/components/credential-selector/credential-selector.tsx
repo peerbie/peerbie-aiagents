@@ -1,25 +1,35 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ExternalLink } from 'lucide-react'
+import { createElement, useCallback, useEffect, useMemo, useState } from 'react'
+import { ExternalLink, Users } from 'lucide-react'
+import { useParams } from 'next/navigation'
 import { Button, Combobox } from '@/components/emcn/components'
-import { createLogger } from '@/lib/logs/console/logger'
+import { getSubscriptionStatus } from '@/lib/billing/client'
+import { getEnv, isTruthy } from '@/lib/core/config/env'
+import { getPollingProviderFromOAuth } from '@/lib/credential-sets/providers'
+import { writePendingCredentialCreateRequest } from '@/lib/credentials/client-state'
 import {
   getCanonicalScopesForProvider,
   getProviderIdFromServiceId,
-  getServiceIdFromScopes,
   OAUTH_PROVIDERS,
   type OAuthProvider,
   parseProvider,
 } from '@/lib/oauth'
+import { getMissingRequiredScopes } from '@/lib/oauth/utils'
 import { OAuthRequiredModal } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/components/credential-selector/components/oauth-required-modal'
+import { useDependsOnGate } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/hooks/use-depends-on-gate'
 import { useSubBlockValue } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/editor/components/sub-block/hooks/use-sub-block-value'
 import type { SubBlockConfig } from '@/blocks/types'
-import { useOAuthCredentialDetail, useOAuthCredentials } from '@/hooks/queries/oauth-credentials'
-import { getMissingRequiredScopes } from '@/hooks/use-oauth-scope-status'
+import { CREDENTIAL_SET } from '@/executor/constants'
+import { useCredentialSets } from '@/hooks/queries/credential-sets'
+import { useOAuthCredentials } from '@/hooks/queries/oauth/oauth-credentials'
+import { useOrganizations } from '@/hooks/queries/organization'
+import { useSubscriptionData } from '@/hooks/queries/subscription'
+import { useCredentialRefreshTriggers } from '@/hooks/use-credential-refresh-triggers'
+import { useSettingsNavigation } from '@/hooks/use-settings-navigation'
 import { useWorkflowRegistry } from '@/stores/workflows/registry/store'
 
-const logger = createLogger('CredentialSelector')
+const isBillingEnabled = isTruthy(getEnv('NEXT_PUBLIC_BILLING_ENABLED'))
 
 interface CredentialSelectorProps {
   blockId: string
@@ -27,6 +37,7 @@ interface CredentialSelectorProps {
   disabled?: boolean
   isPreview?: boolean
   previewValue?: any | null
+  previewContextValues?: Record<string, unknown>
 }
 
 export function CredentialSelector({
@@ -35,88 +46,118 @@ export function CredentialSelector({
   disabled = false,
   isPreview = false,
   previewValue,
+  previewContextValues,
 }: CredentialSelectorProps) {
+  const params = useParams()
+  const workspaceId = (params?.workspaceId as string) || ''
   const [showOAuthModal, setShowOAuthModal] = useState(false)
-  const [inputValue, setInputValue] = useState('')
+  const [editingValue, setEditingValue] = useState('')
   const [isEditing, setIsEditing] = useState(false)
   const { activeWorkflowId } = useWorkflowRegistry()
   const [storeValue, setStoreValue] = useSubBlockValue<string | null>(blockId, subBlock.id)
 
-  const provider = subBlock.provider as OAuthProvider
   const requiredScopes = subBlock.requiredScopes || []
   const label = subBlock.placeholder || 'Select credential'
-  const serviceId = subBlock.serviceId
+  const serviceId = subBlock.serviceId || ''
+  const supportsCredentialSets = subBlock.supportsCredentialSets || false
+
+  const { data: organizationsData } = useOrganizations()
+  const { data: subscriptionData } = useSubscriptionData({ enabled: isBillingEnabled })
+  const activeOrganization = organizationsData?.activeOrganization
+  const subscriptionStatus = getSubscriptionStatus(subscriptionData?.data)
+  const hasTeamPlan = subscriptionStatus.isTeam || subscriptionStatus.isEnterprise
+  const canUseCredentialSets = supportsCredentialSets && hasTeamPlan && !!activeOrganization?.id
+
+  const { data: credentialSets = [] } = useCredentialSets(
+    activeOrganization?.id,
+    canUseCredentialSets
+  )
+
+  const { depsSatisfied, dependsOn } = useDependsOnGate(blockId, subBlock, {
+    disabled,
+    isPreview,
+    previewContextValues,
+  })
+  const hasDependencies = dependsOn.length > 0
+
+  const effectiveDisabled = disabled || (hasDependencies && !depsSatisfied)
 
   const effectiveValue = isPreview && previewValue !== undefined ? previewValue : storeValue
-  const selectedId = typeof effectiveValue === 'string' ? effectiveValue : ''
-
-  const effectiveServiceId = useMemo(
-    () => serviceId || getServiceIdFromScopes(provider, requiredScopes),
-    [provider, requiredScopes, serviceId]
-  )
+  const rawSelectedId = typeof effectiveValue === 'string' ? effectiveValue : ''
+  const isCredentialSetSelected = rawSelectedId.startsWith(CREDENTIAL_SET.PREFIX)
+  const selectedId = isCredentialSetSelected ? '' : rawSelectedId
+  const selectedCredentialSetId = isCredentialSetSelected
+    ? rawSelectedId.slice(CREDENTIAL_SET.PREFIX.length)
+    : ''
 
   const effectiveProviderId = useMemo(
-    () => getProviderIdFromServiceId(effectiveServiceId),
-    [effectiveServiceId]
+    () => getProviderIdFromServiceId(serviceId) as OAuthProvider,
+    [serviceId]
   )
+  const provider = effectiveProviderId
 
   const {
     data: credentials = [],
     isFetching: credentialsLoading,
     refetch: refetchCredentials,
-  } = useOAuthCredentials(effectiveProviderId, Boolean(effectiveProviderId))
+  } = useOAuthCredentials(effectiveProviderId, {
+    enabled: Boolean(effectiveProviderId),
+    workspaceId,
+    workflowId: activeWorkflowId || undefined,
+  })
 
   const selectedCredential = useMemo(
     () => credentials.find((cred) => cred.id === selectedId),
     [credentials, selectedId]
   )
 
-  const shouldFetchForeignMeta =
-    Boolean(selectedId) &&
-    !selectedCredential &&
-    Boolean(activeWorkflowId) &&
-    Boolean(effectiveProviderId)
+  const selectedCredentialSet = useMemo(
+    () => credentialSets.find((cs) => cs.id === selectedCredentialSetId),
+    [credentialSets, selectedCredentialSetId]
+  )
 
-  const { data: foreignCredentials = [], isFetching: foreignMetaLoading } =
-    useOAuthCredentialDetail(
-      shouldFetchForeignMeta ? selectedId : undefined,
-      activeWorkflowId || undefined,
-      shouldFetchForeignMeta
-    )
+  const [inaccessibleCredentialName, setInaccessibleCredentialName] = useState<string | null>(null)
 
-  const hasForeignMeta = foreignCredentials.length > 0
-  const isForeign = Boolean(selectedId && !selectedCredential && hasForeignMeta)
+  useEffect(() => {
+    if (!selectedId || selectedCredential || credentialsLoading || !workspaceId) {
+      setInaccessibleCredentialName(null)
+      return
+    }
+
+    setInaccessibleCredentialName(null)
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const response = await fetch(
+          `/api/credentials?workspaceId=${encodeURIComponent(workspaceId)}&credentialId=${encodeURIComponent(selectedId)}`
+        )
+        if (!response.ok || cancelled) return
+        const data = await response.json()
+        if (!cancelled && data.credential?.displayName) {
+          setInaccessibleCredentialName(data.credential.displayName)
+        }
+      } catch {
+        // Ignore fetch errors
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedId, selectedCredential, credentialsLoading, workspaceId])
 
   const resolvedLabel = useMemo(() => {
+    if (selectedCredentialSet) return selectedCredentialSet.name
     if (selectedCredential) return selectedCredential.name
-    if (isForeign) return 'Saved by collaborator'
+    if (inaccessibleCredentialName) return inaccessibleCredentialName
     return ''
-  }, [selectedCredential, isForeign])
+  }, [selectedCredentialSet, selectedCredential, inaccessibleCredentialName])
 
-  useEffect(() => {
-    if (!isEditing) {
-      setInputValue(resolvedLabel)
-    }
-  }, [resolvedLabel, isEditing])
+  const displayValue = isEditing ? editingValue : resolvedLabel
 
-  const invalidSelection =
-    !isPreview &&
-    Boolean(selectedId) &&
-    !selectedCredential &&
-    !hasForeignMeta &&
-    !credentialsLoading &&
-    !foreignMetaLoading
-
-  useEffect(() => {
-    if (!invalidSelection) return
-    logger.info('Clearing invalid credential selection - credential was disconnected', {
-      selectedId,
-      provider: effectiveProviderId,
-    })
-    setStoreValue('')
-  }, [invalidSelection, selectedId, effectiveProviderId, setStoreValue])
-
-  useCredentialRefreshTriggers(refetchCredentials, effectiveProviderId, provider)
+  useCredentialRefreshTriggers(refetchCredentials, effectiveProviderId, workspaceId)
+  const { navigateToSettings } = useSettingsNavigation()
 
   const handleOpenChange = useCallback(
     (isOpen: boolean) => {
@@ -135,7 +176,7 @@ export function CredentialSelector({
   const needsUpdate =
     hasSelection &&
     missingRequiredScopes.length > 0 &&
-    !disabled &&
+    !effectiveDisabled &&
     !isPreview &&
     !credentialsLoading
 
@@ -148,9 +189,31 @@ export function CredentialSelector({
     [isPreview, setStoreValue]
   )
 
+  const handleCredentialSetSelect = useCallback(
+    (credentialSetId: string) => {
+      if (isPreview) return
+      setStoreValue(`${CREDENTIAL_SET.PREFIX}${credentialSetId}`)
+      setIsEditing(false)
+    },
+    [isPreview, setStoreValue]
+  )
+
   const handleAddCredential = useCallback(() => {
-    setShowOAuthModal(true)
-  }, [])
+    writePendingCredentialCreateRequest({
+      workspaceId,
+      type: 'oauth',
+      providerId: effectiveProviderId,
+      displayName: '',
+      serviceId,
+      requiredScopes: getCanonicalScopesForProvider(effectiveProviderId),
+      requestedAt: Date.now(),
+      returnOrigin: activeWorkflowId
+        ? { type: 'workflow', workflowId: activeWorkflowId }
+        : undefined,
+    })
+
+    navigateToSettings({ section: 'integrations' })
+  }, [workspaceId, effectiveProviderId, serviceId, activeWorkflowId])
 
   const getProviderIcon = useCallback((providerName: OAuthProvider) => {
     const { baseProvider } = parseProvider(providerName)
@@ -159,7 +222,7 @@ export function CredentialSelector({
     if (!baseProviderConfig) {
       return <ExternalLink className='h-3 w-3' />
     }
-    return baseProviderConfig.icon({ className: 'h-3 w-3' })
+    return createElement(baseProviderConfig.icon, { className: 'h-3 w-3' })
   }, [])
 
   const getProviderName = useCallback((providerName: OAuthProvider) => {
@@ -176,36 +239,105 @@ export function CredentialSelector({
       .join(' ')
   }, [])
 
-  const comboboxOptions = useMemo(() => {
+  const { comboboxOptions, comboboxGroups } = useMemo(() => {
+    const pollingProviderId = getPollingProviderFromOAuth(effectiveProviderId)
+    // Handle both old ('gmail') and new ('google-email') provider IDs for backwards compatibility
+    const matchesProvider = (csProviderId: string | null) => {
+      if (!csProviderId || !pollingProviderId) return false
+      if (csProviderId === pollingProviderId) return true
+      // Handle legacy 'gmail' mapping to 'google-email'
+      if (pollingProviderId === 'google-email' && csProviderId === 'gmail') return true
+      return false
+    }
+    const filteredCredentialSets = pollingProviderId
+      ? credentialSets.filter((cs) => matchesProvider(cs.providerId))
+      : []
+
+    if (canUseCredentialSets && filteredCredentialSets.length > 0) {
+      const groups = []
+
+      groups.push({
+        section: 'Polling Groups',
+        items: filteredCredentialSets.map((cs) => ({
+          label: cs.name,
+          value: `${CREDENTIAL_SET.PREFIX}${cs.id}`,
+        })),
+      })
+
+      const credentialItems = credentials.map((cred) => ({
+        label: cred.name,
+        value: cred.id,
+      }))
+      credentialItems.push({
+        label:
+          credentials.length > 0
+            ? `Connect another ${getProviderName(provider)} account`
+            : `Connect ${getProviderName(provider)} account`,
+        value: '__connect_account__',
+      })
+
+      groups.push({
+        section: 'Personal Credential',
+        items: credentialItems,
+      })
+
+      return { comboboxOptions: [], comboboxGroups: groups }
+    }
+
     const options = credentials.map((cred) => ({
       label: cred.name,
       value: cred.id,
     }))
 
-    if (credentials.length === 0) {
-      options.push({
-        label: `Connect ${getProviderName(provider)} account`,
-        value: '__connect_account__',
-      })
-    }
+    options.push({
+      label:
+        credentials.length > 0
+          ? `Connect another ${getProviderName(provider)} account`
+          : `Connect ${getProviderName(provider)} account`,
+      value: '__connect_account__',
+    })
 
-    return options
-  }, [credentials, provider, getProviderName])
+    return { comboboxOptions: options, comboboxGroups: undefined }
+  }, [
+    credentials,
+    provider,
+    effectiveProviderId,
+    getProviderName,
+    canUseCredentialSets,
+    credentialSets,
+  ])
 
   const selectedCredentialProvider = selectedCredential?.provider ?? provider
 
   const overlayContent = useMemo(() => {
-    if (!inputValue) return null
+    if (!displayValue) return null
+
+    if (isCredentialSetSelected && selectedCredentialSet) {
+      return (
+        <div className='flex w-full items-center truncate'>
+          <div className='mr-2 flex-shrink-0 opacity-90'>
+            <Users className='h-3 w-3' />
+          </div>
+          <span className='truncate'>{displayValue}</span>
+        </div>
+      )
+    }
 
     return (
       <div className='flex w-full items-center truncate'>
         <div className='mr-2 flex-shrink-0 opacity-90'>
           {getProviderIcon(selectedCredentialProvider)}
         </div>
-        <span className='truncate'>{inputValue}</span>
+        <span className='truncate'>{displayValue}</span>
       </div>
     )
-  }, [getProviderIcon, inputValue, selectedCredentialProvider])
+  }, [
+    getProviderIcon,
+    displayValue,
+    selectedCredentialProvider,
+    isCredentialSetSelected,
+    selectedCredentialSet,
+  ])
 
   const handleComboboxChange = useCallback(
     (value: string) => {
@@ -214,40 +346,60 @@ export function CredentialSelector({
         return
       }
 
+      if (value.startsWith(CREDENTIAL_SET.PREFIX)) {
+        const credentialSetId = value.slice(CREDENTIAL_SET.PREFIX.length)
+        const matchedSet = credentialSets.find((cs) => cs.id === credentialSetId)
+        if (matchedSet) {
+          handleCredentialSetSelect(credentialSetId)
+          return
+        }
+      }
+
       const matchedCred = credentials.find((c) => c.id === value)
       if (matchedCred) {
-        setInputValue(matchedCred.name)
         handleSelect(value)
         return
       }
 
       setIsEditing(true)
-      setInputValue(value)
+      setEditingValue(value)
     },
-    [credentials, handleAddCredential, handleSelect]
+    [credentials, credentialSets, handleAddCredential, handleSelect, handleCredentialSetSelect]
   )
 
   return (
-    <>
+    <div>
       <Combobox
         options={comboboxOptions}
-        value={inputValue}
-        selectedValue={selectedId}
+        groups={comboboxGroups}
+        value={displayValue}
+        selectedValue={rawSelectedId}
         onChange={handleComboboxChange}
         onOpenChange={handleOpenChange}
-        placeholder={label}
-        disabled={disabled}
+        placeholder={
+          hasDependencies && !depsSatisfied ? 'Fill in required fields above first' : label
+        }
+        disabled={effectiveDisabled}
         editable={true}
         filterOptions={true}
         isLoading={credentialsLoading}
         overlayContent={overlayContent}
-        className={selectedId ? 'pl-[28px]' : ''}
+        className={overlayContent ? 'pl-[28px]' : ''}
       />
 
       {needsUpdate && (
-        <div className='mt-2 flex items-center justify-between rounded-[6px] border border-amber-300/40 bg-amber-50/60 px-2 py-1 font-medium text-[12px] transition-colors dark:bg-amber-950/10'>
-          <span>Additional permissions required</span>
-          {!isForeign && <Button onClick={() => setShowOAuthModal(true)}>Update access</Button>}
+        <div className='mt-[8px] flex flex-col gap-[4px] rounded-[4px] border bg-[var(--surface-2)] px-[8px] py-[6px]'>
+          <div className='flex items-center font-medium text-[12px]'>
+            <span className='mr-[6px] inline-block h-[6px] w-[6px] rounded-[2px] bg-amber-500' />
+            Additional permissions required
+          </div>
+          <Button
+            variant='active'
+            onClick={() => setShowOAuthModal(true)}
+            className='w-full px-[8px] py-[4px] font-medium text-[12px]'
+          >
+            Update access
+          </Button>
         </div>
       )}
 
@@ -259,55 +411,9 @@ export function CredentialSelector({
           toolName={getProviderName(provider)}
           requiredScopes={getCanonicalScopesForProvider(effectiveProviderId)}
           newScopes={missingRequiredScopes}
-          serviceId={effectiveServiceId}
+          serviceId={serviceId}
         />
       )}
-    </>
+    </div>
   )
-}
-
-function useCredentialRefreshTriggers(
-  refetchCredentials: () => Promise<unknown>,
-  effectiveProviderId?: string,
-  provider?: OAuthProvider
-) {
-  useEffect(() => {
-    const refresh = () => {
-      void refetchCredentials()
-    }
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        refresh()
-      }
-    }
-
-    const handlePageShow = (event: Event) => {
-      if ('persisted' in event && (event as PageTransitionEvent).persisted) {
-        refresh()
-      }
-    }
-
-    const handleCredentialDisconnected = (event: Event) => {
-      const customEvent = event as CustomEvent<{ providerId?: string }>
-      const providerId = customEvent.detail?.providerId
-
-      if (
-        providerId &&
-        (providerId === effectiveProviderId || (provider && providerId.startsWith(provider)))
-      ) {
-        refresh()
-      }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    window.addEventListener('pageshow', handlePageShow)
-    window.addEventListener('credential-disconnected', handleCredentialDisconnected)
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-      window.removeEventListener('pageshow', handlePageShow)
-      window.removeEventListener('credential-disconnected', handleCredentialDisconnected)
-    }
-  }, [refetchCredentials, effectiveProviderId, provider])
 }

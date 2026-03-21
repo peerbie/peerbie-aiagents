@@ -1,6 +1,7 @@
-import type {
-  SupabaseStorageUploadParams,
-  SupabaseStorageUploadResponse,
+import {
+  STORAGE_UPLOAD_OUTPUT_PROPERTIES,
+  type SupabaseStorageUploadParams,
+  type SupabaseStorageUploadResponse,
 } from '@/tools/supabase/types'
 import type { ToolConfig } from '@/tools/types'
 
@@ -26,17 +27,24 @@ export const storageUploadTool: ToolConfig<
       visibility: 'user-or-llm',
       description: 'The name of the storage bucket',
     },
+    fileName: {
+      type: 'string',
+      required: true,
+      visibility: 'user-or-llm',
+      description: 'The name of the file (e.g., "document.pdf", "image.jpg")',
+    },
     path: {
       type: 'string',
-      required: true,
+      required: false,
       visibility: 'user-or-llm',
-      description: 'The path where the file will be stored (e.g., "folder/file.jpg")',
+      description: 'Optional folder path (e.g., "folder/subfolder/")',
     },
-    fileContent: {
-      type: 'string',
+    fileData: {
+      type: 'json',
       required: true,
       visibility: 'user-or-llm',
-      description: 'The file content (base64 encoded for binary files, or plain text)',
+      description:
+        'File to upload - UserFile object (basic mode) or string content (advanced mode: base64 or plain text). Supports data URLs.',
     },
     contentType: {
       type: 'string',
@@ -59,58 +67,29 @@ export const storageUploadTool: ToolConfig<
   },
 
   request: {
-    url: (params) => {
-      return `https://${params.projectId}.supabase.co/storage/v1/object/${params.bucket}/${params.path}`
-    },
+    url: '/api/tools/supabase/storage-upload',
     method: 'POST',
-    headers: (params) => {
-      const headers: Record<string, string> = {
-        apikey: params.apiKey,
-        Authorization: `Bearer ${params.apiKey}`,
-      }
-
-      if (params.contentType) {
-        headers['Content-Type'] = params.contentType
-      }
-
-      if (params.upsert) {
-        headers['x-upsert'] = 'true'
-      }
-
-      return headers
-    },
-    body: (params) => {
-      // Return the file content wrapped in an object
-      // The actual upload will need to handle this appropriately
-      return {
-        content: params.fileContent,
-      }
-    },
-  },
-
-  transformResponse: async (response: Response) => {
-    let data
-    try {
-      data = await response.json()
-    } catch (parseError) {
-      throw new Error(`Failed to parse Supabase storage upload response: ${parseError}`)
-    }
-
-    return {
-      success: true,
-      output: {
-        message: 'Successfully uploaded file to storage',
-        results: data,
-      },
-      error: undefined,
-    }
+    headers: () => ({
+      'Content-Type': 'application/json',
+    }),
+    body: (params) => ({
+      projectId: params.projectId,
+      apiKey: params.apiKey,
+      bucket: params.bucket,
+      fileName: params.fileName,
+      path: params.path,
+      fileData: params.fileData,
+      contentType: params.contentType,
+      upsert: params.upsert,
+    }),
   },
 
   outputs: {
     message: { type: 'string', description: 'Operation status message' },
     results: {
       type: 'object',
-      description: 'Upload result including file path and metadata',
+      description: 'Upload result including file path, bucket, and public URL',
+      properties: STORAGE_UPLOAD_OUTPUT_PROPERTIES,
     },
   },
 }

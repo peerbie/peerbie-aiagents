@@ -1,14 +1,16 @@
 import { db } from '@sim/db'
-import { apiKey, workspace } from '@sim/db/schema'
+import { apiKey } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq, inArray } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createApiKey, getApiKeyDisplayFormat } from '@/lib/api-key/auth'
+import { AuditAction, AuditResourceType, recordAudit } from '@/lib/audit/log'
 import { getSession } from '@/lib/auth'
-import { createLogger } from '@/lib/logs/console/logger'
-import { getUserEntityPermissions } from '@/lib/permissions/utils'
-import { generateRequestId } from '@/lib/utils'
+import { PlatformEvents } from '@/lib/core/telemetry'
+import { generateRequestId } from '@/lib/core/utils/request'
+import { getUserEntityPermissions, getWorkspaceById } from '@/lib/workspaces/permissions/utils'
 
 const logger = createLogger('WorkspaceApiKeysAPI')
 
@@ -33,8 +35,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
     const userId = session.user.id
 
-    const ws = await db.select().from(workspace).where(eq(workspace.id, workspaceId)).limit(1)
-    if (!ws.length) {
+    const ws = await getWorkspaceById(workspaceId)
+    if (!ws) {
       return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
     }
 
@@ -98,23 +100,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    const workspaceRows = await db
-      .select({ billedAccountUserId: workspace.billedAccountUserId })
-      .from(workspace)
-      .where(eq(workspace.id, workspaceId))
-      .limit(1)
-
-    if (!workspaceRows.length) {
-      return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
-    }
-
-    if (workspaceRows[0].billedAccountUserId !== userId) {
-      return NextResponse.json(
-        { error: 'Only the workspace billing account can create workspace API keys' },
-        { status: 403 }
-      )
-    }
-
     const body = await request.json()
     const { name } = CreateKeySchema.parse(body)
 
@@ -164,7 +149,30 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         createdAt: apiKey.createdAt,
       })
 
+    try {
+      PlatformEvents.apiKeyGenerated({
+        userId: userId,
+        keyName: name,
+      })
+    } catch {
+      // Telemetry should not fail the operation
+    }
+
     logger.info(`[${requestId}] Created workspace API key: ${name} in workspace ${workspaceId}`)
+
+    recordAudit({
+      workspaceId,
+      actorId: userId,
+      actorName: session?.user?.name,
+      actorEmail: session?.user?.email,
+      action: AuditAction.API_KEY_CREATED,
+      resourceType: AuditResourceType.API_KEY,
+      resourceId: newKey.id,
+      resourceName: name,
+      description: `Created API key "${name}"`,
+      metadata: { keyName: name },
+      request,
+    })
 
     return NextResponse.json({
       key: {
@@ -202,23 +210,6 @@ export async function DELETE(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    const workspaceRows = await db
-      .select({ billedAccountUserId: workspace.billedAccountUserId })
-      .from(workspace)
-      .where(eq(workspace.id, workspaceId))
-      .limit(1)
-
-    if (!workspaceRows.length) {
-      return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
-    }
-
-    if (workspaceRows[0].billedAccountUserId !== userId) {
-      return NextResponse.json(
-        { error: 'Only the workspace billing account can delete workspace API keys' },
-        { status: 403 }
-      )
-    }
-
     const body = await request.json()
     const { keys } = DeleteKeysSchema.parse(body)
 
@@ -232,9 +223,33 @@ export async function DELETE(
         )
       )
 
+    try {
+      for (const keyId of keys) {
+        PlatformEvents.apiKeyRevoked({
+          userId: userId,
+          keyId: keyId,
+        })
+      }
+    } catch {
+      // Telemetry should not fail the operation
+    }
+
     logger.info(
       `[${requestId}] Deleted ${deletedCount} workspace API keys from workspace ${workspaceId}`
     )
+
+    recordAudit({
+      workspaceId,
+      actorId: userId,
+      actorName: session?.user?.name,
+      actorEmail: session?.user?.email,
+      action: AuditAction.API_KEY_REVOKED,
+      resourceType: AuditResourceType.API_KEY,
+      description: `Revoked ${deletedCount} API key(s)`,
+      metadata: { keyIds: keys, deletedCount },
+      request,
+    })
+
     return NextResponse.json({ success: true, deletedCount })
   } catch (error: unknown) {
     logger.error(`[${requestId}] Workspace API key DELETE error`, error)

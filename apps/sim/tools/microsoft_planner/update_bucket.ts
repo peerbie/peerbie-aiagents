@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   MicrosoftPlannerToolParams,
   MicrosoftPlannerUpdateBucketResponse,
@@ -32,8 +32,8 @@ export const updateBucketTool: ToolConfig<
     bucketId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the bucket to update',
+      visibility: 'user-or-llm',
+      description: 'The ID of the bucket to update (e.g., "hsOf2dhOJkC6Fey9VjDg1JgAC9Rq")',
     },
     name: {
       type: 'string',
@@ -120,6 +120,13 @@ export const updateBucketTool: ToolConfig<
   outputs: {
     success: { type: 'boolean', description: 'Whether the bucket was updated successfully' },
     bucket: { type: 'object', description: 'The updated bucket object with all properties' },
-    metadata: { type: 'object', description: 'Metadata including bucketId and planId' },
+    metadata: {
+      type: 'object',
+      description: 'Metadata including bucketId and planId',
+      properties: {
+        bucketId: { type: 'string', description: 'Updated bucket ID' },
+        planId: { type: 'string', description: 'Parent plan ID' },
+      },
+    },
   },
 }

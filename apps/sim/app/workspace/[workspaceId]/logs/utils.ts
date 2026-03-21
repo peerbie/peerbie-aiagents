@@ -1,7 +1,146 @@
+import React from 'react'
+import { format } from 'date-fns'
+import { Badge } from '@/components/emcn'
+import { formatDuration } from '@/lib/core/utils/formatting'
+import { getIntegrationMetadata } from '@/lib/logs/get-trigger-options'
+import { getBlock } from '@/blocks/registry'
+import { CORE_TRIGGER_TYPES } from '@/stores/logs/filters/types'
+
+export const LOG_COLUMNS = {
+  workflow: { width: 'w-[22%]', minWidth: 'min-w-[140px]', label: 'Workflow' },
+  date: { width: 'w-[18%]', minWidth: 'min-w-[140px]', label: 'Date' },
+  status: { width: 'w-[12%]', minWidth: 'min-w-[100px]', label: 'Status' },
+  cost: { width: 'w-[14%]', minWidth: 'min-w-[90px]', label: 'Cost' },
+  trigger: { width: 'w-[14%]', minWidth: 'min-w-[110px]', label: 'Trigger' },
+  duration: { width: 'w-[20%]', minWidth: 'min-w-[100px]', label: 'Duration' },
+} as const
+
+export type LogColumnKey = keyof typeof LOG_COLUMNS
+
+export const LOG_COLUMN_ORDER: readonly LogColumnKey[] = [
+  'workflow',
+  'date',
+  'status',
+  'cost',
+  'trigger',
+  'duration',
+] as const
+
+export const DELETED_WORKFLOW_LABEL = 'Deleted Workflow'
+export const DELETED_WORKFLOW_COLOR = 'var(--text-tertiary)'
+
+export type LogStatus = 'error' | 'pending' | 'running' | 'info' | 'cancelled'
+
 /**
- * Parse duration from various log data formats
+ * Maps raw status string to LogStatus for display.
+ * @param status - Raw status from API
+ * @returns Normalized LogStatus value
  */
-export function parseDuration(log: any): number | null {
+export function getDisplayStatus(status: string | null | undefined): LogStatus {
+  switch (status) {
+    case 'running':
+      return 'running'
+    case 'pending':
+      return 'pending'
+    case 'cancelled':
+      return 'cancelled'
+    case 'failed':
+      return 'error'
+    default:
+      return 'info'
+  }
+}
+
+export const STATUS_CONFIG: Record<
+  LogStatus,
+  { variant: React.ComponentProps<typeof Badge>['variant']; label: string; color: string }
+> = {
+  error: { variant: 'red', label: 'Error', color: 'var(--text-error)' },
+  pending: { variant: 'amber', label: 'Pending', color: '#f59e0b' },
+  running: { variant: 'amber', label: 'Running', color: '#f59e0b' },
+  cancelled: { variant: 'orange', label: 'Cancelled', color: '#f97316' },
+  info: { variant: 'gray', label: 'Info', color: 'var(--terminal-status-info-color)' },
+}
+
+const TRIGGER_VARIANT_MAP: Record<string, React.ComponentProps<typeof Badge>['variant']> = {
+  manual: 'gray-secondary',
+  api: 'blue',
+  schedule: 'green',
+  chat: 'purple',
+  webhook: 'orange',
+  mcp: 'cyan',
+  a2a: 'teal',
+  copilot: 'pink',
+  mothership: 'pink',
+  workflow: 'blue-secondary',
+}
+
+interface StatusBadgeProps {
+  status: LogStatus
+}
+
+/**
+ * Renders a colored badge indicating log execution status.
+ * @param props - Component props containing the status
+ * @returns A Badge with dot indicator and status label
+ */
+export const StatusBadge = React.memo(({ status }: StatusBadgeProps) => {
+  const config = STATUS_CONFIG[status]
+  return React.createElement(
+    Badge,
+    { variant: config.variant, dot: true, size: 'sm' },
+    config.label
+  )
+})
+
+StatusBadge.displayName = 'StatusBadge'
+
+interface TriggerBadgeProps {
+  trigger: string
+}
+
+/**
+ * Renders a colored badge indicating the workflow trigger type.
+ * Core triggers display with their designated colors; integrations show with icons.
+ * @param props - Component props containing the trigger type
+ * @returns A Badge with appropriate styling for the trigger type
+ */
+export const TriggerBadge = React.memo(({ trigger }: TriggerBadgeProps) => {
+  const metadata = getIntegrationMetadata(trigger)
+  const isIntegration = !(CORE_TRIGGER_TYPES as readonly string[]).includes(trigger)
+  const block = isIntegration ? getBlock(trigger) : null
+  const IconComponent = block?.icon
+
+  const coreVariant = TRIGGER_VARIANT_MAP[trigger]
+  if (coreVariant) {
+    return React.createElement(Badge, { variant: coreVariant, size: 'sm' }, metadata.label)
+  }
+
+  if (IconComponent) {
+    return React.createElement(
+      Badge,
+      { variant: 'gray-secondary', size: 'sm', icon: IconComponent },
+      metadata.label
+    )
+  }
+
+  return React.createElement(Badge, { variant: 'gray-secondary', size: 'sm' }, metadata.label)
+})
+
+TriggerBadge.displayName = 'TriggerBadge'
+
+interface LogWithDuration {
+  totalDurationMs?: number | string
+  duration?: number | string
+}
+
+/**
+ * Parse duration from various log data formats.
+ * Handles both numeric and string duration values.
+ * @param log - Log object containing duration information
+ * @returns Duration in milliseconds or null if not available
+ */
+export function parseDuration(log: LogWithDuration): number | null {
   let durationCandidate: number | null = null
 
   if (typeof log.totalDurationMs === 'number') {
@@ -17,17 +156,41 @@ export function parseDuration(log: any): number | null {
   return Number.isFinite(durationCandidate) ? durationCandidate : null
 }
 
+interface TraceSpan {
+  output?: Record<string, unknown>
+  status?: string
+  error?: unknown
+}
+
+interface BlockExecution {
+  outputData?: unknown
+  errorMessage?: string
+}
+
+interface LogWithExecutionData {
+  executionData?: {
+    finalOutput?: unknown
+    traceSpans?: TraceSpan[]
+    blockExecutions?: BlockExecution[]
+    output?: unknown
+  }
+  output?: string
+  message?: string
+}
+
 /**
- * Extract output from various sources in execution data
+ * Extract output from various sources in execution data.
  * Checks multiple locations in priority order:
  * 1. executionData.finalOutput
  * 2. output (as string)
  * 3. executionData.traceSpans (iterates through spans)
  * 4. executionData.blockExecutions (last block)
  * 5. message (fallback)
+ * @param log - Log object containing execution data
+ * @returns Extracted output value or null
  */
-export function extractOutput(log: any): any {
-  let output: any = null
+export function extractOutput(log: LogWithExecutionData): unknown {
+  let output: unknown = null
 
   // Check finalOutput first
   if (log.executionData?.finalOutput !== undefined) {
@@ -39,15 +202,16 @@ export function extractOutput(log: any): any {
     output = log.output
   } else if (log.executionData?.traceSpans && Array.isArray(log.executionData.traceSpans)) {
     // Search through trace spans
-    const spans: any[] = log.executionData.traceSpans
+    const spans = log.executionData.traceSpans
     for (let i = spans.length - 1; i >= 0; i--) {
       const s = spans[i]
       if (s?.output && Object.keys(s.output).length > 0) {
         output = s.output
         break
       }
-      if (s?.status === 'error' && (s?.output?.error || s?.error)) {
-        output = s.output?.error || s.error
+      const outputWithError = s?.output as Record<string, unknown> | undefined
+      if (s?.status === 'error' && (outputWithError?.error || s?.error)) {
+        output = outputWithError?.error || s.error
         break
       }
     }
@@ -74,34 +238,64 @@ export function extractOutput(log: any): any {
   return output
 }
 
-/**
- * Map raw log data to ExecutionLog format
- */
+/** Execution log cost breakdown */
+interface ExecutionCost {
+  input: number
+  output: number
+  total: number
+}
+
+/** Mapped execution log format for UI consumption */
 export interface ExecutionLog {
   id: string
   executionId: string
   startedAt: string
   level: string
+  status: string
   trigger: string
   triggerUserId: string | null
-  triggerInputs: any
-  outputs: any
+  triggerInputs?: unknown
+  outputs?: unknown
   errorMessage: string | null
   duration: number | null
-  cost: {
-    input: number
-    output: number
-    total: number
-  } | null
+  cost: ExecutionCost | null
   workflowName?: string
   workflowColor?: string
   hasPendingPause?: boolean
 }
 
+/** Raw API log response structure */
+interface RawLogResponse extends LogWithDuration, LogWithExecutionData {
+  id: string
+  executionId: string
+  startedAt?: string
+  endedAt?: string
+  createdAt?: string
+  level?: string
+  status?: string
+  trigger?: string
+  triggerUserId?: string | null
+  error?: string
+  cost?: {
+    input?: number
+    output?: number
+    total?: number
+  }
+  workflowName?: string
+  workflowColor?: string
+  workflow?: {
+    name?: string
+    color?: string
+  }
+  hasPendingPause?: boolean
+}
+
 /**
- * Convert raw API log response to ExecutionLog format
+ * Convert raw API log response to ExecutionLog format.
+ * @param log - Raw log response from API
+ * @returns Formatted execution log
  */
-export function mapToExecutionLog(log: any): ExecutionLog {
+export function mapToExecutionLog(log: RawLogResponse): ExecutionLog {
   const started = log.startedAt
     ? new Date(log.startedAt)
     : log.endedAt
@@ -119,6 +313,7 @@ export function mapToExecutionLog(log: any): ExecutionLog {
     executionId: log.executionId,
     startedAt,
     level: log.level || 'info',
+    status: log.status || 'completed',
     trigger: log.trigger || 'manual',
     triggerUserId: log.triggerUserId || null,
     triggerInputs: undefined,
@@ -139,18 +334,21 @@ export function mapToExecutionLog(log: any): ExecutionLog {
 }
 
 /**
- * Alternative version that uses createdAt as fallback for startedAt
- * (used in some API responses)
+ * Alternative version that uses createdAt as fallback for startedAt.
+ * Used in some API responses.
+ * @param log - Raw log response from API
+ * @returns Formatted execution log
  */
-export function mapToExecutionLogAlt(log: any): ExecutionLog {
+export function mapToExecutionLogAlt(log: RawLogResponse): ExecutionLog {
   const duration = parseDuration(log)
   const output = extractOutput(log)
 
   return {
     id: log.id,
     executionId: log.executionId,
-    startedAt: log.createdAt || log.startedAt,
+    startedAt: log.createdAt || log.startedAt || new Date().toISOString(),
     level: log.level || 'info',
+    status: log.status || 'completed',
     trigger: log.trigger || 'manual',
     triggerUserId: log.triggerUserId || null,
     triggerInputs: undefined,
@@ -170,7 +368,15 @@ export function mapToExecutionLogAlt(log: any): ExecutionLog {
   }
 }
 
-import { format } from 'date-fns'
+/**
+ * Format latency value for display in dashboard UI
+ * @param ms - Latency in milliseconds (number)
+ * @returns Formatted latency string
+ */
+export function formatLatency(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '—'
+  return formatDuration(ms, { precision: 2 }) ?? '—'
+}
 
 export const formatDate = (dateString: string) => {
   const date = new Date(dateString)
@@ -193,7 +399,7 @@ export const formatDate = (dateString: string) => {
     formatted: format(date, 'HH:mm:ss'),
     compact: format(date, 'MMM d HH:mm:ss'),
     compactDate: format(date, 'MMM d').toUpperCase(),
-    compactTime: format(date, 'HH:mm:ss'),
+    compactTime: format(date, 'h:mm a'),
     relative: (() => {
       const now = new Date()
       const diffMs = now.getTime() - date.getTime()

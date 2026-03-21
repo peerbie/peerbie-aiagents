@@ -1,8 +1,9 @@
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
 import { authorizeCredentialUse } from '@/lib/auth/credential-access'
-import { createLogger } from '@/lib/logs/console/logger'
-import { validateAlphanumericId } from '@/lib/security/input-validation'
-import { generateRequestId } from '@/lib/utils'
+import { checkSessionOrInternalAuth } from '@/lib/auth/hybrid'
+import { validateAlphanumericId } from '@/lib/core/security/input-validation'
+import { generateRequestId } from '@/lib/core/utils/request'
 import { refreshAccessTokenIfNeeded } from '@/app/api/auth/oauth/utils'
 export const dynamic = 'force-dynamic'
 
@@ -14,6 +15,11 @@ const logger = createLogger('GoogleDriveFileAPI')
 export async function GET(request: NextRequest) {
   const requestId = generateRequestId()
   logger.info(`[${requestId}] Google Drive file request received`)
+
+  const auth = await checkSessionOrInternalAuth(request)
+  if (!auth.success || !auth.userId) {
+    return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 })
+  }
 
   try {
     const { searchParams } = new URL(request.url)
@@ -56,6 +62,35 @@ export async function GET(request: NextRequest) {
         },
       }
     )
+
+    if (!response.ok && response.status === 404) {
+      logger.info(`[${requestId}] File not found, checking if it's a shared drive`)
+      const driveResponse = await fetch(
+        `https://www.googleapis.com/drive/v3/drives/${fileId}?fields=id,name`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      )
+
+      if (driveResponse.ok) {
+        const driveData = await driveResponse.json()
+        logger.info(`[${requestId}] Found shared drive: ${driveData.name}`)
+        return NextResponse.json(
+          {
+            file: {
+              id: driveData.id,
+              name: driveData.name,
+              mimeType: 'application/vnd.google-apps.folder',
+              iconLink:
+                'https://ssl.gstatic.com/docs/doclist/images/icon_11_shared_collection_list_1.png',
+            },
+          },
+          { status: 200 }
+        )
+      }
+    }
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ error: { message: 'Unknown error' } }))
@@ -112,12 +147,12 @@ export async function GET(request: NextRequest) {
       if (!file.exportLinks) {
         file.downloadUrl = `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=${encodeURIComponent(
           format
-        )}`
+        )}&supportsAllDrives=true`
       } else {
         file.downloadUrl = file.exportLinks[format]
       }
     } else {
-      file.downloadUrl = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`
+      file.downloadUrl = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media&supportsAllDrives=true`
     }
 
     return NextResponse.json({ file }, { status: 200 })

@@ -29,19 +29,20 @@ export const asanaGetTaskTool: ToolConfig<AsanaGetTaskParams, AsanaGetTaskRespon
     workspace: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Workspace GID to filter tasks (required when not using taskGid)',
+      visibility: 'user-or-llm',
+      description:
+        'Asana workspace GID (numeric string) to filter tasks (required when not using taskGid)',
     },
     project: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Project GID to filter tasks',
+      visibility: 'user-or-llm',
+      description: 'Asana project GID (numeric string) to filter tasks',
     },
     limit: {
       type: 'number',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Maximum number of tasks to return (default: 50)',
     },
   },
@@ -67,32 +68,59 @@ export const asanaGetTaskTool: ToolConfig<AsanaGetTaskParams, AsanaGetTaskRespon
     if (!responseText) {
       return {
         success: false,
+        output: {},
         error: 'Empty response from Asana',
       }
     }
 
     const data = JSON.parse(responseText)
-
-    if (data.success && data.output) {
-      return data
-    }
-
+    const { success, error, ...output } = data
     return {
-      success: data.success || false,
-      output: data.output || null,
-      error: data.error,
+      success: success ?? true,
+      output,
+      error,
     }
   },
 
   outputs: {
-    success: {
-      type: 'boolean',
-      description: 'Operation success status',
-    },
-    output: {
+    success: { type: 'boolean', description: 'Operation success status' },
+    ts: { type: 'string', description: 'Timestamp of the response' },
+    gid: { type: 'string', description: 'Task globally unique identifier' },
+    resource_type: { type: 'string', description: 'Resource type (task)' },
+    resource_subtype: { type: 'string', description: 'Resource subtype' },
+    name: { type: 'string', description: 'Task name' },
+    notes: { type: 'string', description: 'Task notes or description' },
+    completed: { type: 'boolean', description: 'Whether the task is completed' },
+    assignee: {
       type: 'object',
-      description:
-        'Single task details or array of tasks, depending on whether taskGid was provided',
+      description: 'Assignee details',
+      properties: {
+        gid: { type: 'string', description: 'Assignee GID' },
+        name: { type: 'string', description: 'Assignee name' },
+      },
+    },
+    created_by: {
+      type: 'object',
+      description: 'Creator details',
+      properties: {
+        gid: { type: 'string', description: 'Creator GID' },
+        name: { type: 'string', description: 'Creator name' },
+      },
+    },
+    due_on: { type: 'string', description: 'Due date (YYYY-MM-DD)' },
+    created_at: { type: 'string', description: 'Task creation timestamp' },
+    modified_at: { type: 'string', description: 'Task last modified timestamp' },
+    tasks: {
+      type: 'array',
+      description: 'Array of tasks (when fetching multiple)',
+      items: {
+        type: 'object',
+        properties: {
+          gid: { type: 'string', description: 'Task GID' },
+          name: { type: 'string', description: 'Task name' },
+          completed: { type: 'boolean', description: 'Completion status' },
+        },
+      },
     },
   },
 }

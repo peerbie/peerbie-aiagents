@@ -26,18 +26,17 @@
 
 import * as React from 'react'
 import { Check, GripHorizontal, Pencil, X } from 'lucide-react'
-import { Button } from '@/components/emcn'
+import { Button, Textarea } from '@/components/emcn'
 import { Trash } from '@/components/emcn/icons/trash'
-import { Textarea } from '@/components/ui'
-import { cn } from '@/lib/utils'
-import CopilotMarkdownRenderer from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/copilot/components/copilot-message/components/markdown-renderer'
+import { cn } from '@/lib/core/utils/cn'
+import { CopilotMarkdownRenderer } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/copilot/components/copilot-message/components/markdown-renderer'
 
 /**
  * Shared border and background styles
  */
-const SURFACE_5 = 'bg-[var(--surface-5)] dark:bg-[var(--surface-5)]'
-const SURFACE_9 = 'bg-[var(--surface-9)] dark:bg-[var(--surface-9)]'
-const BORDER_STRONG = 'border-[var(--border-strong)] dark:border-[var(--border-strong)]'
+const SURFACE_5 = 'bg-[var(--surface-4)]'
+const SURFACE_9 = 'bg-[var(--surface-5)]'
+const BORDER_STRONG = 'border-[var(--border-1)]'
 
 export interface PlanModeSectionProps {
   /**
@@ -98,15 +97,13 @@ const PlanModeSection: React.FC<PlanModeSectionProps> = ({
   const [isResizing, setIsResizing] = React.useState(false)
   const [isEditing, setIsEditing] = React.useState(false)
   const [editedContent, setEditedContent] = React.useState(content)
+  const [prevContent, setPrevContent] = React.useState(content)
+  if (!isEditing && content !== prevContent) {
+    setPrevContent(content)
+    setEditedContent(content)
+  }
   const resizeStartRef = React.useRef({ y: 0, startHeight: 0 })
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
-
-  // Update edited content when content prop changes
-  React.useEffect(() => {
-    if (!isEditing) {
-      setEditedContent(content)
-    }
-  }, [content, isEditing])
 
   const handleResizeStart = React.useCallback(
     (e: React.MouseEvent) => {
@@ -184,8 +181,8 @@ const PlanModeSection: React.FC<PlanModeSectionProps> = ({
       style={{ height: `${height}px` }}
     >
       {/* Header with build/edit/save/clear buttons */}
-      <div className='flex flex-shrink-0 items-center justify-between border-[var(--border-strong)] border-b py-[6px] pr-[2px] pl-[12px] dark:border-[var(--border-strong)]'>
-        <span className='font-[500] text-[11px] text-[var(--text-secondary)] uppercase tracking-wide dark:text-[var(--text-secondary)]'>
+      <div className='flex flex-shrink-0 items-center justify-between border-[var(--border-1)] border-b py-[6px] pr-[2px] pl-[12px]'>
+        <span className='font-[500] text-[11px] text-[var(--text-secondary)] uppercase tracking-wide'>
           Workflow Plan
         </span>
         <div className='ml-auto flex items-center gap-[4px]'>
@@ -252,7 +249,7 @@ const PlanModeSection: React.FC<PlanModeSectionProps> = ({
             ref={textareaRef}
             value={editedContent}
             onChange={(e) => setEditedContent(e.target.value)}
-            className='h-full min-h-full w-full resize-none border-0 bg-transparent p-0 font-[470] font-season text-[13px] text-[var(--text-primary)] leading-[1.4rem] outline-none ring-0 focus-visible:ring-0 focus-visible:ring-offset-0 dark:text-[var(--text-primary)]'
+            className='h-full min-h-full w-full resize-none border-0 bg-transparent p-0 font-[470] font-season text-[13px] text-[var(--text-primary)] leading-[1.4rem] outline-none ring-0 focus-visible:ring-0 focus-visible:ring-offset-0'
             placeholder='Enter your workflow plan...'
           />
         ) : (
@@ -265,7 +262,7 @@ const PlanModeSection: React.FC<PlanModeSectionProps> = ({
         className={cn(
           'group flex h-[20px] w-full cursor-ns-resize items-center justify-center border-t',
           BORDER_STRONG,
-          'transition-colors hover:bg-[var(--surface-9)] dark:hover:bg-[var(--surface-9)]',
+          'transition-colors hover:bg-[var(--surface-5)]',
           isResizing && SURFACE_9
         )}
         onMouseDown={handleResizeStart}
@@ -273,7 +270,7 @@ const PlanModeSection: React.FC<PlanModeSectionProps> = ({
         aria-orientation='horizontal'
         aria-label='Resize plan section'
       >
-        <GripHorizontal className='h-3 w-3 text-[var(--text-secondary)] transition-colors group-hover:text-[var(--text-primary)] dark:text-[var(--text-secondary)] dark:group-hover:text-[var(--text-primary)]' />
+        <GripHorizontal className='h-3 w-3 text-[var(--text-secondary)] transition-colors group-hover:text-[var(--text-primary)]' />
       </div>
     </div>
   )

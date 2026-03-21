@@ -1,4 +1,9 @@
-import type { GoogleSheetsReadResponse, GoogleSheetsToolParams } from '@/tools/google_sheets/types'
+import type {
+  GoogleSheetsReadResponse,
+  GoogleSheetsToolParams,
+  GoogleSheetsV2ReadResponse,
+  GoogleSheetsV2ToolParams,
+} from '@/tools/google_sheets/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const readTool: ToolConfig<GoogleSheetsToolParams, GoogleSheetsReadResponse> = {
@@ -22,14 +27,16 @@ export const readTool: ToolConfig<GoogleSheetsToolParams, GoogleSheetsReadRespon
     spreadsheetId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the spreadsheet to read from',
+      visibility: 'user-or-llm',
+      description:
+        'The ID of the spreadsheet (found in the URL: docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit).',
     },
     range: {
       type: 'string',
       required: false,
       visibility: 'user-or-llm',
-      description: 'The range of cells to read from',
+      description:
+        'The A1 notation range to read (e.g. "Sheet1!A1:D10", "A1:B5"). Defaults to first sheet A1:Z1000 if not specified.',
     },
   },
 
@@ -99,6 +106,173 @@ export const readTool: ToolConfig<GoogleSheetsToolParams, GoogleSheetsReadRespon
 
   outputs: {
     data: { type: 'json', description: 'Sheet data including range and cell values' },
-    metadata: { type: 'json', description: 'Spreadsheet metadata including ID and URL' },
+    metadata: {
+      type: 'json',
+      description: 'Spreadsheet metadata including ID and URL',
+      properties: {
+        spreadsheetId: { type: 'string', description: 'Google Sheets spreadsheet ID' },
+        spreadsheetUrl: { type: 'string', description: 'Spreadsheet URL' },
+      },
+    },
+  },
+}
+
+export const readV2Tool: ToolConfig<GoogleSheetsV2ToolParams, GoogleSheetsV2ReadResponse> = {
+  id: 'google_sheets_read_v2',
+  name: 'Read from Google Sheets V2',
+  description: 'Read data from a specific sheet in a Google Sheets spreadsheet',
+  version: '2.0.0',
+
+  oauth: {
+    required: true,
+    provider: 'google-sheets',
+  },
+
+  params: {
+    accessToken: {
+      type: 'string',
+      required: true,
+      visibility: 'hidden',
+      description: 'The access token for the Google Sheets API',
+    },
+    spreadsheetId: {
+      type: 'string',
+      required: true,
+      visibility: 'user-or-llm',
+      description: 'Google Sheets spreadsheet ID',
+    },
+    sheetName: {
+      type: 'string',
+      required: true,
+      visibility: 'user-or-llm',
+      description: 'The name of the sheet/tab to read from',
+    },
+    cellRange: {
+      type: 'string',
+      required: false,
+      visibility: 'user-or-llm',
+      description:
+        'The cell range to read (e.g. "A1:D10"). Defaults to "A1:Z1000" if not specified.',
+    },
+    filterColumn: {
+      type: 'string',
+      required: false,
+      visibility: 'user-or-llm',
+      description:
+        'Column name (from header row) to filter on. If not provided, no filtering is applied.',
+    },
+    filterValue: {
+      type: 'string',
+      required: false,
+      visibility: 'user-or-llm',
+      description: 'Value to match against the filter column.',
+    },
+    filterMatchType: {
+      type: 'string',
+      required: false,
+      visibility: 'user-or-llm',
+      description:
+        'How to match the filter value: "contains", "exact", "starts_with", or "ends_with". Defaults to "contains".',
+    },
+  },
+
+  request: {
+    url: (params) => {
+      const spreadsheetId = params.spreadsheetId?.trim()
+      if (!spreadsheetId) {
+        throw new Error('Spreadsheet ID is required')
+      }
+
+      const sheetName = params.sheetName?.trim()
+      if (!sheetName) {
+        throw new Error('Sheet name is required')
+      }
+
+      const cellRange = params.cellRange?.trim() || 'A1:Z1000'
+      const fullRange = `${sheetName}!${cellRange}`
+
+      return `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(fullRange)}`
+    },
+    method: 'GET',
+    headers: (params) => {
+      if (!params.accessToken) {
+        throw new Error('Access token is required')
+      }
+
+      return {
+        Authorization: `Bearer ${params.accessToken}`,
+      }
+    },
+  },
+
+  transformResponse: async (response: Response, params?: GoogleSheetsV2ToolParams) => {
+    const data = await response.json()
+
+    const urlParts = typeof response.url === 'string' ? response.url.split('/spreadsheets/') : []
+    const spreadsheetId = urlParts[1]?.split('/')[0] || ''
+
+    const metadata = {
+      spreadsheetId,
+      spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}`,
+    }
+
+    let values: unknown[][] = data.values ?? []
+
+    // Apply client-side filtering only when both filterColumn and filterValue are provided
+    if (params?.filterColumn && params?.filterValue !== undefined && values.length > 1) {
+      const headers = values[0] as string[]
+      const columnIndex = headers.findIndex(
+        (h) => String(h).toLowerCase() === params.filterColumn!.toLowerCase()
+      )
+
+      if (columnIndex !== -1) {
+        const matchType = params.filterMatchType ?? 'contains'
+        const filterVal = params.filterValue.toLowerCase()
+
+        const filteredRows = values.slice(1).filter((row) => {
+          const cellValue = String(row[columnIndex] ?? '').toLowerCase()
+          switch (matchType) {
+            case 'exact':
+              return cellValue === filterVal
+            case 'starts_with':
+              return cellValue.startsWith(filterVal)
+            case 'ends_with':
+              return cellValue.endsWith(filterVal)
+            default:
+              return cellValue.includes(filterVal)
+          }
+        })
+
+        // Return header row + matching rows
+        values = [values[0], ...filteredRows]
+      }
+    }
+
+    return {
+      success: true,
+      output: {
+        sheetName: params?.sheetName ?? '',
+        range: data.range ?? '',
+        values,
+        metadata: {
+          spreadsheetId: metadata.spreadsheetId,
+          spreadsheetUrl: metadata.spreadsheetUrl,
+        },
+      },
+    }
+  },
+
+  outputs: {
+    sheetName: { type: 'string', description: 'Name of the sheet that was read' },
+    range: { type: 'string', description: 'The range of cells that was read' },
+    values: { type: 'array', description: 'The cell values as a 2D array' },
+    metadata: {
+      type: 'json',
+      description: 'Spreadsheet metadata including ID and URL',
+      properties: {
+        spreadsheetId: { type: 'string', description: 'Google Sheets spreadsheet ID' },
+        spreadsheetUrl: { type: 'string', description: 'Spreadsheet URL' },
+      },
+    },
   },
 }

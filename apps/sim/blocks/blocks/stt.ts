@@ -1,11 +1,13 @@
 import { STTIcon } from '@/components/icons'
 import { AuthMode, type BlockConfig } from '@/blocks/types'
+import { createVersionedToolSelector, normalizeFileInput } from '@/blocks/utils'
 import type { SttBlockResponse } from '@/tools/stt/types'
 
 export const SttBlock: BlockConfig<SttBlockResponse> = {
   type: 'stt',
   name: 'Speech-to-Text',
   description: 'Convert speech to text using AI',
+  hideFromToolbar: true,
   authMode: AuthMode.ApiKey,
   longDescription:
     'Transcribe audio and video files to text using leading AI providers. Supports multiple languages, timestamps, and speaker diarization.',
@@ -80,10 +82,7 @@ export const SttBlock: BlockConfig<SttBlockResponse> = {
       title: 'Model',
       type: 'dropdown',
       condition: { field: 'provider', value: 'assemblyai' },
-      options: [
-        { label: 'Best', id: 'best' },
-        { label: 'Nano', id: 'nano' },
-      ],
+      options: [{ label: 'Best', id: 'best' }],
       value: () => 'best',
       required: true,
     },
@@ -95,6 +94,7 @@ export const SttBlock: BlockConfig<SttBlockResponse> = {
       type: 'dropdown',
       condition: { field: 'provider', value: 'gemini' },
       options: [
+        { label: 'Gemini 3.1 Pro', id: 'gemini-3.1-pro-preview' },
         { label: 'Gemini 3 Pro', id: 'gemini-3-pro-preview' },
         { label: 'Gemini 2.5 Pro', id: 'gemini-2.5-pro' },
         { label: 'Gemini 2.5 Flash', id: 'gemini-2.5-flash' },
@@ -259,22 +259,28 @@ export const SttBlock: BlockConfig<SttBlockResponse> = {
             return 'stt_whisper'
         }
       },
-      params: (params) => ({
-        provider: params.provider,
-        apiKey: params.apiKey,
-        model: params.model,
-        audioFile: params.audioFile,
-        audioFileReference: params.audioFileReference,
-        audioUrl: params.audioUrl,
-        language: params.language,
-        timestamps: params.timestamps,
-        diarization: params.diarization,
-        translateToEnglish: params.translateToEnglish,
-        sentiment: params.sentiment,
-        entityDetection: params.entityDetection,
-        piiRedaction: params.piiRedaction,
-        summarization: params.summarization,
-      }),
+      params: (params) => {
+        // Normalize file input - audioFile is the canonical param for both basic and advanced modes
+        const audioFile = normalizeFileInput(params.audioFile, {
+          single: true,
+        })
+
+        return {
+          provider: params.provider,
+          apiKey: params.apiKey,
+          model: params.model,
+          audioFile,
+          audioUrl: params.audioUrl,
+          language: params.language,
+          timestamps: params.timestamps,
+          diarization: params.diarization,
+          translateToEnglish: params.translateToEnglish,
+          sentiment: params.sentiment,
+          entityDetection: params.entityDetection,
+          piiRedaction: params.piiRedaction,
+          summarization: params.summarization,
+        }
+      },
     },
   },
 
@@ -290,7 +296,6 @@ export const SttBlock: BlockConfig<SttBlockResponse> = {
         'Provider-specific model (e.g., scribe_v1 for ElevenLabs, nova-3 for Deepgram, best for AssemblyAI, gemini-2.0-flash-exp for Gemini)',
     },
     audioFile: { type: 'json', description: 'Audio/video file (UserFile)' },
-    audioFileReference: { type: 'json', description: 'Audio/video file reference' },
     audioUrl: { type: 'string', description: 'Audio/video URL' },
     language: { type: 'string', description: 'Language code or auto' },
     timestamps: { type: 'string', description: 'Timestamp granularity (none, sentence, word)' },
@@ -304,15 +309,110 @@ export const SttBlock: BlockConfig<SttBlockResponse> = {
 
   outputs: {
     transcript: { type: 'string', description: 'Full transcribed text' },
-    segments: { type: 'array', description: 'Timestamped segments with speaker labels' },
+    segments: {
+      type: 'array',
+      description: 'Timestamped segments with speaker labels',
+      condition: { field: 'timestamps', value: 'none', not: true },
+    },
     language: { type: 'string', description: 'Detected or specified language' },
     duration: { type: 'number', description: 'Audio duration in seconds' },
     confidence: {
       type: 'number',
-      description: 'Overall confidence score (Deepgram, AssemblyAI only)',
+      description: 'Overall confidence score',
+      condition: { field: 'provider', value: ['deepgram', 'assemblyai', 'gemini'] },
     },
-    sentiment: { type: 'array', description: 'Sentiment analysis results (AssemblyAI only)' },
-    entities: { type: 'array', description: 'Detected entities (AssemblyAI only)' },
-    summary: { type: 'string', description: 'Auto-generated summary (AssemblyAI only)' },
+    sentiment: {
+      type: 'array',
+      description: 'Sentiment analysis results',
+      condition: {
+        field: 'provider',
+        value: 'assemblyai',
+        and: { field: 'sentiment', value: true },
+      },
+    },
+    entities: {
+      type: 'array',
+      description: 'Detected entities',
+      condition: {
+        field: 'provider',
+        value: 'assemblyai',
+        and: { field: 'entityDetection', value: true },
+      },
+    },
+    summary: {
+      type: 'string',
+      description: 'Auto-generated summary',
+      condition: {
+        field: 'provider',
+        value: 'assemblyai',
+        and: { field: 'summarization', value: true },
+      },
+    },
   },
+}
+
+const sttV2Inputs = SttBlock.inputs
+  ? Object.fromEntries(Object.entries(SttBlock.inputs).filter(([key]) => key !== 'audioUrl'))
+  : {}
+const sttV2SubBlocks = (SttBlock.subBlocks || []).filter((subBlock) => subBlock.id !== 'audioUrl')
+
+export const SttV2Block: BlockConfig<SttBlockResponse> = {
+  ...SttBlock,
+  type: 'stt_v2',
+  name: 'Speech-to-Text',
+  hideFromToolbar: false,
+  subBlocks: sttV2SubBlocks,
+  tools: {
+    access: [
+      'stt_whisper_v2',
+      'stt_deepgram_v2',
+      'stt_elevenlabs_v2',
+      'stt_assemblyai_v2',
+      'stt_gemini_v2',
+    ],
+    config: {
+      tool: createVersionedToolSelector({
+        baseToolSelector: (params) => {
+          switch (params.provider) {
+            case 'whisper':
+              return 'stt_whisper'
+            case 'deepgram':
+              return 'stt_deepgram'
+            case 'elevenlabs':
+              return 'stt_elevenlabs'
+            case 'assemblyai':
+              return 'stt_assemblyai'
+            case 'gemini':
+              return 'stt_gemini'
+            default:
+              return 'stt_whisper'
+          }
+        },
+        suffix: '_v2',
+        fallbackToolId: 'stt_whisper_v2',
+      }),
+      params: (params) => {
+        // Normalize file input - audioFile is the canonical param for both basic and advanced modes
+        const audioFile = normalizeFileInput(params.audioFile, {
+          single: true,
+        })
+
+        return {
+          provider: params.provider,
+          apiKey: params.apiKey,
+          model: params.model,
+          audioFile,
+          language: params.language,
+          timestamps: params.timestamps,
+          diarization: params.diarization,
+          translateToEnglish: params.translateToEnglish,
+          sentiment: params.sentiment,
+          entityDetection: params.entityDetection,
+          piiRedaction: params.piiRedaction,
+          summarization: params.summarization,
+        }
+      },
+    },
+  },
+  inputs: sttV2Inputs,
 }

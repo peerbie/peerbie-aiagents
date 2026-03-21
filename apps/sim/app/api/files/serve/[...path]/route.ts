@@ -1,8 +1,8 @@
 import { readFile } from 'fs/promises'
+import { createLogger } from '@sim/logger'
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
-import { checkHybridAuth } from '@/lib/auth/hybrid'
-import { createLogger } from '@/lib/logs/console/logger'
+import { checkSessionOrInternalAuth } from '@/lib/auth/hybrid'
 import { CopilotFiles, isUsingCloudStorage } from '@/lib/uploads'
 import type { StorageContext } from '@/lib/uploads/config'
 import { downloadFile } from '@/lib/uploads/core/storage-service'
@@ -17,6 +17,12 @@ import {
 } from '@/app/api/files/utils'
 
 const logger = createLogger('FilesServeAPI')
+
+const STORAGE_KEY_PREFIX_RE = /^\d{13}-[a-z0-9]{7}-/
+
+function stripStorageKeyPrefix(segment: string): string {
+  return STORAGE_KEY_PREFIX_RE.test(segment) ? segment.replace(STORAGE_KEY_PREFIX_RE, '') : segment
+}
 
 export async function GET(
   request: NextRequest,
@@ -38,19 +44,18 @@ export async function GET(
     const cloudKey = isCloudPath ? path.slice(1).join('/') : fullPath
 
     const contextParam = request.nextUrl.searchParams.get('context')
-    const legacyBucketType = request.nextUrl.searchParams.get('bucket')
 
     const context = contextParam || (isCloudPath ? inferContextFromKey(cloudKey) : undefined)
 
-    if (context === 'profile-pictures') {
-      logger.info('Serving public profile picture:', { cloudKey })
+    if (context === 'profile-pictures' || context === 'og-images') {
+      logger.info(`Serving public ${context}:`, { cloudKey })
       if (isUsingCloudStorage() || isCloudPath) {
-        return await handleCloudProxyPublic(cloudKey, context, legacyBucketType)
+        return await handleCloudProxyPublic(cloudKey, context)
       }
       return await handleLocalFilePublic(fullPath)
     }
 
-    const authResult = await checkHybridAuth(request, { requireWorkflowId: false })
+    const authResult = await checkSessionOrInternalAuth(request, { requireWorkflowId: false })
 
     if (!authResult.success || !authResult.userId) {
       logger.warn('Unauthorized file access attempt', {
@@ -97,21 +102,24 @@ async function handleLocalFile(filename: string, userId: string): Promise<NextRe
       throw new FileNotFoundError(`File not found: ${filename}`)
     }
 
-    const filePath = findLocalFile(filename)
+    const filePath = await findLocalFile(filename)
 
     if (!filePath) {
       throw new FileNotFoundError(`File not found: ${filename}`)
     }
 
     const fileBuffer = await readFile(filePath)
-    const contentType = getContentType(filename)
+    const segment = filename.split('/').pop() || filename
+    const displayName = stripStorageKeyPrefix(segment)
+    const contentType = getContentType(displayName)
 
     logger.info('Local file served', { userId, filename, size: fileBuffer.length })
 
     return createFileResponse({
       buffer: fileBuffer,
       contentType,
-      filename,
+      filename: displayName,
+      cacheControl: contextParam === 'workspace' ? 'private, no-cache, must-revalidate' : undefined,
     })
   } catch (error) {
     logger.error('Error reading local file:', error)
@@ -159,8 +167,9 @@ async function handleCloudProxy(
       })
     }
 
-    const originalFilename = cloudKey.split('/').pop() || 'download'
-    const contentType = getContentType(originalFilename)
+    const segment = cloudKey.split('/').pop() || 'download'
+    const displayName = stripStorageKeyPrefix(segment)
+    const contentType = getContentType(displayName)
 
     logger.info('Cloud file served', {
       userId,
@@ -172,7 +181,8 @@ async function handleCloudProxy(
     return createFileResponse({
       buffer: fileBuffer,
       contentType,
-      filename: originalFilename,
+      filename: displayName,
+      cacheControl: context === 'workspace' ? 'private, no-cache, must-revalidate' : undefined,
     })
   } catch (error) {
     logger.error('Error downloading from cloud storage:', error)
@@ -182,8 +192,7 @@ async function handleCloudProxy(
 
 async function handleCloudProxyPublic(
   cloudKey: string,
-  context: StorageContext,
-  legacyBucketType?: string | null
+  context: StorageContext
 ): Promise<NextResponse> {
   try {
     let fileBuffer: Buffer
@@ -197,8 +206,8 @@ async function handleCloudProxyPublic(
       })
     }
 
-    const originalFilename = cloudKey.split('/').pop() || 'download'
-    const contentType = getContentType(originalFilename)
+    const filename = cloudKey.split('/').pop() || 'download'
+    const contentType = getContentType(filename)
 
     logger.info('Public cloud file served', {
       key: cloudKey,
@@ -209,7 +218,7 @@ async function handleCloudProxyPublic(
     return createFileResponse({
       buffer: fileBuffer,
       contentType,
-      filename: originalFilename,
+      filename,
     })
   } catch (error) {
     logger.error('Error serving public cloud file:', error)
@@ -219,7 +228,7 @@ async function handleCloudProxyPublic(
 
 async function handleLocalFilePublic(filename: string): Promise<NextResponse> {
   try {
-    const filePath = findLocalFile(filename)
+    const filePath = await findLocalFile(filename)
 
     if (!filePath) {
       throw new FileNotFoundError(`File not found: ${filename}`)

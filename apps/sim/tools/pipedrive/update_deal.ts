@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   PipedriveUpdateDealParams,
   PipedriveUpdateDealResponse,
@@ -26,38 +26,38 @@ export const pipedriveUpdateDealTool: ToolConfig<
     deal_id: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the deal to update',
+      visibility: 'user-or-llm',
+      description: 'The ID of the deal to update (e.g., "123")',
     },
     title: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'New title for the deal',
+      visibility: 'user-or-llm',
+      description: 'New title for the deal (e.g., "Updated Enterprise License")',
     },
     value: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'New monetary value for the deal',
+      visibility: 'user-or-llm',
+      description: 'New monetary value for the deal (e.g., "7500")',
     },
     status: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'New status: open, won, lost',
     },
     stage_id: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'New stage ID for the deal',
+      visibility: 'user-or-llm',
+      description: 'New stage ID for the deal (e.g., "3")',
     },
     expected_close_date: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'New expected close date in YYYY-MM-DD format',
+      visibility: 'user-or-llm',
+      description: 'New expected close date in YYYY-MM-DD format (e.g., "2025-07-15")',
     },
   },
 
@@ -99,31 +99,14 @@ export const pipedriveUpdateDealTool: ToolConfig<
     return {
       success: true,
       output: {
-        deal: data.data,
-        metadata: {
-          operation: 'update_deal' as const,
-        },
+        deal: data.data ?? null,
         success: true,
       },
     }
   },
 
   outputs: {
+    deal: { type: 'object', description: 'The updated deal object', optional: true },
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Updated deal details',
-      properties: {
-        deal: {
-          type: 'object',
-          description: 'The updated deal object',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

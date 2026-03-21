@@ -1,9 +1,9 @@
 import { db } from '@sim/db'
 import { permissions, workflow, workflowExecutionLogs } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq, sql } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createLogger } from '@/lib/logs/console/logger'
 import { buildLogFilters, getOrderBy } from '@/app/api/v1/logs/filters'
 import { createApiResponse, getUserLimits } from '@/app/api/v1/logs/meta'
 import { checkRateLimit, createRateLimitResponse } from '@/app/api/v1/middleware'
@@ -84,7 +84,6 @@ export async function GET(request: NextRequest) {
       },
     })
 
-    // Build filter conditions
     const filters = {
       workspaceId: params.workspaceId,
       workflowIds: params.workflowIds?.split(',').filter(Boolean),
@@ -106,12 +105,12 @@ export async function GET(request: NextRequest) {
     const conditions = buildLogFilters(filters)
     const orderBy = getOrderBy(params.order)
 
-    // Build and execute query
     const baseQuery = db
       .select({
         id: workflowExecutionLogs.id,
         workflowId: workflowExecutionLogs.workflowId,
         executionId: workflowExecutionLogs.executionId,
+        deploymentVersionId: workflowExecutionLogs.deploymentVersionId,
         level: workflowExecutionLogs.level,
         trigger: workflowExecutionLogs.trigger,
         startedAt: workflowExecutionLogs.startedAt,
@@ -124,18 +123,12 @@ export async function GET(request: NextRequest) {
         workflowDescription: workflow.description,
       })
       .from(workflowExecutionLogs)
-      .innerJoin(
-        workflow,
-        and(
-          eq(workflowExecutionLogs.workflowId, workflow.id),
-          eq(workflow.workspaceId, params.workspaceId)
-        )
-      )
+      .leftJoin(workflow, eq(workflowExecutionLogs.workflowId, workflow.id))
       .innerJoin(
         permissions,
         and(
           eq(permissions.entityType, 'workspace'),
-          eq(permissions.entityId, params.workspaceId),
+          eq(permissions.entityId, workflowExecutionLogs.workspaceId),
           eq(permissions.userId, userId)
         )
       )
@@ -162,6 +155,7 @@ export async function GET(request: NextRequest) {
         id: log.id,
         workflowId: log.workflowId,
         executionId: log.executionId,
+        deploymentVersionId: log.deploymentVersionId,
         level: log.level,
         trigger: log.trigger,
         startedAt: log.startedAt.toISOString(),
@@ -174,8 +168,9 @@ export async function GET(request: NextRequest) {
       if (params.details === 'full') {
         result.workflow = {
           id: log.workflowId,
-          name: log.workflowName,
+          name: log.workflowName || 'Deleted Workflow',
           description: log.workflowDescription,
+          deleted: !log.workflowName,
         }
 
         if (log.cost) {
@@ -196,11 +191,8 @@ export async function GET(request: NextRequest) {
       return result
     })
 
-    // Get user's workflow execution limits and usage
     const limits = await getUserLimits(userId)
 
-    // Create response with limits information
-    // The rateLimit object from checkRateLimit is for THIS API endpoint's rate limits
     const response = createApiResponse(
       {
         data: formattedLogs,

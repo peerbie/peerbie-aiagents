@@ -1,8 +1,17 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
+import {
+  DEFAULT_HORIZONTAL_SPACING,
+  DEFAULT_VERTICAL_SPACING,
+} from '@/lib/workflows/autolayout/constants'
 import { layoutContainers } from '@/lib/workflows/autolayout/containers'
-import { layoutBlocksCore } from '@/lib/workflows/autolayout/core'
+import { assignLayers, layoutBlocksCore } from '@/lib/workflows/autolayout/core'
 import type { Edge, LayoutOptions, LayoutResult } from '@/lib/workflows/autolayout/types'
-import { filterLayoutEligibleBlockIds, getBlocksByParent } from '@/lib/workflows/autolayout/utils'
+import {
+  calculateSubflowDepths,
+  filterLayoutEligibleBlockIds,
+  getBlocksByParent,
+  prepareContainerDimensions,
+} from '@/lib/workflows/autolayout/utils'
 import type { BlockState } from '@/stores/workflows/workflow/types'
 
 const logger = createLogger('AutoLayout')
@@ -24,6 +33,18 @@ export function applyAutoLayout(
 
     const blocksCopy: Record<string, BlockState> = JSON.parse(JSON.stringify(blocks))
 
+    const horizontalSpacing = options.horizontalSpacing ?? DEFAULT_HORIZONTAL_SPACING
+    const verticalSpacing = options.verticalSpacing ?? DEFAULT_VERTICAL_SPACING
+
+    prepareContainerDimensions(
+      blocksCopy,
+      edges,
+      layoutBlocksCore,
+      horizontalSpacing,
+      verticalSpacing,
+      options.gridSize
+    )
+
     const { root: rootBlockIds } = getBlocksByParent(blocksCopy)
     const layoutRootIds = filterLayoutEligibleBlockIds(rootBlockIds, blocksCopy)
 
@@ -36,10 +57,13 @@ export function applyAutoLayout(
       (edge) => layoutRootIds.includes(edge.source) && layoutRootIds.includes(edge.target)
     )
 
+    const subflowDepths = calculateSubflowDepths(blocksCopy, edges, assignLayers)
+
     if (Object.keys(rootBlocks).length > 0) {
       const { nodes } = layoutBlocksCore(rootBlocks, rootEdges, {
         isContainer: false,
         layoutOptions: options,
+        subflowDepths,
       })
 
       for (const node of nodes.values()) {
@@ -68,13 +92,12 @@ export function applyAutoLayout(
 }
 
 export type { TargetedLayoutOptions } from '@/lib/workflows/autolayout/targeted'
-// Function exports
 export { applyTargetedLayout } from '@/lib/workflows/autolayout/targeted'
-// Type exports
 export type { Edge, LayoutOptions, LayoutResult } from '@/lib/workflows/autolayout/types'
 export {
   getBlockMetrics,
   isContainerType,
   shouldSkipAutoLayout,
+  snapPositionToGrid,
   transferBlockHeights,
 } from '@/lib/workflows/autolayout/utils'

@@ -1,4 +1,5 @@
 import type { ListWorkflowsParams, ListWorkflowsResponse } from '@/tools/github/types'
+import { WORKFLOW_OUTPUT_PROPERTIES } from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const listWorkflowsTool: ToolConfig<ListWorkflowsParams, ListWorkflowsResponse> = {
@@ -129,6 +130,41 @@ ${data.workflows
             },
           },
         },
+      },
+    },
+  },
+}
+
+export const listWorkflowsV2Tool: ToolConfig<ListWorkflowsParams, any> = {
+  id: 'github_list_workflows_v2',
+  name: listWorkflowsTool.name,
+  description: listWorkflowsTool.description,
+  version: '2.0.0',
+  params: listWorkflowsTool.params,
+  request: listWorkflowsTool.request,
+
+  transformResponse: async (response: Response) => {
+    const data = await response.json()
+    return {
+      success: true,
+      output: {
+        total_count: data.total_count,
+        items: (data.workflows ?? []).map((workflow: Record<string, unknown>) => ({
+          ...workflow,
+          deleted_at: workflow.deleted_at ?? null,
+        })),
+      },
+    }
+  },
+
+  outputs: {
+    total_count: { type: 'number', description: 'Total number of workflows' },
+    items: {
+      type: 'array',
+      description: 'Array of workflow objects',
+      items: {
+        type: 'object',
+        properties: WORKFLOW_OUTPUT_PROPERTIES,
       },
     },
   },

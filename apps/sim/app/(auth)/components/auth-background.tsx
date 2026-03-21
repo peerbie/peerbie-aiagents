@@ -1,4 +1,4 @@
-import { cn } from '@/lib/utils'
+import { cn } from '@/lib/core/utils/cn'
 import AuthBackgroundSVG from '@/app/(auth)/components/auth-background-svg'
 
 type AuthBackgroundProps = {
@@ -8,9 +8,10 @@ type AuthBackgroundProps = {
 
 export default function AuthBackground({ className, children }: AuthBackgroundProps) {
   return (
-    <div className={cn('relative min-h-screen w-full overflow-hidden', className)}>
+    <div className={cn('fixed inset-0 overflow-hidden', className)}>
+      <div className='-z-50 pointer-events-none absolute inset-0 bg-[#1C1C1C]' />
       <AuthBackgroundSVG />
-      <div className='relative z-20'>{children}</div>
+      <div className='relative z-20 h-full overflow-auto'>{children}</div>
     </div>
   )
 }

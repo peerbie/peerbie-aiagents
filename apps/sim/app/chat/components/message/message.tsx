@@ -1,9 +1,14 @@
 'use client'
 
-import { memo, useMemo, useState } from 'react'
+import { memo, useState } from 'react'
 import { Check, Copy, File as FileIcon, FileText, Image as ImageIcon } from 'lucide-react'
 import { Tooltip } from '@/components/emcn'
+import {
+  ChatFileDownload,
+  ChatFileDownloadAll,
+} from '@/app/chat/components/message/components/file-download'
 import MarkdownRenderer from '@/app/chat/components/message/components/markdown-renderer'
+import { useThrottledValue } from '@/hooks/use-throttled-value'
 
 export interface ChatAttachment {
   id: string
@@ -11,6 +16,16 @@ export interface ChatAttachment {
   type: string
   dataUrl: string
   size?: number
+}
+
+export interface ChatFile {
+  id: string
+  name: string
+  url: string
+  key: string
+  size: number
+  type: string
+  context?: string
 }
 
 export interface ChatMessage {
@@ -21,19 +36,19 @@ export interface ChatMessage {
   isInitialMessage?: boolean
   isStreaming?: boolean
   attachments?: ChatAttachment[]
+  files?: ChatFile[]
 }
 
 function EnhancedMarkdownRenderer({ content }: { content: string }) {
-  return <MarkdownRenderer content={content} />
+  const throttled = useThrottledValue(content)
+  return <MarkdownRenderer content={throttled} />
 }
 
 export const ClientChatMessage = memo(
   function ClientChatMessage({ message }: { message: ChatMessage }) {
     const [isCopied, setIsCopied] = useState(false)
 
-    const isJsonObject = useMemo(() => {
-      return typeof message.content === 'object' && message.content !== null
-    }, [message.content])
+    const isJsonObject = typeof message.content === 'object' && message.content !== null
 
     // Since tool calls are now handled via SSE events and stored in message.toolCalls,
     // we can use the content directly without parsing
@@ -177,6 +192,13 @@ export const ClientChatMessage = memo(
                   )}
                 </div>
               </div>
+              {message.files && message.files.length > 0 && (
+                <div className='flex flex-wrap gap-2'>
+                  {message.files.map((file) => (
+                    <ChatFileDownload key={file.id} file={file} />
+                  ))}
+                </div>
+              )}
               {message.type === 'assistant' && !isJsonObject && !message.isInitialMessage && (
                 <div className='flex items-center justify-start space-x-2'>
                   {/* Copy Button - Only show when not streaming */}
@@ -207,6 +229,10 @@ export const ClientChatMessage = memo(
                       </Tooltip.Content>
                     </Tooltip.Root>
                   )}
+                  {/* Download All Button - Only show when there are files */}
+                  {!message.isStreaming && message.files && (
+                    <ChatFileDownloadAll files={message.files} />
+                  )}
                 </div>
               )}
             </div>
@@ -221,7 +247,8 @@ export const ClientChatMessage = memo(
       prevProps.message.id === nextProps.message.id &&
       prevProps.message.content === nextProps.message.content &&
       prevProps.message.isStreaming === nextProps.message.isStreaming &&
-      prevProps.message.isInitialMessage === nextProps.message.isInitialMessage
+      prevProps.message.isInitialMessage === nextProps.message.isInitialMessage &&
+      prevProps.message.files?.length === nextProps.message.files?.length
     )
   }
 )

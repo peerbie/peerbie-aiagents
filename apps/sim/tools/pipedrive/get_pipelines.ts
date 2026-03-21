@@ -1,8 +1,9 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   PipedriveGetPipelinesParams,
   PipedriveGetPipelinesResponse,
 } from '@/tools/pipedrive/types'
+import { PIPEDRIVE_PIPELINE_OUTPUT_PROPERTIES } from '@/tools/pipedrive/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('PipedriveGetPipelines')
@@ -26,26 +27,26 @@ export const pipedriveGetPipelinesTool: ToolConfig<
     sort_by: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Field to sort by: id, update_time, add_time (default: id)',
     },
     sort_direction: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Sorting direction: asc, desc (default: asc)',
     },
     limit: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Number of results to return (default: 100, max: 500)',
+      visibility: 'user-or-llm',
+      description: 'Number of results to return (e.g., "50", default: 100, max: 500)',
     },
-    cursor: {
+    start: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'For pagination, the marker representing the first item on the next page',
+      visibility: 'user-or-llm',
+      description: 'Pagination start offset (0-based index of the first item to return)',
     },
   },
 
@@ -57,7 +58,7 @@ export const pipedriveGetPipelinesTool: ToolConfig<
       if (params.sort_by) queryParams.append('sort_by', params.sort_by)
       if (params.sort_direction) queryParams.append('sort_direction', params.sort_direction)
       if (params.limit) queryParams.append('limit', params.limit)
-      if (params.cursor) queryParams.append('cursor', params.cursor)
+      if (params.start) queryParams.append('start', params.start)
 
       const queryString = queryParams.toString()
       return queryString ? `${baseUrl}?${queryString}` : baseUrl
@@ -84,36 +85,41 @@ export const pipedriveGetPipelinesTool: ToolConfig<
     }
 
     const pipelines = data.data || []
+    const hasMore = data.additional_data?.pagination?.more_items_in_collection || false
+    const nextStart = data.additional_data?.pagination?.next_start ?? null
 
     return {
       success: true,
       output: {
         pipelines,
-        metadata: {
-          operation: 'get_pipelines' as const,
-          totalItems: pipelines.length,
-        },
+        total_items: pipelines.length,
+        has_more: hasMore,
+        next_start: nextStart,
         success: true,
       },
     }
   },
 
   outputs: {
-    success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Pipelines data',
-      properties: {
-        pipelines: {
-          type: 'array',
-          description: 'Array of pipeline objects from Pipedrive',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
+    pipelines: {
+      type: 'array',
+      description: 'Array of pipeline objects from Pipedrive',
+      items: {
+        type: 'object',
+        properties: PIPEDRIVE_PIPELINE_OUTPUT_PROPERTIES,
       },
     },
+    total_items: { type: 'number', description: 'Total number of pipelines returned' },
+    has_more: {
+      type: 'boolean',
+      description: 'Whether more pipelines are available',
+      optional: true,
+    },
+    next_start: {
+      type: 'number',
+      description: 'Offset for fetching the next page',
+      optional: true,
+    },
+    success: { type: 'boolean', description: 'Operation success status' },
   },
 }

@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   MicrosoftPlannerToolParams,
   MicrosoftPlannerUpdateTaskDetailsResponse,
@@ -33,8 +33,8 @@ export const updateTaskDetailsTool: ToolConfig<
     taskId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the task',
+      visibility: 'user-or-llm',
+      description: 'The ID of the task (e.g., "pbT5K2OVkkO1M7r5bfsJ6JgAGD5m")',
     },
     etag: {
       type: 'string',
@@ -173,6 +173,12 @@ export const updateTaskDetailsTool: ToolConfig<
       type: 'object',
       description: 'The updated task details object with all properties',
     },
-    metadata: { type: 'object', description: 'Metadata including taskId' },
+    metadata: {
+      type: 'object',
+      description: 'Metadata including taskId',
+      properties: {
+        taskId: { type: 'string', description: 'Task ID' },
+      },
+    },
   },
 }

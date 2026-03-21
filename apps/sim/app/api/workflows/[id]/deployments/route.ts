@@ -1,8 +1,8 @@
 import { db, user, workflowDeploymentVersion } from '@sim/db'
+import { createLogger } from '@sim/logger'
 import { desc, eq } from 'drizzle-orm'
 import type { NextRequest } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
+import { generateRequestId } from '@/lib/core/utils/request'
 import { validateWorkflowPermissions } from '@/lib/workflows/utils'
 import { createErrorResponse, createSuccessResponse } from '@/app/api/workflows/utils'
 
@@ -21,11 +21,12 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       return createErrorResponse(error.message, error.status)
     }
 
-    const versions = await db
+    const rawVersions = await db
       .select({
         id: workflowDeploymentVersion.id,
         version: workflowDeploymentVersion.version,
         name: workflowDeploymentVersion.name,
+        description: workflowDeploymentVersion.description,
         isActive: workflowDeploymentVersion.isActive,
         createdAt: workflowDeploymentVersion.createdAt,
         createdBy: workflowDeploymentVersion.createdBy,
@@ -35,6 +36,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       .leftJoin(user, eq(workflowDeploymentVersion.createdBy, user.id))
       .where(eq(workflowDeploymentVersion.workflowId, id))
       .orderBy(desc(workflowDeploymentVersion.version))
+
+    const versions = rawVersions.map((v) => ({
+      ...v,
+      deployedBy: v.deployedBy ?? (v.createdBy === 'admin-api' ? 'Admin' : null),
+    }))
 
     return createSuccessResponse({ versions })
   } catch (error: any) {

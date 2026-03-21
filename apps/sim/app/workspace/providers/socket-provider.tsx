@@ -6,15 +6,30 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react'
+import { createLogger } from '@sim/logger'
 import { useParams } from 'next/navigation'
 import { io, type Socket } from 'socket.io-client'
-import { getEnv } from '@/lib/env'
-import { createLogger } from '@/lib/logs/console/logger'
+import { getEnv } from '@/lib/core/config/env'
+import { useOperationQueueStore } from '@/stores/operation-queue/store'
 
 const logger = createLogger('SocketContext')
+
+const TAB_SESSION_ID_KEY = 'sim_tab_session_id'
+
+function getTabSessionId(): string {
+  if (typeof window === 'undefined') return ''
+
+  let tabSessionId = sessionStorage.getItem(TAB_SESSION_ID_KEY)
+  if (!tabSessionId) {
+    tabSessionId = crypto.randomUUID()
+    sessionStorage.setItem(TAB_SESSION_ID_KEY, tabSessionId)
+  }
+  return tabSessionId
+}
 
 interface User {
   id: string
@@ -35,10 +50,14 @@ interface SocketContextType {
   socket: Socket | null
   isConnected: boolean
   isConnecting: boolean
+  isReconnecting: boolean
+  authFailed: boolean
   currentWorkflowId: string | null
+  currentSocketId: string | null
   presenceUsers: PresenceUser[]
   joinWorkflow: (workflowId: string) => void
   leaveWorkflow: () => void
+  retryConnection: () => void
   emitWorkflowOperation: (
     operation: string,
     target: string,
@@ -49,21 +68,25 @@ interface SocketContextType {
     blockId: string,
     subblockId: string,
     value: any,
-    operationId?: string
+    operationId: string | undefined,
+    workflowId: string
   ) => void
-  emitVariableUpdate: (variableId: string, field: string, value: any, operationId?: string) => void
+  emitVariableUpdate: (
+    variableId: string,
+    field: string,
+    value: any,
+    operationId: string | undefined,
+    workflowId: string
+  ) => void
 
   emitCursorUpdate: (cursor: { x: number; y: number } | null) => void
   emitSelectionUpdate: (selection: { type: 'block' | 'edge' | 'none'; id?: string }) => void
-  // Event handlers for receiving real-time updates
   onWorkflowOperation: (handler: (data: any) => void) => void
   onSubblockUpdate: (handler: (data: any) => void) => void
   onVariableUpdate: (handler: (data: any) => void) => void
 
   onCursorUpdate: (handler: (data: any) => void) => void
   onSelectionUpdate: (handler: (data: any) => void) => void
-  onUserJoined: (handler: (data: any) => void) => void
-  onUserLeft: (handler: (data: any) => void) => void
   onWorkflowDeleted: (handler: (data: any) => void) => void
   onWorkflowReverted: (handler: (data: any) => void) => void
   onOperationConfirmed: (handler: (data: any) => void) => void
@@ -74,10 +97,14 @@ const SocketContext = createContext<SocketContextType>({
   socket: null,
   isConnected: false,
   isConnecting: false,
+  isReconnecting: false,
+  authFailed: false,
   currentWorkflowId: null,
+  currentSocketId: null,
   presenceUsers: [],
   joinWorkflow: () => {},
   leaveWorkflow: () => {},
+  retryConnection: () => {},
   emitWorkflowOperation: () => {},
   emitSubblockUpdate: () => {},
   emitVariableUpdate: () => {},
@@ -88,8 +115,6 @@ const SocketContext = createContext<SocketContextType>({
   onVariableUpdate: () => {},
   onCursorUpdate: () => {},
   onSelectionUpdate: () => {},
-  onUserJoined: () => {},
-  onUserLeft: () => {},
   onWorkflowDeleted: () => {},
   onWorkflowReverted: () => {},
   onOperationConfirmed: () => {},
@@ -107,50 +132,62 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
   const [socket, setSocket] = useState<Socket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
+  const [isReconnecting, setIsReconnecting] = useState(false)
   const [currentWorkflowId, setCurrentWorkflowId] = useState<string | null>(null)
+  const [currentSocketId, setCurrentSocketId] = useState<string | null>(null)
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([])
+  const [authFailed, setAuthFailed] = useState(false)
   const initializedRef = useRef(false)
+  const socketRef = useRef<Socket | null>(null)
+  const triggerOfflineMode = useOperationQueueStore((state) => state.triggerOfflineMode)
 
-  // Get current workflow ID from URL params
   const params = useParams()
   const urlWorkflowId = params?.workflowId as string | undefined
+  const urlWorkflowIdRef = useRef(urlWorkflowId)
+  urlWorkflowIdRef.current = urlWorkflowId
 
-  // Use refs to store event handlers to avoid stale closures
   const eventHandlers = useRef<{
     workflowOperation?: (data: any) => void
     subblockUpdate?: (data: any) => void
     variableUpdate?: (data: any) => void
-
     cursorUpdate?: (data: any) => void
     selectionUpdate?: (data: any) => void
-    userJoined?: (data: any) => void
-    userLeft?: (data: any) => void
     workflowDeleted?: (data: any) => void
     workflowReverted?: (data: any) => void
     operationConfirmed?: (data: any) => void
     operationFailed?: (data: any) => void
   }>({})
 
-  // Helper function to generate a fresh socket token
+  const positionUpdateTimeouts = useRef<Map<string, number>>(new Map())
+  const isRejoiningRef = useRef<boolean>(false)
+  const pendingPositionUpdates = useRef<Map<string, any>>(new Map())
+
   const generateSocketToken = async (): Promise<string> => {
-    // Avoid overlapping token requests
     const res = await fetch('/api/auth/socket-token', {
       method: 'POST',
       credentials: 'include',
       headers: { 'cache-control': 'no-store' },
     })
-    if (!res.ok) throw new Error('Failed to generate socket token')
+    if (!res.ok) {
+      if (res.status === 401) {
+        throw new Error('Authentication required')
+      }
+      throw new Error('Failed to generate socket token')
+    }
     const body = await res.json().catch(() => ({}))
     const token = body?.token
     if (!token || typeof token !== 'string') throw new Error('Invalid socket token')
     return token
   }
 
-  // Initialize socket when user is available - only once per session
   useEffect(() => {
     if (!user?.id) return
 
-    // Only initialize if we don't have a socket and aren't already connecting
+    if (authFailed) {
+      logger.info('Socket initialization skipped - auth failed, waiting for retry')
+      return
+    }
+
     if (initializedRef.current || socket || isConnecting) {
       logger.info('Socket already exists or is connecting, skipping initialization')
       return
@@ -160,172 +197,190 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
     initializedRef.current = true
     setIsConnecting(true)
 
-    const initializeSocket = async () => {
+    const initializeSocket = () => {
       try {
-        // Generate initial token for socket authentication
-        const token = await generateSocketToken()
-
         const socketUrl = getEnv('NEXT_PUBLIC_SOCKET_URL') || 'http://localhost:3002'
 
         logger.info('Attempting to connect to Socket.IO server', {
           url: socketUrl,
           userId: user?.id || 'no-user',
-          hasToken: !!token,
           timestamp: new Date().toISOString(),
         })
 
         const socketInstance = io(socketUrl, {
-          transports: ['websocket', 'polling'], // Keep polling fallback for reliability
+          transports: ['websocket', 'polling'],
           withCredentials: true,
-          reconnectionAttempts: Number.POSITIVE_INFINITY, // Socket.IO handles base reconnection
-          reconnectionDelay: 1000, // Start with 1 second delay
-          reconnectionDelayMax: 30000, // Max 30 second delay
-          timeout: 10000, // Back to original timeout
+          reconnectionAttempts: Number.POSITIVE_INFINITY,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 30000,
+          timeout: 10000,
           auth: async (cb) => {
             try {
               const freshToken = await generateSocketToken()
               cb({ token: freshToken })
             } catch (error) {
               logger.error('Failed to generate fresh token for connection:', error)
-              cb({ token: null })
+              if (error instanceof Error && error.message === 'Authentication required') {
+                // True auth failure - pass null token, server will reject with "Authentication required"
+                cb({ token: null })
+              }
+              // For server errors, don't call cb - connection will timeout and Socket.IO will retry
             }
           },
         })
 
-        // Connection events
         socketInstance.on('connect', () => {
           setIsConnected(true)
           setIsConnecting(false)
+          setCurrentSocketId(socketInstance.id ?? null)
           logger.info('Socket connected successfully', {
             socketId: socketInstance.id,
             connected: socketInstance.connected,
             transport: socketInstance.io.engine?.transport?.name,
           })
-
-          // Automatically join the current workflow room based on URL
-          // This handles both initial connections and reconnections
-          if (urlWorkflowId) {
-            logger.info(`Joining workflow room after connection: ${urlWorkflowId}`)
-            socketInstance.emit('join-workflow', {
-              workflowId: urlWorkflowId,
-            })
-            // Update our internal state to match the URL
-            setCurrentWorkflowId(urlWorkflowId)
-          }
+          // Note: join-workflow is handled by the useEffect watching isConnected
         })
 
         socketInstance.on('disconnect', (reason) => {
           setIsConnected(false)
           setIsConnecting(false)
-
-          logger.info('Socket disconnected', {
-            reason,
-          })
-
-          // Clear presence when disconnected
+          setCurrentSocketId(null)
+          setCurrentWorkflowId(null)
           setPresenceUsers([])
-        })
 
-        socketInstance.on('connect_error', (error: any) => {
-          setIsConnecting(false)
-          logger.error('Socket connection error:', {
-            message: error.message,
-            stack: error.stack,
-            description: error.description,
-            type: error.type,
-            transport: error.transport,
-          })
-
-          // Authentication errors now indicate either session expiry or token generation issues
-          if (
-            error.message?.includes('Token validation failed') ||
-            error.message?.includes('Authentication failed') ||
-            error.message?.includes('Authentication required')
-          ) {
-            logger.warn(
-              'Authentication failed - this could indicate session expiry or token generation issues'
-            )
-            // The fresh token generation on each attempt should handle most cases automatically
-            // If this persists, user may need to refresh page or re-login
+          // socket.active indicates if auto-reconnect will happen
+          if (socketInstance.active) {
+            setIsReconnecting(true)
+            logger.info('Socket disconnected, will auto-reconnect', { reason })
+          } else {
+            setIsReconnecting(false)
+            logger.info('Socket disconnected, no auto-reconnect', { reason })
           }
         })
 
-        // Socket.IO provides reconnection logging with attempt numbers
-        socketInstance.on('reconnect', (attemptNumber) => {
+        socketInstance.on('connect_error', (error: Error) => {
+          setIsConnecting(false)
+          logger.error('Socket connection error:', { message: error.message })
+
+          // Check if this is an authentication failure
+          const isAuthError =
+            error.message?.includes('Token validation failed') ||
+            error.message?.includes('Authentication failed') ||
+            error.message?.includes('Authentication required')
+
+          if (isAuthError) {
+            logger.warn(
+              'Authentication failed - stopping reconnection attempts. User may need to refresh/re-login.'
+            )
+            socketInstance.disconnect()
+            setSocket(null)
+            setAuthFailed(true)
+            setIsReconnecting(false)
+            initializedRef.current = false
+          } else if (socketInstance.active) {
+            // Temporary failure, will auto-reconnect
+            setIsReconnecting(true)
+          }
+        })
+
+        // Reconnection events are on the Manager (socket.io), not the socket itself
+        socketInstance.io.on('reconnect', (attemptNumber) => {
+          setIsConnected(true)
+          setIsReconnecting(false)
+          setCurrentSocketId(socketInstance.id ?? null)
           logger.info('Socket reconnected successfully', {
             attemptNumber,
             socketId: socketInstance.id,
             transport: socketInstance.io.engine?.transport?.name,
           })
-          // Note: Workflow rejoining is handled by the 'connect' event which fires for both initial connections and reconnections
         })
 
-        socketInstance.on('reconnect_attempt', (attemptNumber) => {
-          logger.info('Socket reconnection attempt (fresh token will be generated)', {
-            attemptNumber,
-            timestamp: new Date().toISOString(),
-          })
+        socketInstance.io.on('reconnect_attempt', (attemptNumber) => {
+          setIsReconnecting(true)
+          logger.info('Socket reconnection attempt', { attemptNumber })
         })
 
-        socketInstance.on('reconnect_error', (error: any) => {
-          logger.error('Socket reconnection error:', {
-            message: error.message,
-            attemptNumber: error.attemptNumber,
-            type: error.type,
-          })
+        socketInstance.io.on('reconnect_error', (error: Error) => {
+          logger.error('Socket reconnection error:', { message: error.message })
         })
 
-        socketInstance.on('reconnect_failed', () => {
+        socketInstance.io.on('reconnect_failed', () => {
           logger.error('Socket reconnection failed - all attempts exhausted')
+          setIsReconnecting(false)
           setIsConnecting(false)
         })
 
-        // Presence events
         socketInstance.on('presence-update', (users: PresenceUser[]) => {
-          setPresenceUsers(users)
+          setPresenceUsers((prev) => {
+            const prevMap = new Map(prev.map((u) => [u.socketId, u]))
+
+            return users.map((user) => {
+              const existing = prevMap.get(user.socketId)
+              if (existing) {
+                return {
+                  ...user,
+                  cursor: user.cursor ?? existing.cursor,
+                  selection: user.selection ?? existing.selection,
+                }
+              }
+              return user
+            })
+          })
         })
 
-        // Note: user-joined and user-left events removed in favor of authoritative presence-update
+        // Handle join workflow success - confirms room membership with presence list
+        socketInstance.on('join-workflow-success', ({ workflowId, presenceUsers }) => {
+          isRejoiningRef.current = false
+          // Ignore stale success responses from previous navigation
+          if (workflowId !== urlWorkflowIdRef.current) {
+            logger.debug(`Ignoring stale join-workflow-success for ${workflowId}`)
+            return
+          }
+          setCurrentWorkflowId(workflowId)
+          setPresenceUsers(presenceUsers || [])
+          logger.info(`Successfully joined workflow room: ${workflowId}`, {
+            presenceCount: presenceUsers?.length || 0,
+          })
+        })
 
-        // Workflow operation events
+        socketInstance.on('join-workflow-error', ({ error, code }) => {
+          isRejoiningRef.current = false
+          logger.error('Failed to join workflow:', { error, code })
+          if (code === 'ROOM_MANAGER_UNAVAILABLE') {
+            triggerOfflineMode()
+          }
+        })
+
         socketInstance.on('workflow-operation', (data) => {
           eventHandlers.current.workflowOperation?.(data)
         })
 
-        // Subblock update events
         socketInstance.on('subblock-update', (data) => {
           eventHandlers.current.subblockUpdate?.(data)
         })
 
-        // Variable update events
         socketInstance.on('variable-update', (data) => {
           eventHandlers.current.variableUpdate?.(data)
         })
 
-        // Workflow deletion events
         socketInstance.on('workflow-deleted', (data) => {
           logger.warn(`Workflow ${data.workflowId} has been deleted`)
-          // Clear current workflow ID if it matches the deleted workflow
-          if (currentWorkflowId === data.workflowId) {
-            setCurrentWorkflowId(null)
-            setPresenceUsers([])
-          }
+          setCurrentWorkflowId((current) => {
+            if (current === data.workflowId) {
+              setPresenceUsers([])
+              return null
+            }
+            return current
+          })
           eventHandlers.current.workflowDeleted?.(data)
         })
 
-        // Workflow revert events
         socketInstance.on('workflow-reverted', (data) => {
           logger.info(`Workflow ${data.workflowId} has been reverted to deployed state`)
           eventHandlers.current.workflowReverted?.(data)
         })
 
-        // Shared function to rehydrate workflow stores
-        const rehydrateWorkflowStores = async (
-          workflowId: string,
-          workflowState: any,
-          source: 'copilot' | 'workflow-state'
-        ) => {
-          // Import stores dynamically
+        const rehydrateWorkflowStores = async (workflowId: string, workflowState: any) => {
           const [
             { useOperationQueueStore },
             { useWorkflowRegistry },
@@ -340,23 +395,20 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
             import('@/stores/workflow-diff/store'),
           ])
 
-          // Only proceed if this is the active workflow
           const { activeWorkflowId } = useWorkflowRegistry.getState()
           if (activeWorkflowId !== workflowId) {
             logger.info(`Skipping rehydration - workflow ${workflowId} is not active`)
             return false
           }
 
-          // Check for pending operations
           const hasPending = useOperationQueueStore
             .getState()
             .operations.some((op: any) => op.workflowId === workflowId && op.status !== 'confirmed')
           if (hasPending) {
-            logger.info(`Skipping ${source} rehydration due to pending operations in queue`)
+            logger.info('Skipping rehydration due to pending operations in queue')
             return false
           }
 
-          // Extract subblock values from blocks
           const subblockValues: Record<string, Record<string, any>> = {}
           Object.entries(workflowState.blocks || {}).forEach(([blockId, block]) => {
             const blockState = block as any
@@ -366,19 +418,15 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
             })
           })
 
-          // Replace local workflow store with authoritative server state
-          useWorkflowStore.setState({
+          useWorkflowStore.getState().replaceWorkflowState({
             blocks: workflowState.blocks || {},
             edges: workflowState.edges || [],
             loops: workflowState.loops || {},
             parallels: workflowState.parallels || {},
             lastSaved: workflowState.lastSaved || Date.now(),
-            isDeployed: workflowState.isDeployed ?? false,
-            deployedAt: workflowState.deployedAt,
             deploymentStatuses: workflowState.deploymentStatuses || {},
           })
 
-          // Replace subblock store values for this workflow
           useSubBlockStore.setState((state: any) => ({
             workflowValues: {
               ...state.workflowValues,
@@ -386,67 +434,50 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
             },
           }))
 
-          logger.info(`Successfully rehydrated stores from ${source}`)
+          logger.info('Successfully rehydrated workflow stores')
           return true
         }
 
-        // Copilot workflow edit events (database has been updated, rehydrate stores)
-        socketInstance.on('copilot-workflow-edit', async (data) => {
-          logger.info(
-            `Copilot edited workflow ${data.workflowId} - rehydrating stores from database`
-          )
-
-          try {
-            // Fetch fresh workflow state directly from API
-            const response = await fetch(`/api/workflows/${data.workflowId}`)
-            if (response.ok) {
-              const responseData = await response.json()
-              const workflowData = responseData.data
-
-              if (workflowData?.state) {
-                await rehydrateWorkflowStores(data.workflowId, workflowData.state, 'copilot')
-              }
-            } else {
-              logger.error('Failed to fetch fresh workflow state:', response.statusText)
-            }
-          } catch (error) {
-            logger.error('Failed to rehydrate stores after copilot edit:', error)
-          }
-        })
-
-        // Operation confirmation events
         socketInstance.on('operation-confirmed', (data) => {
           logger.debug('Operation confirmed', { operationId: data.operationId })
           eventHandlers.current.operationConfirmed?.(data)
         })
 
-        // Operation failure events
         socketInstance.on('operation-failed', (data) => {
           logger.warn('Operation failed', { operationId: data.operationId, error: data.error })
           eventHandlers.current.operationFailed?.(data)
         })
 
-        // Cursor update events
         socketInstance.on('cursor-update', (data) => {
-          setPresenceUsers((prev) =>
-            prev.map((user) =>
+          setPresenceUsers((prev) => {
+            const existingIndex = prev.findIndex((user) => user.socketId === data.socketId)
+            if (existingIndex === -1) {
+              logger.debug('Received cursor-update for unknown user', { socketId: data.socketId })
+              return prev
+            }
+            return prev.map((user) =>
               user.socketId === data.socketId ? { ...user, cursor: data.cursor } : user
             )
-          )
+          })
           eventHandlers.current.cursorUpdate?.(data)
         })
 
-        // Selection update events
         socketInstance.on('selection-update', (data) => {
-          setPresenceUsers((prev) =>
-            prev.map((user) =>
+          setPresenceUsers((prev) => {
+            const existingIndex = prev.findIndex((user) => user.socketId === data.socketId)
+            if (existingIndex === -1) {
+              logger.debug('Received selection-update for unknown user', {
+                socketId: data.socketId,
+              })
+              return prev
+            }
+            return prev.map((user) =>
               user.socketId === data.socketId ? { ...user, selection: data.selection } : user
             )
-          )
+          })
           eventHandlers.current.selectionUpdate?.(data)
         })
 
-        // Enhanced error handling for new server events
         socketInstance.on('error', (error) => {
           logger.error('Socket error:', error)
         })
@@ -457,81 +488,81 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
 
         socketInstance.on('operation-forbidden', (error) => {
           logger.warn('Operation forbidden:', error)
-          // Could show a toast notification to user
-        })
 
-        socketInstance.on('operation-confirmed', (data) => {
-          logger.debug('Operation confirmed:', data)
+          if (error?.type === 'SESSION_ERROR') {
+            const workflowId = urlWorkflowIdRef.current
+
+            if (workflowId && !isRejoiningRef.current) {
+              isRejoiningRef.current = true
+              logger.info(`Session expired, rejoining workflow: ${workflowId}`)
+              socketInstance.emit('join-workflow', {
+                workflowId,
+                tabSessionId: getTabSessionId(),
+              })
+            }
+          }
         })
 
         socketInstance.on('workflow-state', async (workflowData) => {
           logger.info('Received workflow state from server')
 
           if (workflowData?.state) {
-            await rehydrateWorkflowStores(workflowData.id, workflowData.state, 'workflow-state')
+            try {
+              await rehydrateWorkflowStores(workflowData.id, workflowData.state)
+            } catch (error) {
+              logger.error('Error rehydrating workflow state:', error)
+            }
           }
         })
 
+        socketRef.current = socketInstance
         setSocket(socketInstance)
-
-        return () => {
-          socketInstance.close()
-        }
       } catch (error) {
         logger.error('Failed to initialize socket with token:', error)
         setIsConnecting(false)
       }
     }
 
-    // Start the socket initialization
     initializeSocket()
 
-    // Cleanup on unmount only (not on user change since socket is session-level)
     return () => {
       positionUpdateTimeouts.current.forEach((timeoutId) => {
         clearTimeout(timeoutId)
       })
       positionUpdateTimeouts.current.clear()
       pendingPositionUpdates.current.clear()
-    }
-  }, [user?.id])
 
-  // Handle workflow room switching when URL changes (for navigation between workflows)
+      // Close socket on unmount
+      if (socketRef.current) {
+        logger.info('Closing socket connection on unmount')
+        socketRef.current.close()
+        socketRef.current = null
+      }
+    }
+  }, [user?.id, authFailed])
+
   useEffect(() => {
     if (!socket || !isConnected || !urlWorkflowId) return
 
-    // If we're already in the correct workflow room, no need to switch
+    // Skip if already in the correct room
     if (currentWorkflowId === urlWorkflowId) return
 
     logger.info(
       `URL workflow changed from ${currentWorkflowId} to ${urlWorkflowId}, switching rooms`
     )
 
-    // Leave current workflow first if we're in one
     if (currentWorkflowId) {
       logger.info(`Leaving current workflow ${currentWorkflowId} before joining ${urlWorkflowId}`)
       socket.emit('leave-workflow')
     }
 
-    // Join the new workflow room
     logger.info(`Joining workflow room: ${urlWorkflowId}`)
     socket.emit('join-workflow', {
       workflowId: urlWorkflowId,
+      tabSessionId: getTabSessionId(),
     })
-    setCurrentWorkflowId(urlWorkflowId)
   }, [socket, isConnected, urlWorkflowId, currentWorkflowId])
 
-  // Cleanup socket on component unmount
-  useEffect(() => {
-    return () => {
-      if (socket) {
-        logger.info('Cleaning up socket connection on unmount')
-        socket.disconnect()
-      }
-    }
-  }, [])
-
-  // Join workflow room
   const joinWorkflow = useCallback(
     (workflowId: string) => {
       if (!socket || !user?.id) {
@@ -539,13 +570,11 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
         return
       }
 
-      // Prevent duplicate joins to the same workflow
       if (currentWorkflowId === workflowId) {
         logger.info(`Already in workflow ${workflowId}, skipping join`)
         return
       }
 
-      // Leave current workflow first if we're in one
       if (currentWorkflowId) {
         logger.info(`Leaving current workflow ${currentWorkflowId} before joining ${workflowId}`)
         socket.emit('leave-workflow')
@@ -553,26 +582,28 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
 
       logger.info(`Joining workflow: ${workflowId}`)
       socket.emit('join-workflow', {
-        workflowId, // Server gets user info from authenticated session
+        workflowId,
+        tabSessionId: getTabSessionId(),
       })
-      setCurrentWorkflowId(workflowId)
+      // currentWorkflowId will be set by join-workflow-success handler
     },
     [socket, user, currentWorkflowId]
   )
 
-  // Leave current workflow room
   const leaveWorkflow = useCallback(() => {
     if (socket && currentWorkflowId) {
       logger.info(`Leaving workflow: ${currentWorkflowId}`)
-      try {
-        const { useOperationQueueStore } = require('@/stores/operation-queue/store')
-        useOperationQueueStore.getState().cancelOperationsForWorkflow(currentWorkflowId)
-      } catch {}
+      import('@/stores/operation-queue/store')
+        .then(({ useOperationQueueStore }) => {
+          useOperationQueueStore.getState().cancelOperationsForWorkflow(currentWorkflowId)
+        })
+        .catch((error) => {
+          logger.warn('Failed to cancel operations for workflow:', error)
+        })
       socket.emit('leave-workflow')
       setCurrentWorkflowId(null)
       setPresenceUsers([])
 
-      // Clean up any pending position updates
       positionUpdateTimeouts.current.forEach((timeoutId) => {
         clearTimeout(timeoutId)
       })
@@ -581,18 +612,27 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
     }
   }, [socket, currentWorkflowId])
 
-  // Light throttling for position updates to ensure smooth collaborative movement
-  const positionUpdateTimeouts = useRef<Map<string, number>>(new Map())
-  const pendingPositionUpdates = useRef<Map<string, any>>(new Map())
+  /**
+   * Retry socket connection after auth failure.
+   * Call this when user has re-authenticated (e.g., after login redirect).
+   */
+  const retryConnection = useCallback(() => {
+    if (!authFailed) {
+      logger.info('retryConnection called but no auth failure - ignoring')
+      return
+    }
+    logger.info('Retrying socket connection after auth failure')
+    setAuthFailed(false)
+    // initializedRef.current was already reset in connect_error handler
+    // Effect will re-run and attempt connection
+  }, [authFailed])
 
-  // Emit workflow operations (blocks, edges, subflows)
   const emitWorkflowOperation = useCallback(
     (operation: string, target: string, payload: any, operationId?: string) => {
       if (!socket || !currentWorkflowId) {
         return
       }
 
-      // Apply light throttling only to position updates for smooth collaborative experience
       const isPositionUpdate = operation === 'update-position' && target === 'block'
       const { commit = true } = payload || {}
 
@@ -601,6 +641,7 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
 
         if (commit) {
           socket.emit('workflow-operation', {
+            workflowId: currentWorkflowId,
             operation,
             target,
             payload,
@@ -617,6 +658,7 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
         }
 
         pendingPositionUpdates.current.set(blockId, {
+          workflowId: currentWorkflowId,
           operation,
           target,
           payload,
@@ -637,68 +679,67 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
           positionUpdateTimeouts.current.set(blockId, timeoutId)
         }
       } else {
-        // For all non-position updates, emit immediately
         socket.emit('workflow-operation', {
+          workflowId: currentWorkflowId,
           operation,
           target,
           payload,
           timestamp: Date.now(),
-          operationId, // Include operation ID for queue tracking
+          operationId,
         })
       }
     },
     [socket, currentWorkflowId]
   )
 
-  // Emit subblock value updates
   const emitSubblockUpdate = useCallback(
-    (blockId: string, subblockId: string, value: any, operationId?: string) => {
-      // Only emit if socket is connected and we're in a valid workflow room
-      if (socket && currentWorkflowId) {
-        socket.emit('subblock-update', {
-          blockId,
-          subblockId,
-          value,
-          timestamp: Date.now(),
-          operationId, // Include operation ID for queue tracking
-        })
-      } else {
-        logger.warn('Cannot emit subblock update: no socket connection or workflow room', {
-          hasSocket: !!socket,
-          currentWorkflowId,
-          blockId,
-          subblockId,
-        })
+    (
+      blockId: string,
+      subblockId: string,
+      value: any,
+      operationId: string | undefined,
+      workflowId: string
+    ) => {
+      if (!socket) {
+        logger.warn('Cannot emit subblock update: no socket connection', { workflowId, blockId })
+        return
       }
+      socket.emit('subblock-update', {
+        workflowId,
+        blockId,
+        subblockId,
+        value,
+        timestamp: Date.now(),
+        operationId,
+      })
     },
-    [socket, currentWorkflowId]
+    [socket]
   )
 
-  // Emit variable value updates
   const emitVariableUpdate = useCallback(
-    (variableId: string, field: string, value: any, operationId?: string) => {
-      // Only emit if socket is connected and we're in a valid workflow room
-      if (socket && currentWorkflowId) {
-        socket.emit('variable-update', {
-          variableId,
-          field,
-          value,
-          timestamp: Date.now(),
-          operationId, // Include operation ID for queue tracking
-        })
-      } else {
-        logger.warn('Cannot emit variable update: no socket connection or workflow room', {
-          hasSocket: !!socket,
-          currentWorkflowId,
-          variableId,
-          field,
-        })
+    (
+      variableId: string,
+      field: string,
+      value: any,
+      operationId: string | undefined,
+      workflowId: string
+    ) => {
+      if (!socket) {
+        logger.warn('Cannot emit variable update: no socket connection', { workflowId, variableId })
+        return
       }
+      socket.emit('variable-update', {
+        workflowId,
+        variableId,
+        field,
+        value,
+        timestamp: Date.now(),
+        operationId,
+      })
     },
-    [socket, currentWorkflowId]
+    [socket]
   )
 
-  // Cursor throttling optimized for database connection health
   const lastCursorEmit = useRef(0)
   const emitCursorUpdate = useCallback(
     (cursor: { x: number; y: number } | null) => {
@@ -714,7 +755,6 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
         return
       }
 
-      // Reduced to 30fps (33ms) to reduce database load while maintaining smooth UX
       if (now - lastCursorEmit.current >= 33) {
         socket.emit('cursor-update', { cursor })
         lastCursorEmit.current = now
@@ -723,7 +763,6 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
     [socket, currentWorkflowId]
   )
 
-  // Emit selection updates
   const emitSelectionUpdate = useCallback(
     (selection: { type: 'block' | 'edge' | 'none'; id?: string }) => {
       if (socket && currentWorkflowId) {
@@ -733,7 +772,6 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
     [socket, currentWorkflowId]
   )
 
-  // Event handler registration functions
   const onWorkflowOperation = useCallback((handler: (data: any) => void) => {
     eventHandlers.current.workflowOperation = handler
   }, [])
@@ -754,14 +792,6 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
     eventHandlers.current.selectionUpdate = handler
   }, [])
 
-  const onUserJoined = useCallback((handler: (data: any) => void) => {
-    eventHandlers.current.userJoined = handler
-  }, [])
-
-  const onUserLeft = useCallback((handler: (data: any) => void) => {
-    eventHandlers.current.userLeft = handler
-  }, [])
-
   const onWorkflowDeleted = useCallback((handler: (data: any) => void) => {
     eventHandlers.current.workflowDeleted = handler
   }, [])
@@ -778,37 +808,62 @@ export function SocketProvider({ children, user }: SocketProviderProps) {
     eventHandlers.current.operationFailed = handler
   }, [])
 
-  return (
-    <SocketContext.Provider
-      value={{
-        socket,
-        isConnected,
-        isConnecting,
-        currentWorkflowId,
-        presenceUsers,
-        joinWorkflow,
-        leaveWorkflow,
-        emitWorkflowOperation,
-        emitSubblockUpdate,
-        emitVariableUpdate,
-
-        emitCursorUpdate,
-        emitSelectionUpdate,
-        onWorkflowOperation,
-        onSubblockUpdate,
-        onVariableUpdate,
-
-        onCursorUpdate,
-        onSelectionUpdate,
-        onUserJoined,
-        onUserLeft,
-        onWorkflowDeleted,
-        onWorkflowReverted,
-        onOperationConfirmed,
-        onOperationFailed,
-      }}
-    >
-      {children}
-    </SocketContext.Provider>
+  const contextValue = useMemo(
+    () => ({
+      socket,
+      isConnected,
+      isConnecting,
+      isReconnecting,
+      authFailed,
+      currentWorkflowId,
+      currentSocketId,
+      presenceUsers,
+      joinWorkflow,
+      leaveWorkflow,
+      retryConnection,
+      emitWorkflowOperation,
+      emitSubblockUpdate,
+      emitVariableUpdate,
+      emitCursorUpdate,
+      emitSelectionUpdate,
+      onWorkflowOperation,
+      onSubblockUpdate,
+      onVariableUpdate,
+      onCursorUpdate,
+      onSelectionUpdate,
+      onWorkflowDeleted,
+      onWorkflowReverted,
+      onOperationConfirmed,
+      onOperationFailed,
+    }),
+    [
+      socket,
+      isConnected,
+      isConnecting,
+      isReconnecting,
+      authFailed,
+      currentWorkflowId,
+      currentSocketId,
+      presenceUsers,
+      joinWorkflow,
+      leaveWorkflow,
+      retryConnection,
+      emitWorkflowOperation,
+      emitSubblockUpdate,
+      emitVariableUpdate,
+      emitCursorUpdate,
+      emitSelectionUpdate,
+      onWorkflowOperation,
+      onSubblockUpdate,
+      onVariableUpdate,
+      onCursorUpdate,
+      onSelectionUpdate,
+      onWorkflowDeleted,
+      onWorkflowReverted,
+      onOperationConfirmed,
+      onOperationFailed,
+    ]
   )
+
+  return <SocketContext.Provider value={contextValue}>{children}</SocketContext.Provider>
 }

@@ -1,25 +1,12 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
+import type {
+  SalesforceDeleteAccountParams,
+  SalesforceDeleteAccountResponse,
+} from '@/tools/salesforce/types'
+import { SOBJECT_DELETE_OUTPUT_PROPERTIES } from '@/tools/salesforce/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('SalesforceDeleteAccount')
-
-export interface SalesforceDeleteAccountParams {
-  accessToken: string
-  idToken?: string
-  instanceUrl?: string
-  accountId: string
-}
-
-export interface SalesforceDeleteAccountResponse {
-  success: boolean
-  output: {
-    id: string
-    deleted: boolean
-    metadata: {
-      operation: 'delete_account'
-    }
-  }
-}
 
 export const salesforceDeleteAccountTool: ToolConfig<
   SalesforceDeleteAccountParams,
@@ -54,8 +41,8 @@ export const salesforceDeleteAccountTool: ToolConfig<
     accountId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'Account ID to delete (required)',
+      visibility: 'user-or-llm',
+      description: 'Salesforce Account ID to delete (18-character string starting with 001)',
     },
   },
 
@@ -123,9 +110,6 @@ export const salesforceDeleteAccountTool: ToolConfig<
       output: {
         id: params?.accountId || '',
         deleted: true,
-        metadata: {
-          operation: 'delete_account' as const,
-        },
       },
     }
   },
@@ -135,11 +119,7 @@ export const salesforceDeleteAccountTool: ToolConfig<
     output: {
       type: 'object',
       description: 'Deleted account data',
-      properties: {
-        id: { type: 'string', description: 'Deleted account ID' },
-        deleted: { type: 'boolean', description: 'Whether account was deleted' },
-        metadata: { type: 'object', description: 'Operation metadata' },
-      },
+      properties: SOBJECT_DELETE_OUTPUT_PROPERTIES,
     },
   },
 }

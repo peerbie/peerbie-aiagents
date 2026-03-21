@@ -13,7 +13,7 @@ export const mapTool: ToolConfig<MapParams, MapResponse> = {
       type: 'string',
       required: true,
       visibility: 'user-or-llm',
-      description: 'The base URL to map and discover links from',
+      description: 'The base URL to map and discover links from (e.g., "https://example.com")',
     },
     search: {
       type: 'string',
@@ -42,8 +42,9 @@ export const mapTool: ToolConfig<MapParams, MapResponse> = {
     limit: {
       type: 'number',
       required: false,
-      visibility: 'user-only',
-      description: 'Maximum number of links to return (max: 100,000, default: 5,000)',
+      visibility: 'user-or-llm',
+      description:
+        'Maximum number of links to return (e.g., 100, 1000, 5000). Max: 100,000, default: 5,000',
     },
     timeout: {
       type: 'number',
@@ -65,6 +66,34 @@ export const mapTool: ToolConfig<MapParams, MapResponse> = {
     },
   },
 
+  hosting: {
+    envKeyPrefix: 'FIRECRAWL_API_KEY',
+    apiKeyParam: 'apiKey',
+    byokProviderId: 'firecrawl',
+    pricing: {
+      type: 'custom',
+      getCost: (_params, output) => {
+        if (output.creditsUsed == null) {
+          throw new Error('Firecrawl response missing creditsUsed field')
+        }
+
+        const creditsUsed = Number(output.creditsUsed)
+        if (Number.isNaN(creditsUsed)) {
+          throw new Error('Firecrawl response returned a non-numeric creditsUsed field')
+        }
+
+        return {
+          cost: creditsUsed * 0.001,
+          metadata: { creditsUsed },
+        }
+      },
+    },
+    rateLimit: {
+      mode: 'per_request',
+      requestsPerMinute: 100,
+    },
+  },
+
   request: {
     method: 'POST',
     url: 'https://api.firecrawl.dev/v2/map',
@@ -77,14 +106,15 @@ export const mapTool: ToolConfig<MapParams, MapResponse> = {
         url: params.url,
       }
 
-      if (params.search != null) body.search = params.search
-      if (params.sitemap != null) body.sitemap = params.sitemap
-      if (params.includeSubdomains != null) body.includeSubdomains = params.includeSubdomains
-      if (params.ignoreQueryParameters != null)
+      if (params.search) body.search = params.search
+      if (params.sitemap) body.sitemap = params.sitemap
+      if (typeof params.includeSubdomains === 'boolean')
+        body.includeSubdomains = params.includeSubdomains
+      if (typeof params.ignoreQueryParameters === 'boolean')
         body.ignoreQueryParameters = params.ignoreQueryParameters
-      if (params.limit !== undefined) body.limit = Number(params.limit)
-      if (params.timeout !== undefined) body.timeout = Number(params.timeout)
-      if (params.location !== undefined) body.location = params.location
+      if (params.limit) body.limit = Number(params.limit)
+      if (params.timeout) body.timeout = Number(params.timeout)
+      if (params.location) body.location = params.location
 
       return body
     },
@@ -98,6 +128,7 @@ export const mapTool: ToolConfig<MapParams, MapResponse> = {
       output: {
         success: data.success,
         links: data.links || [],
+        creditsUsed: 1,
       },
     }
   },

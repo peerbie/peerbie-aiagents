@@ -9,23 +9,28 @@ import {
   workspace,
   workspaceInvitation,
 } from '@sim/db/schema'
+import { createLogger } from '@sim/logger'
 import { and, eq, inArray, isNull, or } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
 import {
   getEmailSubject,
   renderBatchInvitationEmail,
   renderInvitationEmail,
-} from '@/components/emails/render-email'
+} from '@/components/emails'
+import { AuditAction, AuditResourceType, recordAudit } from '@/lib/audit/log'
 import { getSession } from '@/lib/auth'
 import {
   validateBulkInvitations,
   validateSeatAvailability,
 } from '@/lib/billing/validation/seat-management'
-import { sendEmail } from '@/lib/email/mailer'
-import { quickValidateEmail } from '@/lib/email/validation'
-import { createLogger } from '@/lib/logs/console/logger'
-import { hasWorkspaceAdminAccess } from '@/lib/permissions/utils'
-import { getBaseUrl } from '@/lib/urls/utils'
+import { getBaseUrl } from '@/lib/core/utils/urls'
+import { sendEmail } from '@/lib/messaging/email/mailer'
+import { quickValidateEmail } from '@/lib/messaging/email/validation'
+import { hasWorkspaceAdminAccess } from '@/lib/workspaces/permissions/utils'
+import {
+  InvitationsNotAllowedError,
+  validateInvitationsAllowed,
+} from '@/ee/access-control/utils/permission-check'
 
 const logger = createLogger('OrganizationInvitations')
 
@@ -115,6 +120,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    await validateInvitationsAllowed(session.user.id)
 
     const { id: organizationId } = await params
     const url = new URL(request.url)
@@ -376,8 +383,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         const emailHtml = await renderInvitationEmail(
           inviter[0]?.name || 'Someone',
           organizationEntry[0]?.name || 'organization',
-          `${getBaseUrl()}/invite/${orgInvitation.id}`,
-          email
+          `${getBaseUrl()}/invite/${orgInvitation.id}`
         )
 
         emailResult = await sendEmail({
@@ -406,6 +412,22 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       workspaceInvitationCount: workspaceInvitationIds.length,
     })
 
+    for (const inv of invitationsToCreate) {
+      recordAudit({
+        workspaceId: null,
+        actorId: session.user.id,
+        action: AuditAction.ORG_INVITATION_CREATED,
+        resourceType: AuditResourceType.ORGANIZATION,
+        resourceId: organizationId,
+        actorName: session.user.name ?? undefined,
+        actorEmail: session.user.email ?? undefined,
+        resourceName: organizationEntry[0]?.name,
+        description: `Invited ${inv.email} to organization as ${role}`,
+        metadata: { invitationId: inv.id, targetEmail: inv.email, targetRole: role },
+        request,
+      })
+    }
+
     return NextResponse.json({
       success: true,
       message: `${invitationsToCreate.length} invitation(s) sent successfully`,
@@ -428,6 +450,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       },
     })
   } catch (error) {
+    if (error instanceof InvitationsNotAllowedError) {
+      return NextResponse.json({ error: error.message }, { status: 403 })
+    }
+
     logger.error('Failed to create organization invitations', {
       organizationId: (await params).id,
       error,
@@ -487,10 +513,7 @@ export async function DELETE(
         and(
           eq(invitation.id, invitationId),
           eq(invitation.organizationId, organizationId),
-          or(
-            eq(invitation.status, 'pending'),
-            eq(invitation.status, 'rejected') // Allow cancelling rejected invitations too
-          )
+          or(eq(invitation.status, 'pending'), eq(invitation.status, 'rejected'))
         )
       )
       .returning()
@@ -524,6 +547,19 @@ export async function DELETE(
       invitationId,
       cancelledBy: session.user.id,
       email: result[0].email,
+    })
+
+    recordAudit({
+      workspaceId: null,
+      actorId: session.user.id,
+      action: AuditAction.ORG_INVITATION_REVOKED,
+      resourceType: AuditResourceType.ORGANIZATION,
+      resourceId: organizationId,
+      actorName: session.user.name ?? undefined,
+      actorEmail: session.user.email ?? undefined,
+      description: `Revoked organization invitation for ${result[0].email}`,
+      metadata: { invitationId, targetEmail: result[0].email },
+      request,
     })
 
     return NextResponse.json({

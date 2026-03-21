@@ -53,6 +53,13 @@ export const functionExecuteTool: ToolConfig<CodeExecutionInput, CodeExecutionOu
       description: 'Mapping of block names to block IDs',
       default: {},
     },
+    blockOutputSchemas: {
+      type: 'object',
+      required: false,
+      visibility: 'hidden',
+      description: 'Mapping of block IDs to their output schemas for validation',
+      default: {},
+    },
     workflowVariables: {
       type: 'object',
       required: false,
@@ -73,7 +80,7 @@ export const functionExecuteTool: ToolConfig<CodeExecutionInput, CodeExecutionOu
         ? params.code.map((c: { content: string }) => c.content).join('\n')
         : params.code
 
-      return {
+      const body: Record<string, unknown> = {
         code: codeContent,
         language: params.language || DEFAULT_CODE_LANGUAGE,
         timeout: params.timeout || DEFAULT_EXECUTION_TIMEOUT_MS,
@@ -81,14 +88,33 @@ export const functionExecuteTool: ToolConfig<CodeExecutionInput, CodeExecutionOu
         workflowVariables: params.workflowVariables || {},
         blockData: params.blockData || {},
         blockNameMapping: params.blockNameMapping || {},
+        blockOutputSchemas: params.blockOutputSchemas || {},
         workflowId: params._context?.workflowId,
+        userId: params._context?.userId,
         isCustomTool: params.isCustomTool || false,
       }
+
+      if (params._sandboxFiles) {
+        body._sandboxFiles = params._sandboxFiles
+      }
+
+      return body
     },
   },
 
   transformResponse: async (response: Response): Promise<CodeExecutionOutput> => {
     const result = await response.json()
+
+    if (!result.success) {
+      return {
+        success: false,
+        output: {
+          result: null,
+          stdout: result.output?.stdout || '',
+        },
+        error: result.error,
+      }
+    }
 
     return {
       success: true,

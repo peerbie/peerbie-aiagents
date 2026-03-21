@@ -1,4 +1,5 @@
 import type { JSX, SVGProps } from 'react'
+import type { SelectorKey } from '@/hooks/selectors/types'
 import type { ToolResponse } from '@/tools/types'
 
 export type BlockIcon = (props: SVGProps<SVGSVGElement>) => JSX.Element
@@ -9,7 +10,8 @@ export type PrimitiveValueType =
   | 'boolean'
   | 'json'
   | 'array'
-  | 'files'
+  | 'file'
+  | 'file[]'
   | 'any'
 
 export type BlockCategory = 'blocks' | 'tools' | 'triggers'
@@ -26,6 +28,7 @@ export type GenerationType =
   | 'typescript-function-body'
   | 'json-schema'
   | 'json-object'
+  | 'table-schema'
   | 'system-prompt'
   | 'custom-tool-schema'
   | 'sql-query'
@@ -37,6 +40,10 @@ export type GenerationType =
   | 'mongodb-update'
   | 'neo4j-cypher'
   | 'neo4j-parameters'
+  | 'timestamp'
+  | 'timezone'
+  | 'cron-expression'
+  | 'odata-expression'
 
 export type SubBlockType =
   | 'short-input' // Single line input
@@ -48,6 +55,7 @@ export type SubBlockType =
   | 'code' // Code editor
   | 'switch' // Toggle button
   | 'tool-input' // Tool configuration
+  | 'skill-input' // Skill selection for agent blocks
   | 'checkbox-list' // Multiple selection
   | 'grouped-checkbox-list' // Grouped, scrollable checkbox list with select all
   | 'condition-input' // Conditional logic
@@ -55,10 +63,12 @@ export type SubBlockType =
   | 'time-input' // Time input
   | 'oauth-input' // OAuth credential selector
   | 'webhook-config' // Webhook configuration
-  | 'schedule-save' // Schedule save button with status display
+  | 'schedule-info' // Schedule status display (next run, last ran, failure badge)
   | 'file-selector' // File selector for Google Drive, etc.
+  | 'sheet-selector' // Sheet/tab selector for Google Sheets, Microsoft Excel
   | 'project-selector' // Project selector for Jira, Discord, etc.
   | 'channel-selector' // Channel selector for Slack, Discord, etc.
+  | 'user-selector' // User selector for Slack, etc.
   | 'folder-selector' // Folder selector for Gmail, etc.
   | 'knowledge-base-selector' // Knowledge base selector
   | 'knowledge-tag-filters' // Multiple tag filters for knowledge bases
@@ -69,6 +79,11 @@ export type SubBlockType =
   | 'mcp-dynamic-args' // MCP dynamic arguments based on tool schema
   | 'input-format' // Input structure format
   | 'response-format' // Response structure format
+  | 'filter-builder' // Filter conditions builder
+  | 'sort-builder' // Sort conditions builder
+  /**
+   * @deprecated Legacy trigger save subblock type.
+   */
   | 'trigger-save' // Trigger save button with validation
   | 'file-upload' // File uploader
   | 'input-mapping' // Map parent variables to child workflow input schema
@@ -77,6 +92,8 @@ export type SubBlockType =
   | 'workflow-selector' // Workflow selector for agent tools
   | 'workflow-input-mapper' // Dynamic workflow input mapper based on selected workflow
   | 'text' // Read-only text display
+  | 'router-input' // Router route definitions with descriptions
+  | 'table-selector' // Table selector with link to view table
 
 /**
  * Selector types that require display name hydration
@@ -85,7 +102,9 @@ export type SubBlockType =
 export const SELECTOR_TYPES_HYDRATION_REQUIRED: SubBlockType[] = [
   'oauth-input',
   'channel-selector',
+  'user-selector',
   'file-selector',
+  'sheet-selector',
   'folder-selector',
   'project-selector',
   'knowledge-base-selector',
@@ -94,6 +113,7 @@ export const SELECTOR_TYPES_HYDRATION_REQUIRED: SubBlockType[] = [
   'variables-input',
   'mcp-server-selector',
   'mcp-tool-selector',
+  'table-selector',
 ] as const
 
 export type ExtractToolOutput<T> = T extends ToolResponse ? T['output'] : never
@@ -112,13 +132,52 @@ export type ToolOutputToValueType<T> = T extends Record<string, any>
     }
   : never
 
-export type BlockOutput =
-  | PrimitiveValueType
-  | { [key: string]: PrimitiveValueType | Record<string, any> }
+export type BlockOutput = PrimitiveValueType | { [key: string]: any }
+
+/**
+ * Condition for showing an output field.
+ * Uses the same pattern as SubBlockConfig.condition
+ */
+export interface OutputCondition {
+  field: string
+  value: string | number | boolean | Array<string | number | boolean>
+  not?: boolean
+  and?: {
+    field: string
+    value:
+      | string
+      | number
+      | boolean
+      | Array<string | number | boolean | undefined | null>
+      | undefined
+      | null
+    not?: boolean
+  }
+}
 
 export type OutputFieldDefinition =
   | PrimitiveValueType
-  | { type: PrimitiveValueType; description?: string }
+  | {
+      type: PrimitiveValueType
+      description?: string
+      /**
+       * Optional condition for when this output should be shown.
+       * If not specified, the output is always shown.
+       * Uses the same condition format as subBlocks.
+       */
+      condition?: OutputCondition
+      /**
+       * If true, this output is hidden from display in the tag dropdown and logs,
+       * but still available for resolution and execution.
+       */
+      hiddenFromDisplay?: boolean
+    }
+
+export function isHiddenFromDisplay(def: unknown): boolean {
+  return Boolean(
+    def && typeof def === 'object' && 'hiddenFromDisplay' in def && def.hiddenFromDisplay
+  )
+}
 
 export interface ParamConfig {
   type: ParamType
@@ -143,6 +202,8 @@ export interface SubBlockConfig {
   type: SubBlockType
   mode?: 'basic' | 'advanced' | 'both' | 'trigger' // Default is 'both' if not specified. 'trigger' means only shown in trigger mode
   canonicalParamId?: string
+  /** Controls parameter visibility in agent/tool-input context */
+  paramVisibility?: 'user-or-llm' | 'user-only' | 'llm-only' | 'hidden'
   required?:
     | boolean
     | {
@@ -155,7 +216,7 @@ export interface SubBlockConfig {
           not?: boolean
         }
       }
-    | (() => {
+    | ((values?: Record<string, unknown>) => {
         field: string
         value: string | number | boolean | Array<string | number | boolean>
         not?: boolean
@@ -172,12 +233,14 @@ export interface SubBlockConfig {
         id: string
         icon?: React.ComponentType<{ className?: string }>
         group?: string
+        hidden?: boolean
       }[]
     | (() => {
         label: string
         id: string
         icon?: React.ComponentType<{ className?: string }>
         group?: string
+        hidden?: boolean
       }[])
   min?: number
   max?: number
@@ -190,7 +253,9 @@ export interface SubBlockConfig {
   hidden?: boolean
   hideFromPreview?: boolean // Hide this subblock from the workflow block preview
   requiresFeature?: string // Environment variable name that must be truthy for this subblock to be visible
+  hideWhenHosted?: boolean // Hide this subblock when running on hosted sim
   description?: string
+  tooltip?: string // Tooltip text displayed via info icon next to the title
   value?: (params: Record<string, any>) => string
   grouped?: boolean
   scrollable?: boolean
@@ -207,7 +272,7 @@ export interface SubBlockConfig {
           not?: boolean
         }
       }
-    | (() => {
+    | ((values?: Record<string, unknown>) => {
         field: string
         value: string | number | boolean | Array<string | number | boolean>
         not?: boolean
@@ -222,10 +287,14 @@ export interface SubBlockConfig {
   generationType?: GenerationType
   collapsible?: boolean // Whether the code block can be collapsed
   defaultCollapsed?: boolean // Whether the code block is collapsed by default
-  // OAuth specific properties
-  provider?: string
+  // OAuth specific properties - serviceId is the canonical identifier for OAuth services
   serviceId?: string
   requiredScopes?: string[]
+  // Whether this credential selector supports credential sets (for trigger blocks)
+  supportsCredentialSets?: boolean
+  // Selector properties — declarative mapping to a SelectorKey
+  selectorKey?: SelectorKey
+  selectorAllowSearch?: boolean
   // File selector specific properties
   mimeType?: string
   // File upload specific properties
@@ -239,6 +308,8 @@ export interface SubBlockConfig {
   rows?: number
   // Multi-select functionality
   multiSelect?: boolean
+  // Combobox specific: Enable search input in dropdown
+  searchable?: boolean
   // Wand configuration for AI assistance
   wandConfig?: {
     enabled: boolean
@@ -247,18 +318,32 @@ export interface SubBlockConfig {
     placeholder?: string // Custom placeholder for the prompt input
     maintainHistory?: boolean // Whether to maintain conversation history
   }
-  // Declarative dependency hints for cross-field clearing or invalidation
-  // Example: dependsOn: ['credential'] means this field should be cleared when credential changes
-  dependsOn?: string[]
+  /**
+   * Declarative dependency hints for cross-field clearing or invalidation.
+   * Supports two formats:
+   * - Simple array: `['credential']` - all fields must have values (AND logic)
+   * - Object with all/any: `{ all: ['authMethod'], any: ['credential', 'botToken'] }`
+   *   - `all`: all listed fields must have values (AND logic)
+   *   - `any`: at least one field must have a value (OR logic)
+   */
+  dependsOn?: string[] | { all?: string[]; any?: string[] }
   // Copyable-text specific: Use webhook URL from webhook management hook
   useWebhookUrl?: boolean
   // Trigger-save specific: The trigger ID for validation and saving
   triggerId?: string
-  // Dropdown specific: Function to fetch options dynamically (for multi-select or single-select)
+  // Dropdown/Combobox: Function to fetch options dynamically
+  // Works with both 'dropdown' (select-only) and 'combobox' (editable with expression support)
   fetchOptions?: (
     blockId: string,
     subBlockId: string
   ) => Promise<Array<{ label: string; id: string }>>
+  // Dropdown/Combobox: Function to fetch a single option's label by ID (for hydration)
+  // Called when component mounts with a stored value to display the correct label before options load
+  fetchOptionById?: (
+    blockId: string,
+    subBlockId: string,
+    optionId: string
+  ) => Promise<{ label: string; id: string } | null>
 }
 
 export interface BlockConfig<T extends ToolResponse = ToolResponse> {
@@ -274,6 +359,7 @@ export interface BlockConfig<T extends ToolResponse = ToolResponse> {
   subBlocks: SubBlockConfig[]
   triggerAllowed?: boolean
   authMode?: AuthMode
+  singleInstance?: boolean
   tools: {
     access: string[]
     config?: {

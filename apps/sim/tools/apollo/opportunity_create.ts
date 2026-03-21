@@ -24,13 +24,13 @@ export const apolloOpportunityCreateTool: ToolConfig<
       type: 'string',
       required: true,
       visibility: 'user-or-llm',
-      description: 'Name of the opportunity/deal',
+      description: 'Name of the opportunity/deal (e.g., "Enterprise License - Q1")',
     },
     account_id: {
       type: 'string',
       required: true,
       visibility: 'user-or-llm',
-      description: 'ID of the account this opportunity belongs to',
+      description: 'ID of the account this opportunity belongs to (e.g., "acc_abc123")',
     },
     amount: {
       type: 'number',
@@ -97,16 +97,18 @@ export const apolloOpportunityCreateTool: ToolConfig<
     return {
       success: true,
       output: {
-        opportunity: data.opportunity || {},
-        metadata: {
-          created: !!data.opportunity,
-        },
+        opportunity: data.opportunity ?? null,
+        created: !!data.opportunity,
       },
     }
   },
 
   outputs: {
-    opportunity: { type: 'json', description: 'Created opportunity data from Apollo' },
-    metadata: { type: 'json', description: 'Creation metadata including created status' },
+    opportunity: {
+      type: 'json',
+      description: 'Created opportunity data from Apollo',
+      optional: true,
+    },
+    created: { type: 'boolean', description: 'Whether the opportunity was successfully created' },
   },
 }

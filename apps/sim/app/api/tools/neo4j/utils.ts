@@ -1,7 +1,13 @@
 import neo4j from 'neo4j-driver'
+import { validateDatabaseHost } from '@/lib/core/security/input-validation.server'
 import type { Neo4jConnectionConfig } from '@/tools/neo4j/types'
 
 export async function createNeo4jDriver(config: Neo4jConnectionConfig) {
+  const hostValidation = await validateDatabaseHost(config.host, 'host')
+  if (!hostValidation.isValid) {
+    throw new Error(hostValidation.error)
+  }
+
   const isAuraHost =
     config.host === 'databases.neo4j.io' || config.host.endsWith('.databases.neo4j.io')
 
@@ -30,41 +36,11 @@ export async function createNeo4jDriver(config: Neo4jConnectionConfig) {
   return driver
 }
 
-export function validateCypherQuery(
-  query: string,
-  allowDangerousOps = false
-): { isValid: boolean; error?: string } {
+export function validateCypherQuery(query: string): { isValid: boolean; error?: string } {
   if (!query || typeof query !== 'string') {
     return {
       isValid: false,
       error: 'Query must be a non-empty string',
-    }
-  }
-
-  if (!allowDangerousOps) {
-    const dangerousPatterns = [
-      /DROP\s+DATABASE/i,
-      /DROP\s+CONSTRAINT/i,
-      /DROP\s+INDEX/i,
-      /CREATE\s+DATABASE/i,
-      /CREATE\s+CONSTRAINT/i,
-      /CREATE\s+INDEX/i,
-      /CALL\s+dbms\./i,
-      /CALL\s+db\./i,
-      /LOAD\s+CSV/i,
-      /apoc\.cypher\.run/i,
-      /apoc\.load/i,
-      /apoc\.periodic/i,
-    ]
-
-    for (const pattern of dangerousPatterns) {
-      if (pattern.test(query)) {
-        return {
-          isValid: false,
-          error:
-            'Query contains potentially dangerous operations (schema changes, system procedures, or external data loading)',
-        }
-      }
     }
   }
 

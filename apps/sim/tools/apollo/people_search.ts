@@ -51,13 +51,13 @@ export const apolloPeopleSearchTool: ToolConfig<
       type: 'number',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Page number for pagination (default: 1)',
+      description: 'Page number for pagination, default 1 (e.g., 1, 2, 3)',
     },
     per_page: {
       type: 'number',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Results per page (default: 25, max: 100)',
+      description: 'Results per page, default 25, max 100 (e.g., 25, 50, 100)',
     },
   },
 
@@ -107,20 +107,17 @@ export const apolloPeopleSearchTool: ToolConfig<
       success: true,
       output: {
         people: data.people || [],
-        metadata: {
-          page: data.pagination?.page || 1,
-          per_page: data.pagination?.per_page || 25,
-          total_entries: data.pagination?.total_entries || 0,
-        },
+        page: data.pagination?.page || 1,
+        per_page: data.pagination?.per_page || 25,
+        total_entries: data.pagination?.total_entries || 0,
       },
     }
   },
 
   outputs: {
     people: { type: 'json', description: 'Array of people matching the search criteria' },
-    metadata: {
-      type: 'json',
-      description: 'Pagination information including page, per_page, and total_entries',
-    },
+    page: { type: 'number', description: 'Current page number' },
+    per_page: { type: 'number', description: 'Results per page' },
+    total_entries: { type: 'number', description: 'Total matching entries' },
   },
 }

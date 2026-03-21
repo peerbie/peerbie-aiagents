@@ -6,17 +6,20 @@ import {
   user,
   type WorkspaceInvitationStatus,
   workspace,
+  workspaceEnvironment,
   workspaceInvitation,
 } from '@sim/db/schema'
-import { and, eq } from 'drizzle-orm'
+import { createLogger } from '@sim/logger'
+import { and, eq, isNull } from 'drizzle-orm'
 import { type NextRequest, NextResponse } from 'next/server'
-import { WorkspaceInvitationEmail } from '@/components/emails/workspace-invitation'
+import { WorkspaceInvitationEmail } from '@/components/emails'
+import { AuditAction, AuditResourceType, recordAudit } from '@/lib/audit/log'
 import { getSession } from '@/lib/auth'
-import { sendEmail } from '@/lib/email/mailer'
-import { getFromEmailAddress } from '@/lib/email/utils'
-import { createLogger } from '@/lib/logs/console/logger'
-import { hasWorkspaceAdminAccess } from '@/lib/permissions/utils'
-import { getBaseUrl } from '@/lib/urls/utils'
+import { getBaseUrl } from '@/lib/core/utils/urls'
+import { syncWorkspaceEnvCredentials } from '@/lib/credentials/environment'
+import { sendEmail } from '@/lib/messaging/email/mailer'
+import { getFromEmailAddress } from '@/lib/messaging/email/utils'
+import { getWorkspaceById, hasWorkspaceAdminAccess } from '@/lib/workspaces/permissions/utils'
 
 const logger = createLogger('WorkspaceInvitationAPI')
 
@@ -31,7 +34,6 @@ export async function GET(
   const isAcceptFlow = !!token // If token is provided, this is an acceptance flow
 
   if (!session?.user?.id) {
-    // For token-based acceptance flows, redirect to login
     if (isAcceptFlow) {
       return NextResponse.redirect(new URL(`/invite/${invitationId}?token=${token}`, getBaseUrl()))
     }
@@ -51,8 +53,9 @@ export async function GET(
 
     if (!invitation) {
       if (isAcceptFlow) {
+        const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
         return NextResponse.redirect(
-          new URL(`/invite/${invitationId}?error=invalid-token`, getBaseUrl())
+          new URL(`/invite/${invitationId}?error=invalid-token${tokenParam}`, getBaseUrl())
         )
       }
       return NextResponse.json({ error: 'Invitation not found or has expired' }, { status: 404 })
@@ -60,8 +63,9 @@ export async function GET(
 
     if (new Date() > new Date(invitation.expiresAt)) {
       if (isAcceptFlow) {
+        const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
         return NextResponse.redirect(
-          new URL(`/invite/${invitation.id}?error=expired`, getBaseUrl())
+          new URL(`/invite/${invitation.id}?error=expired${tokenParam}`, getBaseUrl())
         )
       }
       return NextResponse.json({ error: 'Invitation has expired' }, { status: 400 })
@@ -70,22 +74,25 @@ export async function GET(
     const workspaceDetails = await db
       .select()
       .from(workspace)
-      .where(eq(workspace.id, invitation.workspaceId))
+      .where(and(eq(workspace.id, invitation.workspaceId), isNull(workspace.archivedAt)))
       .then((rows) => rows[0])
 
     if (!workspaceDetails) {
       if (isAcceptFlow) {
+        const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
         return NextResponse.redirect(
-          new URL(`/invite/${invitation.id}?error=workspace-not-found`, getBaseUrl())
+          new URL(`/invite/${invitation.id}?error=workspace-not-found${tokenParam}`, getBaseUrl())
         )
       }
       return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
     }
 
     if (isAcceptFlow) {
+      const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
+
       if (invitation.status !== ('pending' as WorkspaceInvitationStatus)) {
         return NextResponse.redirect(
-          new URL(`/invite/${invitation.id}?error=already-processed`, getBaseUrl())
+          new URL(`/invite/${invitation.id}?error=already-processed${tokenParam}`, getBaseUrl())
         )
       }
 
@@ -100,7 +107,7 @@ export async function GET(
 
       if (!userData) {
         return NextResponse.redirect(
-          new URL(`/invite/${invitation.id}?error=user-not-found`, getBaseUrl())
+          new URL(`/invite/${invitation.id}?error=user-not-found${tokenParam}`, getBaseUrl())
         )
       }
 
@@ -108,7 +115,7 @@ export async function GET(
 
       if (!isValidMatch) {
         return NextResponse.redirect(
-          new URL(`/invite/${invitation.id}?error=email-mismatch`, getBaseUrl())
+          new URL(`/invite/${invitation.id}?error=email-mismatch${tokenParam}`, getBaseUrl())
         )
       }
 
@@ -134,7 +141,7 @@ export async function GET(
           .where(eq(workspaceInvitation.id, invitation.id))
 
         return NextResponse.redirect(
-          new URL(`/workspace/${invitation.workspaceId}/w`, getBaseUrl())
+          new URL(`/workspace/${invitation.workspaceId}/home`, getBaseUrl())
         )
       }
 
@@ -158,7 +165,37 @@ export async function GET(
           .where(eq(workspaceInvitation.id, invitation.id))
       })
 
-      return NextResponse.redirect(new URL(`/workspace/${invitation.workspaceId}/w`, getBaseUrl()))
+      const [wsEnvRow] = await db
+        .select({ variables: workspaceEnvironment.variables })
+        .from(workspaceEnvironment)
+        .where(eq(workspaceEnvironment.workspaceId, invitation.workspaceId))
+        .limit(1)
+      const wsEnvKeys = Object.keys((wsEnvRow?.variables as Record<string, string>) || {})
+      if (wsEnvKeys.length > 0) {
+        await syncWorkspaceEnvCredentials({
+          workspaceId: invitation.workspaceId,
+          envKeys: wsEnvKeys,
+          actingUserId: session.user.id,
+        })
+      }
+
+      recordAudit({
+        workspaceId: invitation.workspaceId,
+        actorId: session.user.id,
+        action: AuditAction.INVITATION_ACCEPTED,
+        resourceType: AuditResourceType.WORKSPACE,
+        resourceId: invitation.workspaceId,
+        actorName: session.user.name ?? undefined,
+        actorEmail: session.user.email ?? undefined,
+        resourceName: workspaceDetails.name,
+        description: `Accepted workspace invitation to "${workspaceDetails.name}"`,
+        metadata: { targetEmail: invitation.email },
+        request: req,
+      })
+
+      return NextResponse.redirect(
+        new URL(`/workspace/${invitation.workspaceId}/home`, getBaseUrl())
+      )
     }
 
     return NextResponse.json({
@@ -173,7 +210,7 @@ export async function GET(
 
 // DELETE /api/workspaces/invitations/[invitationId] - Delete a workspace invitation
 export async function DELETE(
-  _req: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ invitationId: string }> }
 ) {
   const { invitationId } = await params
@@ -200,6 +237,11 @@ export async function DELETE(
       return NextResponse.json({ error: 'Invitation not found' }, { status: 404 })
     }
 
+    const activeWorkspace = await getWorkspaceById(invitation.workspaceId)
+    if (!activeWorkspace) {
+      return NextResponse.json({ error: 'Workspace not found' }, { status: 404 })
+    }
+
     const hasAdminAccess = await hasWorkspaceAdminAccess(session.user.id, invitation.workspaceId)
 
     if (!hasAdminAccess) {
@@ -212,6 +254,19 @@ export async function DELETE(
 
     await db.delete(workspaceInvitation).where(eq(workspaceInvitation.id, invitationId))
 
+    recordAudit({
+      workspaceId: invitation.workspaceId,
+      actorId: session.user.id,
+      action: AuditAction.INVITATION_REVOKED,
+      resourceType: AuditResourceType.WORKSPACE,
+      resourceId: invitation.workspaceId,
+      actorName: session.user.name ?? undefined,
+      actorEmail: session.user.email ?? undefined,
+      description: `Revoked workspace invitation for ${invitation.email}`,
+      metadata: { invitationId, targetEmail: invitation.email },
+      request: _request,
+    })
+
     return NextResponse.json({ success: true })
   } catch (error) {
     logger.error('Error deleting workspace invitation:', error)
@@ -221,7 +276,7 @@ export async function DELETE(
 
 // POST /api/workspaces/invitations/[invitationId] - Resend a workspace invitation
 export async function POST(
-  _req: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ invitationId: string }> }
 ) {
   const { invitationId } = await params

@@ -1,4 +1,5 @@
 import type { ListPRsParams, PRListResponse } from '@/tools/github/types'
+import { BRANCH_REF_OUTPUT, PR_SUMMARY_OUTPUT_PROPERTIES, USER_OUTPUT } from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const listPRsTool: ToolConfig<ListPRsParams, PRListResponse> = {
@@ -149,5 +150,42 @@ ${prs
         closed_count: { type: 'number', description: 'Number of closed PRs' },
       },
     },
+  },
+}
+
+export const listPRsV2Tool: ToolConfig<ListPRsParams, any> = {
+  id: 'github_list_prs_v2',
+  name: listPRsTool.name,
+  description: listPRsTool.description,
+  version: '2.0.0',
+  params: listPRsTool.params,
+  request: listPRsTool.request,
+
+  transformResponse: async (response: Response) => {
+    const prs = await response.json()
+    return {
+      success: true,
+      output: {
+        items: prs ?? [],
+        count: prs?.length ?? 0,
+      },
+    }
+  },
+
+  outputs: {
+    items: {
+      type: 'array',
+      description: 'Array of pull request objects',
+      items: {
+        type: 'object',
+        properties: {
+          ...PR_SUMMARY_OUTPUT_PROPERTIES,
+          user: USER_OUTPUT,
+          head: BRANCH_REF_OUTPUT,
+          base: BRANCH_REF_OUTPUT,
+        },
+      },
+    },
+    count: { type: 'number', description: 'Number of PRs returned' },
   },
 }

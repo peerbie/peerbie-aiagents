@@ -1,4 +1,5 @@
 import type { InvoiceResponse, RetrieveInvoiceParams } from '@/tools/stripe/types'
+import { INVOICE_METADATA_OUTPUT_PROPERTIES, INVOICE_OUTPUT } from '@/tools/stripe/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const stripeRetrieveInvoiceTool: ToolConfig<RetrieveInvoiceParams, InvoiceResponse> = {
@@ -49,12 +50,13 @@ export const stripeRetrieveInvoiceTool: ToolConfig<RetrieveInvoiceParams, Invoic
 
   outputs: {
     invoice: {
-      type: 'json',
+      ...INVOICE_OUTPUT,
       description: 'The retrieved invoice object',
     },
     metadata: {
       type: 'json',
       description: 'Invoice metadata',
+      properties: INVOICE_METADATA_OUTPUT_PROPERTIES,
     },
   },
 }

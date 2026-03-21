@@ -1,5 +1,6 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type { HubSpotGetContactParams, HubSpotGetContactResponse } from '@/tools/hubspot/types'
+import { CONTACT_OBJECT_OUTPUT } from '@/tools/hubspot/types'
 import type { ToolConfig } from '@/tools/types'
 
 const logger = createLogger('HubSpotGetContact')
@@ -26,27 +27,29 @@ export const hubspotGetContactTool: ToolConfig<HubSpotGetContactParams, HubSpotG
       contactId: {
         type: 'string',
         required: true,
-        visibility: 'user-only',
-        description: 'The ID or email of the contact to retrieve',
+        visibility: 'user-or-llm',
+        description: 'The HubSpot contact ID (numeric string) or email address to retrieve',
       },
       idProperty: {
         type: 'string',
         required: false,
-        visibility: 'user-only',
+        visibility: 'user-or-llm',
         description:
           'Property to use as unique identifier (e.g., "email"). If not specified, uses record ID',
       },
       properties: {
         type: 'string',
         required: false,
-        visibility: 'user-only',
-        description: 'Comma-separated list of properties to return',
+        visibility: 'user-or-llm',
+        description:
+          'Comma-separated list of HubSpot property names to return (e.g., "email,firstname,lastname,phone")',
       },
       associations: {
         type: 'string',
         required: false,
-        visibility: 'user-only',
-        description: 'Comma-separated list of object types to retrieve associated IDs for',
+        visibility: 'user-or-llm',
+        description:
+          'Comma-separated list of object types to retrieve associated IDs for (e.g., "companies,deals")',
       },
     },
 
@@ -93,31 +96,15 @@ export const hubspotGetContactTool: ToolConfig<HubSpotGetContactParams, HubSpotG
         success: true,
         output: {
           contact: data,
-          metadata: {
-            operation: 'get_contact' as const,
-            contactId: data.id,
-          },
+          contactId: data.id,
           success: true,
         },
       }
     },
 
     outputs: {
+      contact: CONTACT_OBJECT_OUTPUT,
+      contactId: { type: 'string', description: 'The retrieved contact ID' },
       success: { type: 'boolean', description: 'Operation success status' },
-      output: {
-        type: 'object',
-        description: 'Contact data',
-        properties: {
-          contact: {
-            type: 'object',
-            description: 'Contact object with properties',
-          },
-          metadata: {
-            type: 'object',
-            description: 'Operation metadata',
-          },
-          success: { type: 'boolean', description: 'Operation success status' },
-        },
-      },
     },
   }

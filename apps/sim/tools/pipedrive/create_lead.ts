@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   PipedriveCreateLeadParams,
   PipedriveCreateLeadResponse,
@@ -31,49 +31,49 @@ export const pipedriveCreateLeadTool: ToolConfig<
     title: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The name of the lead',
+      visibility: 'user-or-llm',
+      description: 'The name of the lead (e.g., "Acme Corp - Website Redesign")',
     },
     person_id: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'ID of the person (REQUIRED unless organization_id is provided)',
+      visibility: 'user-or-llm',
+      description: 'ID of the person (REQUIRED unless organization_id is provided) (e.g., "456")',
     },
     organization_id: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'ID of the organization (REQUIRED unless person_id is provided)',
+      visibility: 'user-or-llm',
+      description: 'ID of the organization (REQUIRED unless person_id is provided) (e.g., "789")',
     },
     owner_id: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'ID of the user who will own the lead',
+      visibility: 'user-or-llm',
+      description: 'ID of the user who will own the lead (e.g., "123")',
     },
     value_amount: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Potential value amount',
+      visibility: 'user-or-llm',
+      description: 'Potential value amount (e.g., "10000")',
     },
     value_currency: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Currency code (e.g., USD, EUR)',
+      visibility: 'user-or-llm',
+      description: 'Currency code (e.g., "USD", "EUR", "GBP")',
     },
     expected_close_date: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
-      description: 'Expected close date in YYYY-MM-DD format',
+      visibility: 'user-or-llm',
+      description: 'Expected close date in YYYY-MM-DD format (e.g., "2025-04-15")',
     },
     visible_to: {
       type: 'string',
       required: false,
-      visibility: 'user-only',
+      visibility: 'user-or-llm',
       description: 'Visibility: 1 (Owner & followers), 3 (Entire company)',
     },
   },
@@ -131,31 +131,14 @@ export const pipedriveCreateLeadTool: ToolConfig<
     return {
       success: true,
       output: {
-        lead: data.data,
-        metadata: {
-          operation: 'create_lead' as const,
-        },
+        lead: data.data ?? null,
         success: true,
       },
     }
   },
 
   outputs: {
+    lead: { type: 'object', description: 'The created lead object', optional: true },
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Created lead details',
-      properties: {
-        lead: {
-          type: 'object',
-          description: 'The created lead object',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

@@ -1,9 +1,9 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { Button } from '@/components/ui/button'
-import { getEnv, isTruthy } from '@/lib/env'
-import { cn } from '@/lib/utils'
+import { Button } from '@/components/emcn'
+import { getEnv, isTruthy } from '@/lib/core/config/env'
+import { cn } from '@/lib/core/utils/cn'
 
 interface SSOLoginButtonProps {
   callbackURL?: string
@@ -34,11 +34,11 @@ export function SSOLoginButton({
   }
 
   const primaryBtnClasses = cn(
-    primaryClassName || 'auth-button-gradient',
+    primaryClassName || 'branded-button-gradient',
     'flex w-full items-center justify-center gap-2 rounded-[10px] border font-medium text-[15px] text-white transition-all duration-200'
   )
 
-  const outlineBtnClasses = cn('w-full rounded-[10px] shadow-sm hover:bg-gray-50')
+  const outlineBtnClasses = cn('w-full rounded-[10px]')
 
   return (
     <Button

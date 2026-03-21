@@ -1,4 +1,5 @@
 import { WealthboxIcon } from '@/components/icons'
+import { getScopesForService } from '@/lib/oauth/utils'
 import type { BlockConfig } from '@/blocks/types'
 import { AuthMode } from '@/blocks/types'
 import type { WealthboxResponse } from '@/tools/wealthbox/types'
@@ -33,10 +34,20 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       id: 'credential',
       title: 'Wealthbox Account',
       type: 'oauth-input',
-      provider: 'wealthbox',
+      canonicalParamId: 'oauthCredential',
+      mode: 'basic',
       serviceId: 'wealthbox',
-      requiredScopes: ['login', 'data'],
+      requiredScopes: getScopesForService('wealthbox'),
       placeholder: 'Select Wealthbox account',
+      required: true,
+    },
+    {
+      id: 'manualCredential',
+      title: 'Wealthbox Account',
+      type: 'short-input',
+      canonicalParamId: 'oauthCredential',
+      mode: 'advanced',
+      placeholder: 'Enter credential ID',
       required: true,
     },
     {
@@ -50,9 +61,9 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       id: 'contactId',
       title: 'Select Contact',
       type: 'file-selector',
-      provider: 'wealthbox',
       serviceId: 'wealthbox',
-      requiredScopes: ['login', 'data'],
+      selectorKey: 'wealthbox.contacts',
+      requiredScopes: getScopesForService('wealthbox'),
       placeholder: 'Enter Contact ID',
       mode: 'basic',
       canonicalParamId: 'contactId',
@@ -72,17 +83,6 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       title: 'Task ID',
       type: 'short-input',
       placeholder: 'Enter Task ID',
-      mode: 'basic',
-      canonicalParamId: 'taskId',
-      condition: { field: 'operation', value: ['read_task'] },
-    },
-    {
-      id: 'manualTaskId',
-      title: 'Task ID',
-      type: 'short-input',
-      canonicalParamId: 'taskId',
-      placeholder: 'Enter Task ID',
-      mode: 'advanced',
       condition: { field: 'operation', value: ['read_task'] },
     },
     {
@@ -100,6 +100,19 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
       placeholder: 'Enter due date (e.g., 2015-05-24 11:00 AM -0400)',
       condition: { field: 'operation', value: ['write_task'] },
       required: true,
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date/time string based on the user's description.
+The format should be: YYYY-MM-DD HH:MM AM/PM ZZZZ (e.g., 2015-05-24 11:00 AM -0400).
+Examples:
+- "tomorrow at 2pm" -> Calculate tomorrow's date at 02:00 PM with local timezone offset
+- "next Monday at 9am" -> Calculate next Monday at 09:00 AM with local timezone offset
+- "in 3 days at noon" -> Calculate 3 days from now at 12:00 PM with local timezone offset
+
+Return ONLY the date/time string - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the due date (e.g., "tomorrow at 2pm", "next Friday morning")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'firstName',
@@ -169,16 +182,14 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
         }
       },
       params: (params) => {
-        const { credential, operation, contactId, manualContactId, taskId, manualTaskId, ...rest } =
-          params
+        const { oauthCredential, operation, contactId, taskId, ...rest } = params
 
-        // Handle both selector and manual inputs
-        const effectiveContactId = (contactId || manualContactId || '').trim()
-        const effectiveTaskId = (taskId || manualTaskId || '').trim()
+        // contactId is the canonical param for both basic (file-selector) and advanced (manualContactId) modes
+        const effectiveContactId = contactId ? String(contactId).trim() : ''
 
         const baseParams = {
           ...rest,
-          credential,
+          credential: oauthCredential,
         }
 
         if (operation === 'read_note' || operation === 'write_note') {
@@ -222,12 +233,10 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
   },
   inputs: {
     operation: { type: 'string', description: 'Operation to perform' },
-    credential: { type: 'string', description: 'Wealthbox access token' },
+    oauthCredential: { type: 'string', description: 'Wealthbox access token' },
     noteId: { type: 'string', description: 'Note identifier' },
     contactId: { type: 'string', description: 'Contact identifier' },
-    manualContactId: { type: 'string', description: 'Manual contact identifier' },
     taskId: { type: 'string', description: 'Task identifier' },
-    manualTaskId: { type: 'string', description: 'Manual task identifier' },
     content: { type: 'string', description: 'Content text' },
     firstName: { type: 'string', description: 'First name' },
     lastName: { type: 'string', description: 'Last name' },
@@ -254,7 +263,7 @@ export const WealthboxBlock: BlockConfig<WealthboxResponse> = {
     tasks: { type: 'json', description: 'Array of task objects from bulk read operations' },
     metadata: {
       type: 'json',
-      description: 'Operation metadata including item IDs, types, and operation details',
+      description: 'Operation metadata with itemId, noteId, contactId, taskId, itemType',
     },
     success: {
       type: 'boolean',

@@ -20,17 +20,23 @@ export const webflowUpdateItemTool: ToolConfig<WebflowUpdateItemParams, WebflowU
         visibility: 'hidden',
         description: 'OAuth access token',
       },
+      siteId: {
+        type: 'string',
+        required: true,
+        visibility: 'user-or-llm',
+        description: 'ID of the Webflow site (e.g., "580e63e98c9a982ac9b8b741")',
+      },
       collectionId: {
         type: 'string',
         required: true,
-        visibility: 'user-only',
-        description: 'ID of the collection',
+        visibility: 'user-or-llm',
+        description: 'ID of the collection (e.g., "580e63fc8c9a982ac9b8b745")',
       },
       itemId: {
         type: 'string',
         required: true,
         visibility: 'user-or-llm',
-        description: 'ID of the item to update',
+        description: 'ID of the item to update (e.g., "580e64008c9a982ac9b8b754")',
       },
       fieldData: {
         type: 'json',

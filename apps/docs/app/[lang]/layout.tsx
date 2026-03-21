@@ -3,13 +3,15 @@ import { defineI18nUI } from 'fumadocs-ui/i18n'
 import { DocsLayout } from 'fumadocs-ui/layouts/docs'
 import { RootProvider } from 'fumadocs-ui/provider/next'
 import { Geist_Mono, Inter } from 'next/font/google'
-import Image from 'next/image'
+import Script from 'next/script'
 import {
   SidebarFolder,
   SidebarItem,
   SidebarSeparator,
 } from '@/components/docs-layout/sidebar-components'
 import { Navbar } from '@/components/navbar/navbar'
+import { AnimatedBlocks } from '@/components/ui/animated-blocks'
+import { SimLogoFull } from '@/components/ui/sim-logo'
 import { i18n } from '@/lib/i18n'
 import { source } from '@/lib/source'
 import '../global.css'
@@ -17,11 +19,13 @@ import '../global.css'
 const inter = Inter({
   subsets: ['latin'],
   variable: '--font-geist-sans',
+  display: 'swap',
 })
 
 const geistMono = Geist_Mono({
   subsets: ['latin'],
   variable: '--font-geist-mono',
+  display: 'swap',
 })
 
 const { provider } = defineI18nUI(i18n, {
@@ -52,15 +56,18 @@ type LayoutProps = {
   params: Promise<{ lang: string }>
 }
 
+const SUPPORTED_LANGUAGES: Set<string> = new Set(i18n.languages)
+
 export default async function Layout({ children, params }: LayoutProps) {
-  const { lang } = await params
+  const { lang: rawLang } = await params
+  const lang = SUPPORTED_LANGUAGES.has(rawLang) ? rawLang : 'en'
 
   const structuredData = {
     '@context': 'https://schema.org',
     '@type': 'WebSite',
     name: 'Sim Documentation',
     description:
-      'Comprehensive documentation for Sim - the visual workflow builder for AI Agent Workflows.',
+      'Documentation for Sim — the open-source platform to build AI agents and run your agentic workforce. Connect 1,000+ integrations and LLMs to deploy and orchestrate agentic workflows.',
     url: 'https://docs.sim.ai',
     publisher: {
       '@type': 'Organization',
@@ -93,30 +100,19 @@ export default async function Layout({ children, params }: LayoutProps) {
           type='application/ld+json'
           dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
         />
-        {/* OneDollarStats Analytics - CDN script handles everything automatically */}
-        <script defer src='https://assets.onedollarstats.com/stonks.js' />
       </head>
       <body className='flex min-h-screen flex-col font-sans'>
+        <Script src='https://assets.onedollarstats.com/stonks.js' strategy='lazyOnload' />
+        <AnimatedBlocks />
         <RootProvider i18n={provider(lang)}>
           <Navbar />
           <DocsLayout
             tree={source.pageTree[lang]}
-            themeSwitch={{
-              enabled: false,
-            }}
             nav={{
-              title: (
-                <Image
-                  src='/static/logo.png'
-                  alt='Sim'
-                  width={72}
-                  height={28}
-                  className='h-7 w-auto'
-                  priority
-                />
-              ),
+              title: <SimLogoFull className='h-7 w-auto' />,
             }}
             sidebar={{
+              tabs: false,
               defaultOpenLevel: 0,
               collapsible: false,
               footer: null,
@@ -128,7 +124,7 @@ export default async function Layout({ children, params }: LayoutProps) {
               },
             }}
             containerProps={{
-              className: '!pt-10',
+              className: '!pt-0',
             }}
           >
             {children}

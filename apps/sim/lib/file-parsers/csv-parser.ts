@@ -1,9 +1,9 @@
 import { createReadStream, existsSync } from 'fs'
 import { Readable } from 'stream'
+import { createLogger } from '@sim/logger'
 import { type Options, parse } from 'csv-parse'
 import type { FileParseResult, FileParser } from '@/lib/file-parsers/types'
 import { sanitizeTextForUTF8 } from '@/lib/file-parsers/utils'
-import { createLogger } from '@/lib/logs/console/logger'
 
 const logger = createLogger('CsvParser')
 
@@ -37,9 +37,9 @@ export class CsvParser implements FileParser {
       `Parsing CSV buffer, size: ${bufferSize} bytes (${(bufferSize / 1024 / 1024).toFixed(2)} MB)`
     )
 
-    const stream = Readable.from(buffer, {
-      highWaterMark: CONFIG.STREAM_CHUNK_SIZE,
-    })
+    const stream = new Readable({ read() {} })
+    stream.push(buffer)
+    stream.push(null)
 
     return this.parseStream(stream)
   }

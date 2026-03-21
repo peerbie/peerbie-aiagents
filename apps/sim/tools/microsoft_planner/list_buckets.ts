@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   MicrosoftPlannerListBucketsResponse,
   MicrosoftPlannerToolParams,
@@ -31,8 +31,8 @@ export const listBucketsTool: ToolConfig<
     planId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the plan',
+      visibility: 'user-or-llm',
+      description: 'The ID of the plan (e.g., "xqQg5FS2LkCe54tAMV_v2ZgADW2J")',
     },
   },
 
@@ -66,7 +66,7 @@ export const listBucketsTool: ToolConfig<
       output: {
         buckets,
         metadata: {
-          planId: buckets.length > 0 ? buckets[0].planId : undefined,
+          planId: buckets.length > 0 ? buckets[0].planId : null,
           count: buckets.length,
         },
       },
@@ -78,6 +78,13 @@ export const listBucketsTool: ToolConfig<
   outputs: {
     success: { type: 'boolean', description: 'Whether buckets were retrieved successfully' },
     buckets: { type: 'array', description: 'Array of bucket objects' },
-    metadata: { type: 'object', description: 'Metadata including planId and count' },
+    metadata: {
+      type: 'object',
+      description: 'Metadata including planId and count',
+      properties: {
+        planId: { type: 'string', description: 'Plan ID', optional: true },
+        count: { type: 'number', description: 'Number of buckets returned' },
+      },
+    },
   },
 }

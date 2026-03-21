@@ -1,17 +1,167 @@
-import { NextRequest } from 'next/server'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { setupFileApiMocks } from '@/app/api/__test-utils__/utils'
-
 /**
  * Tests for file presigned API route
  *
  * @vitest-environment node
  */
 
+import { NextRequest } from 'next/server'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const {
+  mockGetSession,
+  mockVerifyFileAccess,
+  mockVerifyWorkspaceFileAccess,
+  mockUseBlobStorage,
+  mockUseS3Storage,
+  mockGetStorageConfig,
+  mockIsUsingCloudStorage,
+  mockGetStorageProvider,
+  mockHasCloudStorage,
+  mockGeneratePresignedUploadUrl,
+  mockGeneratePresignedDownloadUrl,
+  mockValidateFileType,
+  mockGenerateCopilotUploadUrl,
+  mockIsImageFileType,
+  mockGetStorageProviderUploads,
+  mockIsUsingCloudStorageUploads,
+} = vi.hoisted(() => ({
+  mockGetSession: vi.fn(),
+  mockVerifyFileAccess: vi.fn().mockResolvedValue(true),
+  mockVerifyWorkspaceFileAccess: vi.fn().mockResolvedValue(true),
+  mockUseBlobStorage: { value: false },
+  mockUseS3Storage: { value: true },
+  mockGetStorageConfig: vi.fn(),
+  mockIsUsingCloudStorage: vi.fn(),
+  mockGetStorageProvider: vi.fn(),
+  mockHasCloudStorage: vi.fn(),
+  mockGeneratePresignedUploadUrl: vi.fn(),
+  mockGeneratePresignedDownloadUrl: vi.fn().mockResolvedValue('https://example.com/presigned-url'),
+  mockValidateFileType: vi.fn().mockReturnValue(null),
+  mockGenerateCopilotUploadUrl: vi.fn().mockResolvedValue({
+    url: 'https://example.com/presigned-url',
+    key: 'copilot/test-key.txt',
+  }),
+  mockIsImageFileType: vi.fn().mockReturnValue(true),
+  mockGetStorageProviderUploads: vi.fn(),
+  mockIsUsingCloudStorageUploads: vi.fn(),
+}))
+
+vi.mock('@/lib/auth', () => ({
+  getSession: mockGetSession,
+}))
+
+vi.mock('@/app/api/files/authorization', () => ({
+  verifyFileAccess: mockVerifyFileAccess,
+  verifyWorkspaceFileAccess: mockVerifyWorkspaceFileAccess,
+}))
+
+vi.mock('@/lib/uploads/config', () => ({
+  get USE_BLOB_STORAGE() {
+    return mockUseBlobStorage.value
+  },
+  get USE_S3_STORAGE() {
+    return mockUseS3Storage.value
+  },
+  UPLOAD_DIR: '/uploads',
+  getStorageConfig: mockGetStorageConfig,
+  isUsingCloudStorage: mockIsUsingCloudStorage,
+  getStorageProvider: mockGetStorageProvider,
+}))
+
+vi.mock('@/lib/uploads/core/storage-service', () => ({
+  hasCloudStorage: mockHasCloudStorage,
+  generatePresignedUploadUrl: mockGeneratePresignedUploadUrl,
+  generatePresignedDownloadUrl: mockGeneratePresignedDownloadUrl,
+}))
+
+vi.mock('@/lib/uploads/utils/validation', () => ({
+  validateFileType: mockValidateFileType,
+}))
+
+vi.mock('@/lib/uploads/utils/file-utils', () => ({
+  isImageFileType: mockIsImageFileType,
+}))
+
+vi.mock('@/lib/uploads', () => ({
+  CopilotFiles: {
+    generateCopilotUploadUrl: mockGenerateCopilotUploadUrl,
+  },
+  getStorageProvider: mockGetStorageProviderUploads,
+  isUsingCloudStorage: mockIsUsingCloudStorageUploads,
+}))
+
+import { OPTIONS, POST } from '@/app/api/files/presigned/route'
+
+const defaultMockUser = {
+  id: 'test-user-id',
+  name: 'Test User',
+  email: 'test@example.com',
+}
+
+function setupFileApiMocks(
+  options: {
+    authenticated?: boolean
+    storageProvider?: 's3' | 'blob' | 'local'
+    cloudEnabled?: boolean
+  } = {}
+) {
+  const { authenticated = true, storageProvider = 's3', cloudEnabled = true } = options
+
+  if (authenticated) {
+    mockGetSession.mockResolvedValue({ user: defaultMockUser })
+  } else {
+    mockGetSession.mockResolvedValue(null)
+  }
+
+  const useBlobStorage = storageProvider === 'blob' && cloudEnabled
+  const useS3Storage = storageProvider === 's3' && cloudEnabled
+
+  mockUseBlobStorage.value = useBlobStorage
+  mockUseS3Storage.value = useS3Storage
+
+  mockGetStorageConfig.mockReturnValue(
+    useBlobStorage
+      ? {
+          accountName: 'testaccount',
+          accountKey: 'testkey',
+          connectionString: 'testconnection',
+          containerName: 'testcontainer',
+        }
+      : {
+          bucket: 'test-bucket',
+          region: 'us-east-1',
+        }
+  )
+  mockIsUsingCloudStorage.mockReturnValue(cloudEnabled)
+  mockGetStorageProvider.mockReturnValue(
+    storageProvider === 'blob' ? 'Azure Blob' : storageProvider === 's3' ? 'S3' : 'Local'
+  )
+
+  mockHasCloudStorage.mockReturnValue(cloudEnabled)
+  mockGeneratePresignedUploadUrl.mockImplementation(
+    async (opts: { fileName: string; context: string }) => {
+      const timestamp = Date.now()
+      const safeFileName = opts.fileName.replace(/[^a-zA-Z0-9.-]/g, '_')
+      const key = `${opts.context}/${timestamp}-ik3a6w4-${safeFileName}`
+      return {
+        url: 'https://example.com/presigned-url',
+        key,
+      }
+    }
+  )
+  mockGeneratePresignedDownloadUrl.mockResolvedValue('https://example.com/presigned-url')
+
+  mockValidateFileType.mockReturnValue(null)
+
+  mockGetStorageProviderUploads.mockReturnValue(
+    storageProvider === 'blob' ? 'Azure Blob' : storageProvider === 's3' ? 'S3' : 'Local'
+  )
+  mockIsUsingCloudStorageUploads.mockReturnValue(cloudEnabled)
+}
+
 describe('/api/files/presigned', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.resetModules()
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2024-01-01T00:00:00Z'))
 
@@ -30,8 +180,6 @@ describe('/api/files/presigned', () => {
         cloudEnabled: false,
         storageProvider: 's3',
       })
-
-      const { POST } = await import('@/app/api/files/presigned/route')
 
       const request = new NextRequest('http://localhost:3000/api/files/presigned?type=chat', {
         method: 'POST',
@@ -61,8 +209,6 @@ describe('/api/files/presigned', () => {
         storageProvider: 's3',
       })
 
-      const { POST } = await import('@/app/api/files/presigned/route')
-
       const request = new NextRequest('http://localhost:3000/api/files/presigned', {
         method: 'POST',
         body: JSON.stringify({
@@ -85,8 +231,6 @@ describe('/api/files/presigned', () => {
         storageProvider: 's3',
       })
 
-      const { POST } = await import('@/app/api/files/presigned/route')
-
       const request = new NextRequest('http://localhost:3000/api/files/presigned', {
         method: 'POST',
         body: JSON.stringify({
@@ -108,8 +252,6 @@ describe('/api/files/presigned', () => {
         cloudEnabled: true,
         storageProvider: 's3',
       })
-
-      const { POST } = await import('@/app/api/files/presigned/route')
 
       const request = new NextRequest('http://localhost:3000/api/files/presigned', {
         method: 'POST',
@@ -134,8 +276,6 @@ describe('/api/files/presigned', () => {
         storageProvider: 's3',
       })
 
-      const { POST } = await import('@/app/api/files/presigned/route')
-
       const largeFileSize = 150 * 1024 * 1024 // 150MB (exceeds 100MB limit)
       const request = new NextRequest('http://localhost:3000/api/files/presigned', {
         method: 'POST',
@@ -159,8 +299,6 @@ describe('/api/files/presigned', () => {
         cloudEnabled: true,
         storageProvider: 's3',
       })
-
-      const { POST } = await import('@/app/api/files/presigned/route')
 
       const request = new NextRequest('http://localhost:3000/api/files/presigned?type=chat', {
         method: 'POST',
@@ -192,8 +330,6 @@ describe('/api/files/presigned', () => {
         storageProvider: 's3',
       })
 
-      const { POST } = await import('@/app/api/files/presigned/route')
-
       const request = new NextRequest(
         'http://localhost:3000/api/files/presigned?type=knowledge-base',
         {
@@ -210,7 +346,7 @@ describe('/api/files/presigned', () => {
       const data = await response.json()
 
       expect(response.status).toBe(200)
-      expect(data.fileInfo.key).toMatch(/^kb\/.*knowledge-doc\.pdf$/)
+      expect(data.fileInfo.key).toMatch(/^knowledge-base\/.*knowledge-doc\.pdf$/)
       expect(data.directUploadSupported).toBe(true)
     })
 
@@ -219,8 +355,6 @@ describe('/api/files/presigned', () => {
         cloudEnabled: true,
         storageProvider: 's3',
       })
-
-      const { POST } = await import('@/app/api/files/presigned/route')
 
       const request = new NextRequest('http://localhost:3000/api/files/presigned?type=chat', {
         method: 'POST',
@@ -246,8 +380,6 @@ describe('/api/files/presigned', () => {
         cloudEnabled: true,
         storageProvider: 'blob',
       })
-
-      const { POST } = await import('@/app/api/files/presigned/route')
 
       const request = new NextRequest('http://localhost:3000/api/files/presigned?type=chat', {
         method: 'POST',
@@ -279,8 +411,6 @@ describe('/api/files/presigned', () => {
         storageProvider: 'blob',
       })
 
-      const { POST } = await import('@/app/api/files/presigned/route')
-
       const request = new NextRequest('http://localhost:3000/api/files/presigned?type=chat', {
         method: 'POST',
         body: JSON.stringify({
@@ -306,14 +436,9 @@ describe('/api/files/presigned', () => {
         storageProvider: 's3',
       })
 
-      vi.doMock('@/lib/uploads/core/storage-service', () => ({
-        hasCloudStorage: vi.fn().mockReturnValue(true),
-        generatePresignedUploadUrl: vi
-          .fn()
-          .mockRejectedValue(new Error('Unknown storage provider: unknown')),
-      }))
-
-      const { POST } = await import('@/app/api/files/presigned/route')
+      mockGeneratePresignedUploadUrl.mockRejectedValue(
+        new Error('Unknown storage provider: unknown')
+      )
 
       const request = new NextRequest('http://localhost:3000/api/files/presigned?type=chat', {
         method: 'POST',
@@ -338,12 +463,7 @@ describe('/api/files/presigned', () => {
         storageProvider: 's3',
       })
 
-      vi.doMock('@/lib/uploads/core/storage-service', () => ({
-        hasCloudStorage: vi.fn().mockReturnValue(true),
-        generatePresignedUploadUrl: vi.fn().mockRejectedValue(new Error('S3 service unavailable')),
-      }))
-
-      const { POST } = await import('@/app/api/files/presigned/route')
+      mockGeneratePresignedUploadUrl.mockRejectedValue(new Error('S3 service unavailable'))
 
       const request = new NextRequest('http://localhost:3000/api/files/presigned?type=chat', {
         method: 'POST',
@@ -368,14 +488,7 @@ describe('/api/files/presigned', () => {
         storageProvider: 'blob',
       })
 
-      vi.doMock('@/lib/uploads/core/storage-service', () => ({
-        hasCloudStorage: vi.fn().mockReturnValue(true),
-        generatePresignedUploadUrl: vi
-          .fn()
-          .mockRejectedValue(new Error('Azure service unavailable')),
-      }))
-
-      const { POST } = await import('@/app/api/files/presigned/route')
+      mockGeneratePresignedUploadUrl.mockRejectedValue(new Error('Azure service unavailable'))
 
       const request = new NextRequest('http://localhost:3000/api/files/presigned?type=chat', {
         method: 'POST',
@@ -400,8 +513,6 @@ describe('/api/files/presigned', () => {
         storageProvider: 's3',
       })
 
-      const { POST } = await import('@/app/api/files/presigned/route')
-
       const request = new NextRequest('http://localhost:3000/api/files/presigned', {
         method: 'POST',
         body: 'invalid json',
@@ -418,8 +529,6 @@ describe('/api/files/presigned', () => {
 
   describe('OPTIONS', () => {
     it('should handle CORS preflight requests', async () => {
-      const { OPTIONS } = await import('@/app/api/files/presigned/route')
-
       const response = await OPTIONS()
 
       expect(response.status).toBe(200)

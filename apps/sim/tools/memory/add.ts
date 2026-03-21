@@ -1,4 +1,3 @@
-import { buildMemoryKey } from '@/tools/memory/helpers'
 import type { MemoryResponse } from '@/tools/memory/types'
 import type { ToolConfig } from '@/tools/types'
 
@@ -12,30 +11,28 @@ export const memoryAddTool: ToolConfig<any, MemoryResponse> = {
     conversationId: {
       type: 'string',
       required: false,
+      visibility: 'user-or-llm',
       description:
-        'Conversation identifier (e.g., user-123, session-abc). If a memory with this conversationId already exists for this block, the new message will be appended to it.',
+        'Conversation identifier (e.g., user-123, session-abc). If a memory with this conversationId already exists, the new message will be appended to it.',
     },
     id: {
       type: 'string',
       required: false,
+      visibility: 'user-or-llm',
       description:
         'Legacy parameter for conversation identifier. Use conversationId instead. Provided for backwards compatibility.',
     },
     role: {
       type: 'string',
       required: true,
+      visibility: 'user-or-llm',
       description: 'Role for agent memory (user, assistant, or system)',
     },
     content: {
       type: 'string',
       required: true,
+      visibility: 'user-or-llm',
       description: 'Content for agent memory',
-    },
-    blockId: {
-      type: 'string',
-      required: false,
-      description:
-        'Optional block ID. If not provided, uses the current block ID from execution context, or defaults to "default".',
     },
   },
 
@@ -46,62 +43,20 @@ export const memoryAddTool: ToolConfig<any, MemoryResponse> = {
       'Content-Type': 'application/json',
     }),
     body: (params) => {
-      const workflowId = params._context?.workflowId
-      const contextBlockId = params._context?.blockId
-
-      if (!workflowId) {
-        return {
-          _errorResponse: {
-            status: 400,
-            data: {
-              success: false,
-              error: {
-                message: 'workflowId is required and must be provided in execution context',
-              },
-            },
-          },
-        }
+      const workspaceId = params._context?.workspaceId
+      if (!workspaceId) {
+        throw new Error('workspaceId is required in execution context')
       }
 
-      // Use 'id' as fallback for 'conversationId' for backwards compatibility
       const conversationId = params.conversationId || params.id
-
-      // Default blockId to 'default' if not provided in params or context
-      const blockId = params.blockId || contextBlockId || 'default'
-
-      if (!conversationId || conversationId.trim() === '') {
-        return {
-          _errorResponse: {
-            status: 400,
-            data: {
-              success: false,
-              error: {
-                message: 'conversationId or id is required',
-              },
-            },
-          },
-        }
+      if (!conversationId) {
+        throw new Error('conversationId or id is required')
       }
-
-      if (!params.role || !params.content) {
-        return {
-          _errorResponse: {
-            status: 400,
-            data: {
-              success: false,
-              error: {
-                message: 'Role and content are required for agent memory',
-              },
-            },
-          },
-        }
-      }
-
-      const key = buildMemoryKey(conversationId, blockId)
+      const key = conversationId
 
       const body: Record<string, any> = {
         key,
-        workflowId,
+        workspaceId,
         data: {
           role: params.role,
           content: params.content,

@@ -1,7 +1,8 @@
 import { randomUUID } from 'crypto'
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { createLogger } from '@/lib/logs/console/logger'
+import { checkInternalAuth } from '@/lib/auth/hybrid'
 import { createPostgresConnection, executeDelete } from '@/app/api/tools/postgresql/utils'
 
 const logger = createLogger('PostgreSQLDeleteAPI')
@@ -21,6 +22,12 @@ export async function POST(request: NextRequest) {
   const requestId = randomUUID().slice(0, 8)
 
   try {
+    const auth = await checkInternalAuth(request)
+    if (!auth.success || !auth.userId) {
+      logger.warn(`[${requestId}] Unauthorized PostgreSQL delete attempt`)
+      return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 })
+    }
+
     const body = await request.json()
     const params = DeleteSchema.parse(body)
 
@@ -28,7 +35,7 @@ export async function POST(request: NextRequest) {
       `[${requestId}] Deleting data from ${params.table} on ${params.host}:${params.port}/${params.database}`
     )
 
-    const sql = createPostgresConnection({
+    const sql = await createPostgresConnection({
       host: params.host,
       port: params.port,
       database: params.database,

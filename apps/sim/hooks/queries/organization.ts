@@ -1,5 +1,9 @@
+import { createLogger } from '@sim/logger'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { client } from '@/lib/auth-client'
+import { client } from '@/lib/auth/auth-client'
+import { isEnterprise, isTeam } from '@/lib/billing/plan-helpers'
+
+const logger = createLogger('OrganizationQueries')
 
 /**
  * Query key factories for organization-related queries
@@ -18,18 +22,18 @@ export const organizationKeys = {
 
 /**
  * Fetch all organizations for the current user
+ * Note: Billing data is fetched separately via useSubscriptionData() to avoid duplicate calls
+ * Note: better-auth client does not support AbortSignal, so signal is accepted but not forwarded
  */
-async function fetchOrganizations() {
-  const [orgsResponse, activeOrgResponse, billingResponse] = await Promise.all([
+async function fetchOrganizations(_signal?: AbortSignal) {
+  const [orgsResponse, activeOrgResponse] = await Promise.all([
     client.organization.list(),
     client.organization.getFullOrganization(),
-    fetch('/api/billing?context=user').then((r) => r.json()),
   ])
 
   return {
     organizations: orgsResponse.data || [],
     activeOrganization: activeOrgResponse.data,
-    billingData: billingResponse,
   }
 }
 
@@ -39,16 +43,15 @@ async function fetchOrganizations() {
 export function useOrganizations() {
   return useQuery({
     queryKey: organizationKeys.lists(),
-    queryFn: fetchOrganizations,
+    queryFn: ({ signal }) => fetchOrganizations(signal),
     staleTime: 30 * 1000,
-    placeholderData: keepPreviousData,
   })
 }
 
 /**
  * Fetch a specific organization by ID
  */
-async function fetchOrganization() {
+async function fetchOrganization(_signal?: AbortSignal) {
   const response = await client.organization.getFullOrganization()
   return response.data
 }
@@ -59,7 +62,7 @@ async function fetchOrganization() {
 export function useOrganization(orgId: string) {
   return useQuery({
     queryKey: organizationKeys.detail(orgId),
-    queryFn: fetchOrganization,
+    queryFn: ({ signal }) => fetchOrganization(signal),
     enabled: !!orgId,
     staleTime: 30 * 1000,
     placeholderData: keepPreviousData,
@@ -69,7 +72,7 @@ export function useOrganization(orgId: string) {
 /**
  * Fetch organization subscription data
  */
-async function fetchOrganizationSubscription(orgId: string) {
+async function fetchOrganizationSubscription(orgId: string, _signal?: AbortSignal) {
   if (!orgId) {
     return null
   }
@@ -79,15 +82,15 @@ async function fetchOrganizationSubscription(orgId: string) {
   })
 
   if (response.error) {
-    console.error('Error fetching organization subscription:', response.error)
+    logger.error('Error fetching organization subscription', { error: response.error })
     return null
   }
 
   const teamSubscription = response.data?.find(
-    (sub: any) => sub.status === 'active' && sub.plan === 'team'
+    (sub: any) => sub.status === 'active' && isTeam(sub.plan)
   )
   const enterpriseSubscription = response.data?.find(
-    (sub: any) => sub.plan === 'enterprise' || sub.plan === 'enterprise-plus'
+    (sub: any) => isEnterprise(sub.plan) || sub.plan === 'enterprise-plus'
   )
   const activeSubscription = enterpriseSubscription || teamSubscription
 
@@ -100,7 +103,7 @@ async function fetchOrganizationSubscription(orgId: string) {
 export function useOrganizationSubscription(orgId: string) {
   return useQuery({
     queryKey: organizationKeys.subscription(orgId),
-    queryFn: () => fetchOrganizationSubscription(orgId),
+    queryFn: ({ signal }) => fetchOrganizationSubscription(orgId, signal),
     enabled: !!orgId,
     retry: false,
     staleTime: 30 * 1000,
@@ -111,8 +114,8 @@ export function useOrganizationSubscription(orgId: string) {
 /**
  * Fetch organization billing data
  */
-async function fetchOrganizationBilling(orgId: string) {
-  const response = await fetch(`/api/billing?context=organization&id=${orgId}`)
+async function fetchOrganizationBilling(orgId: string, signal?: AbortSignal) {
+  const response = await fetch(`/api/billing?context=organization&id=${orgId}`, { signal })
 
   if (response.status === 404) {
     return null
@@ -130,7 +133,7 @@ async function fetchOrganizationBilling(orgId: string) {
 export function useOrganizationBilling(orgId: string) {
   return useQuery({
     queryKey: organizationKeys.billing(orgId),
-    queryFn: () => fetchOrganizationBilling(orgId),
+    queryFn: ({ signal }) => fetchOrganizationBilling(orgId, signal),
     enabled: !!orgId,
     retry: false,
     staleTime: 30 * 1000,
@@ -141,8 +144,8 @@ export function useOrganizationBilling(orgId: string) {
 /**
  * Fetch organization member usage data
  */
-async function fetchOrganizationMembers(orgId: string) {
-  const response = await fetch(`/api/organizations/${orgId}/members?include=usage`)
+async function fetchOrganizationMembers(orgId: string, signal?: AbortSignal) {
+  const response = await fetch(`/api/organizations/${orgId}/members?include=usage`, { signal })
 
   if (response.status === 404) {
     return { members: [] }
@@ -160,7 +163,7 @@ async function fetchOrganizationMembers(orgId: string) {
 export function useOrganizationMembers(orgId: string) {
   return useQuery({
     queryKey: organizationKeys.memberUsage(orgId),
-    queryFn: () => fetchOrganizationMembers(orgId),
+    queryFn: ({ signal }) => fetchOrganizationMembers(orgId, signal),
     enabled: !!orgId,
     staleTime: 30 * 1000,
     placeholderData: keepPreviousData,
@@ -253,8 +256,8 @@ export function useUpdateOrganizationUsageLimit() {
  * Invite member mutation
  */
 interface InviteMemberParams {
-  email: string
-  workspaceInvitations?: Array<{ id: string; name: string }>
+  emails: string[]
+  workspaceInvitations?: Array<{ workspaceId: string; permission: 'admin' | 'write' | 'read' }>
   orgId: string
 }
 
@@ -262,12 +265,12 @@ export function useInviteMember() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ email, workspaceInvitations, orgId }: InviteMemberParams) => {
+    mutationFn: async ({ emails, workspaceInvitations, orgId }: InviteMemberParams) => {
       const response = await fetch(`/api/organizations/${orgId}/invitations?batch=true`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          emails: [email],
+          emails,
           workspaceInvitations,
         }),
       })
@@ -362,33 +365,61 @@ export function useCancelInvitation() {
 }
 
 /**
+ * Resend invitation mutation
+ */
+interface ResendInvitationParams {
+  invitationId: string
+  orgId: string
+}
+
+export function useResendInvitation() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ invitationId, orgId }: ResendInvitationParams) => {
+      const response = await fetch(`/api/organizations/${orgId}/invitations/${invitationId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.message || 'Failed to resend invitation')
+      }
+
+      return response.json()
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: organizationKeys.detail(variables.orgId) })
+    },
+  })
+}
+
+/**
  * Update seats mutation (handles both add and reduce)
  */
 interface UpdateSeatsParams {
   orgId: string
   seats: number
-  subscriptionId: string
 }
 
 export function useUpdateSeats() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ seats, orgId, subscriptionId }: UpdateSeatsParams) => {
-      const response = await client.subscription.upgrade({
-        plan: 'team',
-        referenceId: orgId,
-        subscriptionId,
-        seats,
-        successUrl: window.location.href,
-        cancelUrl: window.location.href,
+    mutationFn: async ({ seats, orgId }: UpdateSeatsParams) => {
+      const response = await fetch(`/api/organizations/${orgId}/seats`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seats }),
       })
 
-      if (response.error) {
-        throw new Error(response.error.message || 'Failed to update seats')
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Failed to update seats')
       }
 
-      return response.data
+      return response.json()
     },
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: organizationKeys.detail(variables.orgId) })
@@ -463,7 +494,7 @@ export function useCreateOrganization() {
       return response.data
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: organizationKeys.all })
+      queryClient.invalidateQueries({ queryKey: organizationKeys.lists() })
     },
   })
 }

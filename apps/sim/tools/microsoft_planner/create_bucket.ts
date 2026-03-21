@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type {
   MicrosoftPlannerCreateBucketResponse,
   MicrosoftPlannerToolParams,
@@ -31,8 +31,9 @@ export const createBucketTool: ToolConfig<
     planId: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the plan where the bucket will be created',
+      visibility: 'user-or-llm',
+      description:
+        'The ID of the plan where the bucket will be created (e.g., "xqQg5FS2LkCe54tAMV_v2ZgADW2J")',
     },
     name: {
       type: 'string',
@@ -95,6 +96,13 @@ export const createBucketTool: ToolConfig<
   outputs: {
     success: { type: 'boolean', description: 'Whether the bucket was created successfully' },
     bucket: { type: 'object', description: 'The created bucket object with all properties' },
-    metadata: { type: 'object', description: 'Metadata including bucketId and planId' },
+    metadata: {
+      type: 'object',
+      description: 'Metadata including bucketId and planId',
+      properties: {
+        bucketId: { type: 'string', description: 'Created bucket ID' },
+        planId: { type: 'string', description: 'Parent plan ID' },
+      },
+    },
   },
 }

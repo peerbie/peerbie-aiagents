@@ -1,4 +1,5 @@
 import type { CreateInvoiceParams, InvoiceResponse } from '@/tools/stripe/types'
+import { INVOICE_METADATA_OUTPUT_PROPERTIES, INVOICE_OUTPUT } from '@/tools/stripe/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const stripeCreateInvoiceTool: ToolConfig<CreateInvoiceParams, InvoiceResponse> = {
@@ -91,12 +92,13 @@ export const stripeCreateInvoiceTool: ToolConfig<CreateInvoiceParams, InvoiceRes
 
   outputs: {
     invoice: {
-      type: 'json',
+      ...INVOICE_OUTPUT,
       description: 'The created invoice object',
     },
     metadata: {
       type: 'json',
       description: 'Invoice metadata',
+      properties: INVOICE_METADATA_OUTPUT_PROPERTIES,
     },
   },
 }

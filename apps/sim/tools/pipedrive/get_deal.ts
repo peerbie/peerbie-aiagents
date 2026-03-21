@@ -1,4 +1,4 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 import type { PipedriveGetDealParams, PipedriveGetDealResponse } from '@/tools/pipedrive/types'
 import type { ToolConfig } from '@/tools/types'
 
@@ -20,8 +20,8 @@ export const pipedriveGetDealTool: ToolConfig<PipedriveGetDealParams, PipedriveG
     deal_id: {
       type: 'string',
       required: true,
-      visibility: 'user-only',
-      description: 'The ID of the deal to retrieve',
+      visibility: 'user-or-llm',
+      description: 'The ID of the deal to retrieve (e.g., "123")',
     },
   },
 
@@ -51,31 +51,14 @@ export const pipedriveGetDealTool: ToolConfig<PipedriveGetDealParams, PipedriveG
     return {
       success: true,
       output: {
-        deal: data.data,
-        metadata: {
-          operation: 'get_deal' as const,
-        },
+        deal: data.data ?? null,
         success: true,
       },
     }
   },
 
   outputs: {
+    deal: { type: 'object', description: 'Deal object with full details', optional: true },
     success: { type: 'boolean', description: 'Operation success status' },
-    output: {
-      type: 'object',
-      description: 'Deal details',
-      properties: {
-        deal: {
-          type: 'object',
-          description: 'Deal object with full details',
-        },
-        metadata: {
-          type: 'object',
-          description: 'Operation metadata',
-        },
-        success: { type: 'boolean', description: 'Operation success status' },
-      },
-    },
   },
 }

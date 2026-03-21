@@ -1,4 +1,5 @@
 import { TrelloIcon } from '@/components/icons'
+import { getScopesForService } from '@/lib/oauth/utils'
 import type { BlockConfig } from '@/blocks/types'
 import { AuthMode } from '@/blocks/types'
 import type { ToolResponse } from '@/tools/types'
@@ -41,34 +42,68 @@ export const TrelloBlock: BlockConfig<ToolResponse> = {
       id: 'credential',
       title: 'Trello Account',
       type: 'oauth-input',
-      provider: 'trello',
       serviceId: 'trello',
-      requiredScopes: ['read', 'write'],
+      canonicalParamId: 'oauthCredential',
+      mode: 'basic',
+      requiredScopes: getScopesForService('trello'),
       placeholder: 'Select Trello account',
+      required: true,
+    },
+    {
+      id: 'manualCredential',
+      title: 'Trello Account',
+      type: 'short-input',
+      canonicalParamId: 'oauthCredential',
+      mode: 'advanced',
+      placeholder: 'Enter credential ID',
       required: true,
     },
 
     {
-      id: 'boardId',
+      id: 'boardSelector',
       title: 'Board',
-      type: 'short-input',
-      placeholder: 'Enter board ID',
+      type: 'project-selector',
+      canonicalParamId: 'boardId',
+      serviceId: 'trello',
+      selectorKey: 'trello.boards',
+      selectorAllowSearch: false,
+      placeholder: 'Select Trello board',
+      dependsOn: ['credential'],
+      mode: 'basic',
       condition: {
         field: 'operation',
-        value: 'trello_list_lists',
+        value: [
+          'trello_list_lists',
+          'trello_list_cards',
+          'trello_create_card',
+          'trello_get_actions',
+        ],
       },
-      required: true,
+      required: {
+        field: 'operation',
+        value: ['trello_list_lists', 'trello_list_cards', 'trello_create_card'],
+      },
     },
     {
       id: 'boardId',
-      title: 'Board',
+      title: 'Board ID',
       type: 'short-input',
-      placeholder: 'Enter board ID or search for a board',
+      canonicalParamId: 'boardId',
+      placeholder: 'Enter board ID',
+      mode: 'advanced',
       condition: {
         field: 'operation',
-        value: 'trello_list_cards',
+        value: [
+          'trello_list_lists',
+          'trello_list_cards',
+          'trello_create_card',
+          'trello_get_actions',
+        ],
       },
-      required: true,
+      required: {
+        field: 'operation',
+        value: ['trello_list_lists', 'trello_list_cards', 'trello_create_card'],
+      },
     },
     {
       id: 'listId',
@@ -79,17 +114,6 @@ export const TrelloBlock: BlockConfig<ToolResponse> = {
         field: 'operation',
         value: 'trello_list_cards',
       },
-    },
-    {
-      id: 'boardId',
-      title: 'Board',
-      type: 'short-input',
-      placeholder: 'Enter board ID or search for a board',
-      condition: {
-        field: 'operation',
-        value: 'trello_create_card',
-      },
-      required: true,
     },
     {
       id: 'listId',
@@ -148,6 +172,21 @@ export const TrelloBlock: BlockConfig<ToolResponse> = {
       condition: {
         field: 'operation',
         value: 'trello_create_card',
+      },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date or timestamp based on the user's description.
+The timestamp should be in ISO 8601 format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ (UTC timezone).
+Examples:
+- "tomorrow" -> Calculate tomorrow's date in YYYY-MM-DD format
+- "next Friday" -> Calculate the next Friday in YYYY-MM-DD format
+- "in 3 days" -> Calculate 3 days from now in YYYY-MM-DD format
+- "end of month" -> Calculate the last day of the current month
+- "next week at 3pm" -> Calculate next week's date at 15:00:00Z
+
+Return ONLY the date/timestamp string - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the due date (e.g., "next Friday", "in 2 weeks")...',
+        generationType: 'timestamp',
       },
     },
 
@@ -236,18 +275,23 @@ export const TrelloBlock: BlockConfig<ToolResponse> = {
         field: 'operation',
         value: 'trello_update_card',
       },
-    },
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date or timestamp based on the user's description.
+The timestamp should be in ISO 8601 format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ (UTC timezone).
+Examples:
+- "tomorrow" -> Calculate tomorrow's date in YYYY-MM-DD format
+- "next Friday" -> Calculate the next Friday in YYYY-MM-DD format
+- "in 3 days" -> Calculate 3 days from now in YYYY-MM-DD format
+- "end of month" -> Calculate the last day of the current month
+- "next week at 3pm" -> Calculate next week's date at 15:00:00Z
 
-    {
-      id: 'boardId',
-      title: 'Board ID',
-      type: 'short-input',
-      placeholder: 'Enter board ID to get board actions',
-      condition: {
-        field: 'operation',
-        value: 'trello_get_actions',
+Return ONLY the date/timestamp string - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the due date (e.g., "next Friday", "in 2 weeks")...',
+        generationType: 'timestamp',
       },
     },
+
     {
       id: 'cardId',
       title: 'Card ID',
@@ -365,7 +409,7 @@ export const TrelloBlock: BlockConfig<ToolResponse> = {
   },
   inputs: {
     operation: { type: 'string', description: 'Trello operation to perform' },
-    credential: { type: 'string', description: 'Trello OAuth credential' },
+    oauthCredential: { type: 'string', description: 'Trello OAuth credential' },
     boardId: { type: 'string', description: 'Board ID' },
     listId: { type: 'string', description: 'List ID' },
     cardId: { type: 'string', description: 'Card ID' },
@@ -382,7 +426,6 @@ export const TrelloBlock: BlockConfig<ToolResponse> = {
     text: { type: 'string', description: 'Comment text' },
   },
   outputs: {
-    success: { type: 'boolean', description: 'Whether the operation was successful' },
     lists: {
       type: 'array',
       description: 'Array of list objects (for list_lists operation)',
@@ -405,11 +448,7 @@ export const TrelloBlock: BlockConfig<ToolResponse> = {
     },
     count: {
       type: 'number',
-      description: 'Number of items returned (boards, cards, actions)',
-    },
-    error: {
-      type: 'string',
-      description: 'Error message if operation failed',
+      description: 'Number of items returned (lists, cards, actions)',
     },
   },
 }

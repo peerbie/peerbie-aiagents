@@ -1,13 +1,19 @@
-import { NextResponse } from 'next/server'
-import { createLogger } from '@/lib/logs/console/logger'
-import { validateAlphanumericId } from '@/lib/security/input-validation'
+import { createLogger } from '@sim/logger'
+import { type NextRequest, NextResponse } from 'next/server'
+import { checkInternalAuth } from '@/lib/auth/hybrid'
+import { validateAlphanumericId } from '@/lib/core/security/input-validation'
 
 export const dynamic = 'force-dynamic'
 
 const logger = createLogger('AsanaCreateTaskAPI')
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
+    const auth = await checkInternalAuth(request)
+    if (!auth.success || !auth.userId) {
+      return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 })
+    }
+
     const { accessToken, workspace, name, notes, assignee, due_on } = await request.json()
 
     if (!accessToken) {
@@ -99,15 +105,13 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      output: {
-        ts: new Date().toISOString(),
-        gid: task.gid,
-        name: task.name,
-        notes: task.notes || '',
-        completed: task.completed || false,
-        created_at: task.created_at,
-        permalink_url: task.permalink_url,
-      },
+      ts: new Date().toISOString(),
+      gid: task.gid,
+      name: task.name,
+      notes: task.notes || '',
+      completed: task.completed || false,
+      created_at: task.created_at,
+      permalink_url: task.permalink_url,
     })
   } catch (error: any) {
     logger.error('Error creating Asana task:', {

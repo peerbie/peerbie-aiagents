@@ -1,0 +1,144 @@
+import type { ReactNode } from 'react'
+
+export type OAuthProvider =
+  | 'google'
+  | 'google-email'
+  | 'google-drive'
+  | 'google-docs'
+  | 'google-sheets'
+  | 'google-calendar'
+  | 'google-contacts'
+  | 'google-ads'
+  | 'google-bigquery'
+  | 'google-tasks'
+  | 'google-vault'
+  | 'google-forms'
+  | 'google-groups'
+  | 'google-meet'
+  | 'vertex-ai'
+  | 'x'
+  | 'confluence'
+  | 'airtable'
+  | 'notion'
+  | 'jira'
+  | 'box'
+  | 'dropbox'
+  | 'microsoft'
+  | 'microsoft-ad'
+  | 'microsoft-dataverse'
+  | 'microsoft-excel'
+  | 'microsoft-planner'
+  | 'microsoft-teams'
+  | 'outlook'
+  | 'onedrive'
+  | 'sharepoint'
+  | 'linear'
+  | 'slack'
+  | 'reddit'
+  | 'trello'
+  | 'wealthbox'
+  | 'webflow'
+  | 'asana'
+  | 'attio'
+  | 'pipedrive'
+  | 'hubspot'
+  | 'salesforce'
+  | 'linkedin'
+  | 'shopify'
+  | 'zoom'
+  | 'wordpress'
+  | 'spotify'
+  | 'calcom'
+  | 'docusign'
+
+export type OAuthService =
+  | 'google'
+  | 'google-email'
+  | 'google-drive'
+  | 'google-docs'
+  | 'google-sheets'
+  | 'google-calendar'
+  | 'google-contacts'
+  | 'google-ads'
+  | 'google-bigquery'
+  | 'google-tasks'
+  | 'google-vault'
+  | 'google-forms'
+  | 'google-groups'
+  | 'google-meet'
+  | 'vertex-ai'
+  | 'x'
+  | 'confluence'
+  | 'airtable'
+  | 'notion'
+  | 'jira'
+  | 'box'
+  | 'dropbox'
+  | 'microsoft-ad'
+  | 'microsoft-dataverse'
+  | 'microsoft-excel'
+  | 'microsoft-teams'
+  | 'microsoft-planner'
+  | 'sharepoint'
+  | 'outlook'
+  | 'linear'
+  | 'slack'
+  | 'reddit'
+  | 'wealthbox'
+  | 'onedrive'
+  | 'webflow'
+  | 'trello'
+  | 'asana'
+  | 'attio'
+  | 'pipedrive'
+  | 'hubspot'
+  | 'salesforce'
+  | 'linkedin'
+  | 'shopify'
+  | 'zoom'
+  | 'wordpress'
+  | 'spotify'
+  | 'calcom'
+  | 'docusign'
+  | 'github'
+
+export interface OAuthProviderConfig {
+  name: string
+  icon: (props: { className?: string }) => ReactNode
+  services: Record<string, OAuthServiceConfig>
+  defaultService: string
+}
+
+export interface OAuthServiceConfig {
+  name: string
+  description: string
+  providerId: string
+  icon: (props: { className?: string }) => ReactNode
+  baseProviderIcon: (props: { className?: string }) => ReactNode
+  scopes: string[]
+}
+
+/**
+ * Service metadata without React components - safe for server-side use
+ */
+export interface OAuthServiceMetadata {
+  providerId: string
+  name: string
+  description: string
+  baseProvider: string
+}
+
+export interface Credential {
+  id: string
+  name: string
+  provider: OAuthProvider
+  serviceId?: string
+  lastUsed?: string
+  isDefault?: boolean
+  scopes?: string[]
+}
+
+export interface ProviderConfig {
+  baseProvider: string
+  featureType: string
+}

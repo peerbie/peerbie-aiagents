@@ -1,4 +1,6 @@
 import type { KnowledgeSearchResponse } from '@/tools/knowledge/types'
+import { enrichKBTagFiltersSchema } from '@/tools/schema-enrichers'
+import { parseTagFilters } from '@/tools/shared/tags'
 import type { ToolConfig } from '@/tools/types'
 
 export const knowledgeSearchTool: ToolConfig<any, KnowledgeSearchResponse> = {
@@ -41,6 +43,13 @@ export const knowledgeSearchTool: ToolConfig<any, KnowledgeSearchResponse> = {
     },
   },
 
+  schemaEnrichment: {
+    tagFilters: {
+      dependsOn: 'knowledgeBaseId',
+      enrichSchema: enrichKBTagFiltersSchema,
+    },
+  },
+
   request: {
     url: () => '/api/knowledge/search',
     method: 'POST',
@@ -53,44 +62,14 @@ export const knowledgeSearchTool: ToolConfig<any, KnowledgeSearchResponse> = {
       // Use single knowledge base ID
       const knowledgeBaseIds = [params.knowledgeBaseId]
 
-      // Parse dynamic tag filters and send display names to API
-      const filters: Record<string, string> = {}
-      if (params.tagFilters) {
-        let tagFilters = params.tagFilters
-
-        // Handle both string (JSON) and array formats
-        if (typeof tagFilters === 'string') {
-          try {
-            tagFilters = JSON.parse(tagFilters)
-          } catch (error) {
-            tagFilters = []
-          }
-        }
-
-        if (Array.isArray(tagFilters)) {
-          // Group filters by tag name for OR logic within same tag
-          const groupedFilters: Record<string, string[]> = {}
-          tagFilters.forEach((filter: any) => {
-            if (filter.tagName && filter.tagValue && filter.tagValue.trim().length > 0) {
-              if (!groupedFilters[filter.tagName]) {
-                groupedFilters[filter.tagName] = []
-              }
-              groupedFilters[filter.tagName].push(filter.tagValue)
-            }
-          })
-
-          // Convert to filters format - for now, join multiple values with OR separator
-          Object.entries(groupedFilters).forEach(([tagName, values]) => {
-            filters[tagName] = values.join('|OR|') // Use special separator for OR logic
-          })
-        }
-      }
+      // Parse tag filters from various formats (array, JSON string)
+      const structuredFilters = parseTagFilters(params.tagFilters)
 
       const requestBody = {
         knowledgeBaseIds,
         query: params.query,
         topK: params.topK ? Math.max(1, Math.min(100, Number(params.topK))) : 10,
-        ...(Object.keys(filters).length > 0 && { filters }),
+        ...(structuredFilters.length > 0 && { tagFilters: structuredFilters }),
         ...(workflowId && { workflowId }),
       }
 
@@ -101,13 +80,24 @@ export const knowledgeSearchTool: ToolConfig<any, KnowledgeSearchResponse> = {
     const result = await response.json()
     const data = result.data || result
 
+    // Restructure cost: extract tokens/model to top level for logging
+    let costFields: Record<string, unknown> = {}
+    if (data.cost && typeof data.cost === 'object') {
+      const { tokens, model, input, output: outputCost, total } = data.cost
+      costFields = {
+        cost: { input, output: outputCost, total },
+        ...(tokens && { tokens }),
+        ...(model && { model }),
+      }
+    }
+
     return {
       success: true,
       output: {
         results: data.results || [],
         query: data.query,
         totalResults: data.totalResults || 0,
-        cost: data.cost,
+        ...costFields,
       },
     }
   },

@@ -39,13 +39,13 @@ export const apolloContactCreateTool: ToolConfig<
       type: 'string',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Job title',
+      description: 'Job title (e.g., "VP of Sales", "Software Engineer")',
     },
     account_id: {
       type: 'string',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Apollo account ID to associate with',
+      description: 'Apollo account ID to associate with (e.g., "acc_abc123")',
     },
     owner_id: {
       type: 'string',
@@ -87,16 +87,14 @@ export const apolloContactCreateTool: ToolConfig<
     return {
       success: true,
       output: {
-        contact: data.contact || {},
-        metadata: {
-          created: !!data.contact,
-        },
+        contact: data.contact ?? null,
+        created: !!data.contact,
       },
     }
   },
 
   outputs: {
-    contact: { type: 'json', description: 'Created contact data from Apollo' },
-    metadata: { type: 'json', description: 'Creation metadata including created status' },
+    contact: { type: 'json', description: 'Created contact data from Apollo', optional: true },
+    created: { type: 'boolean', description: 'Whether the contact was successfully created' },
   },
 }

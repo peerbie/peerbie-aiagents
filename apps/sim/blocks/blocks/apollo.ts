@@ -64,6 +64,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       type: 'code',
       placeholder: '["CEO", "VP of Sales"]',
       condition: { field: 'operation', value: 'people_search' },
+      mode: 'advanced',
     },
     {
       id: 'person_locations',
@@ -71,6 +72,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       type: 'code',
       placeholder: '["San Francisco, CA", "New York, NY"]',
       condition: { field: 'operation', value: 'people_search' },
+      mode: 'advanced',
     },
     {
       id: 'organization_names',
@@ -78,6 +80,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       type: 'code',
       placeholder: '["Company A", "Company B"]',
       condition: { field: 'operation', value: 'people_search' },
+      mode: 'advanced',
     },
     {
       id: 'person_seniorities',
@@ -85,6 +88,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       type: 'code',
       placeholder: '["senior", "manager", "director"]',
       condition: { field: 'operation', value: 'people_search' },
+      mode: 'advanced',
     },
     {
       id: 'contact_stage_ids',
@@ -92,6 +96,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       type: 'code',
       placeholder: '["stage_id_1", "stage_id_2"]',
       condition: { field: 'operation', value: 'contact_search' },
+      mode: 'advanced',
     },
 
     // People Enrich Fields
@@ -161,6 +166,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
         field: 'operation',
         value: ['people_enrich', 'people_bulk_enrich'],
       },
+      mode: 'advanced',
     },
     {
       id: 'reveal_phone_number',
@@ -170,6 +176,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
         field: 'operation',
         value: ['people_enrich', 'people_bulk_enrich'],
       },
+      mode: 'advanced',
     },
 
     // Bulk Enrich Fields
@@ -197,6 +204,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       type: 'code',
       placeholder: '["San Francisco, CA"]',
       condition: { field: 'operation', value: 'organization_search' },
+      mode: 'advanced',
     },
     {
       id: 'organization_num_employees_ranges',
@@ -204,6 +212,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       type: 'code',
       placeholder: '["1-10", "11-50", "51-200"]',
       condition: { field: 'operation', value: 'organization_search' },
+      mode: 'advanced',
     },
     {
       id: 'q_organization_keyword_tags',
@@ -211,6 +220,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       type: 'code',
       placeholder: '["saas", "b2b", "enterprise"]',
       condition: { field: 'operation', value: 'organization_search' },
+      mode: 'advanced',
     },
     {
       id: 'q_organization_name',
@@ -238,6 +248,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
         field: 'operation',
         value: ['contact_create', 'contact_update'],
       },
+      mode: 'advanced',
     },
     {
       id: 'account_id',
@@ -276,6 +287,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
           'opportunity_update',
         ],
       },
+      mode: 'advanced',
     },
 
     // Contact Bulk Operations
@@ -301,6 +313,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       title: 'Run Deduplication',
       type: 'switch',
       condition: { field: 'operation', value: 'contact_bulk_create' },
+      mode: 'advanced',
     },
 
     // Account Fields
@@ -327,6 +340,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
         field: 'operation',
         value: ['account_create', 'account_update'],
       },
+      mode: 'advanced',
     },
     {
       id: 'phone',
@@ -337,6 +351,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
         field: 'operation',
         value: ['account_create', 'account_update'],
       },
+      mode: 'advanced',
     },
 
     // Account Search Fields
@@ -356,6 +371,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       type: 'code',
       placeholder: '["stage_id_1", "stage_id_2"]',
       condition: { field: 'operation', value: 'account_search' },
+      mode: 'advanced',
     },
 
     // Account Bulk Operations
@@ -401,6 +417,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
         field: 'operation',
         value: ['opportunity_create', 'opportunity_update'],
       },
+      mode: 'advanced',
     },
     {
       id: 'stage_id',
@@ -411,6 +428,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
         field: 'operation',
         value: ['opportunity_create', 'opportunity_update'],
       },
+      mode: 'advanced',
     },
     {
       id: 'close_date',
@@ -420,6 +438,20 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       condition: {
         field: 'operation',
         value: ['opportunity_create', 'opportunity_update'],
+      },
+      mode: 'advanced',
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate a date in YYYY-MM-DD format based on the user's description.
+Examples:
+- "end of this quarter" -> Calculate the last day of the current quarter in YYYY-MM-DD format
+- "next month" -> Calculate 30 days from now in YYYY-MM-DD format
+- "in 2 weeks" -> Calculate 14 days from now in YYYY-MM-DD format
+- "end of year" -> December 31st of the current year in YYYY-MM-DD format
+
+Return ONLY the date string in YYYY-MM-DD format - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the date (e.g., "end of quarter", "in 2 weeks")...',
+        generationType: 'timestamp',
       },
     },
     {
@@ -431,6 +463,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
         field: 'operation',
         value: ['opportunity_create', 'opportunity_update'],
       },
+      mode: 'advanced',
     },
 
     // Opportunity Get
@@ -453,6 +486,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       type: 'code',
       placeholder: '["account_id_1", "account_id_2"]',
       condition: { field: 'operation', value: 'opportunity_search' },
+      mode: 'advanced',
     },
     {
       id: 'stage_ids',
@@ -460,6 +494,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       type: 'code',
       placeholder: '["stage_id_1", "stage_id_2"]',
       condition: { field: 'operation', value: 'opportunity_search' },
+      mode: 'advanced',
     },
     {
       id: 'owner_ids',
@@ -467,6 +502,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       type: 'code',
       placeholder: '["user_id_1", "user_id_2"]',
       condition: { field: 'operation', value: 'opportunity_search' },
+      mode: 'advanced',
     },
 
     // Sequence Search Fields
@@ -482,6 +518,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       title: 'Active Only',
       type: 'switch',
       condition: { field: 'operation', value: 'sequence_search' },
+      mode: 'advanced',
     },
 
     // Sequence Fields
@@ -517,12 +554,28 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
       type: 'short-input',
       placeholder: 'ISO date (e.g., 2024-12-31T23:59:59Z)',
       condition: { field: 'operation', value: 'task_create' },
+      mode: 'advanced',
+      wandConfig: {
+        enabled: true,
+        prompt: `Generate an ISO 8601 timestamp based on the user's description.
+The timestamp should be in the format: YYYY-MM-DDTHH:MM:SSZ (UTC timezone).
+Examples:
+- "tomorrow at 5pm" -> Calculate tomorrow's date at 17:00:00Z
+- "end of day" -> Today's date at 23:59:59Z
+- "next week" -> 7 days from now at 17:00:00Z
+- "in 3 days" -> 3 days from now at 17:00:00Z
+
+Return ONLY the timestamp string in ISO 8601 format - no explanations, no quotes, no extra text.`,
+        placeholder: 'Describe the due date (e.g., "tomorrow at 5pm", "end of week")...',
+        generationType: 'timestamp',
+      },
     },
     {
       id: 'completed',
       title: 'Completed',
       type: 'switch',
       condition: { field: 'operation', value: 'task_search' },
+      mode: 'advanced',
     },
 
     // Pagination
@@ -543,6 +596,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
           'task_search',
         ],
       },
+      mode: 'advanced',
     },
     {
       id: 'per_page',
@@ -561,6 +615,7 @@ export const ApolloBlock: BlockConfig<ApolloResponse> = {
           'task_search',
         ],
       },
+      mode: 'advanced',
     },
   ],
   tools: {

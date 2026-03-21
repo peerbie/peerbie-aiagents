@@ -9,6 +9,14 @@ export interface GuardrailsValidateInput {
   topK?: string
   model?: string
   apiKey?: string
+  azureEndpoint?: string
+  azureApiVersion?: string
+  vertexProject?: string
+  vertexLocation?: string
+  vertexCredential?: string
+  bedrockAccessKeyId?: string
+  bedrockSecretKey?: string
+  bedrockRegion?: string
   piiEntityTypes?: string[]
   piiMode?: string
   piiLanguage?: string
@@ -45,56 +53,67 @@ export const guardrailsValidateTool: ToolConfig<GuardrailsValidateInput, Guardra
       input: {
         type: 'string',
         required: true,
+        visibility: 'user-or-llm',
         description: 'Content to validate (from wired block)',
       },
       validationType: {
         type: 'string',
         required: true,
+        visibility: 'user-only',
         description: 'Type of validation: json, regex, hallucination, or pii',
       },
       regex: {
         type: 'string',
         required: false,
+        visibility: 'user-only',
         description: 'Regex pattern (required for regex validation)',
       },
       knowledgeBaseId: {
         type: 'string',
         required: false,
+        visibility: 'user-only',
         description: 'Knowledge base ID (required for hallucination check)',
       },
       threshold: {
         type: 'string',
         required: false,
+        visibility: 'user-only',
         description: 'Confidence threshold (0-10 scale, default: 3, scores below fail)',
       },
       topK: {
         type: 'string',
         required: false,
+        visibility: 'user-only',
         description: 'Number of chunks to retrieve from knowledge base (default: 10)',
       },
       model: {
         type: 'string',
         required: false,
+        visibility: 'user-only',
         description: 'LLM model for confidence scoring (default: gpt-4o-mini)',
       },
       apiKey: {
         type: 'string',
         required: false,
+        visibility: 'user-only',
         description: 'API key for LLM provider (optional if using hosted)',
       },
       piiEntityTypes: {
         type: 'array',
         required: false,
+        visibility: 'user-only',
         description: 'PII entity types to detect (empty = detect all)',
       },
       piiMode: {
         type: 'string',
         required: false,
+        visibility: 'user-only',
         description: 'PII action mode: block or mask (default: block)',
       },
       piiLanguage: {
         type: 'string',
         required: false,
+        visibility: 'user-only',
         description: 'Language for PII detection (default: en)',
       },
     },
@@ -155,6 +174,14 @@ export const guardrailsValidateTool: ToolConfig<GuardrailsValidateInput, Guardra
         topK: params.topK,
         model: params.model,
         apiKey: params.apiKey,
+        azureEndpoint: params.azureEndpoint,
+        azureApiVersion: params.azureApiVersion,
+        vertexProject: params.vertexProject,
+        vertexLocation: params.vertexLocation,
+        vertexCredential: params.vertexCredential,
+        bedrockAccessKeyId: params.bedrockAccessKeyId,
+        bedrockSecretKey: params.bedrockSecretKey,
+        bedrockRegion: params.bedrockRegion,
         piiEntityTypes: params.piiEntityTypes,
         piiMode: params.piiMode,
         piiLanguage: params.piiLanguage,

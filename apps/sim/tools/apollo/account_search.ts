@@ -40,13 +40,13 @@ export const apolloAccountSearchTool: ToolConfig<
       type: 'number',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Page number for pagination',
+      description: 'Page number for pagination (e.g., 1, 2, 3)',
     },
     per_page: {
       type: 'number',
       required: false,
       visibility: 'user-or-llm',
-      description: 'Results per page (max: 100)',
+      description: 'Results per page, max 100 (e.g., 25, 50, 100)',
     },
   },
 
@@ -83,21 +83,18 @@ export const apolloAccountSearchTool: ToolConfig<
     return {
       success: true,
       output: {
-        accounts: data.accounts || [],
-        metadata: {
-          page: data.pagination?.page || 1,
-          per_page: data.pagination?.per_page || 25,
-          total_entries: data.pagination?.total_entries || 0,
-        },
+        accounts: data.accounts ?? null,
+        pagination: data.pagination ?? null,
       },
     }
   },
 
   outputs: {
-    accounts: { type: 'json', description: 'Array of accounts matching the search criteria' },
-    metadata: {
+    accounts: {
       type: 'json',
-      description: 'Pagination information including page, per_page, and total_entries',
+      description: 'Array of accounts matching the search criteria',
+      optional: true,
     },
+    pagination: { type: 'json', description: 'Pagination information', optional: true },
   },
 }

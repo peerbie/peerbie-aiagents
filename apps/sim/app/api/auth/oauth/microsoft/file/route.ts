@@ -1,8 +1,8 @@
+import { createLogger } from '@sim/logger'
 import { type NextRequest, NextResponse } from 'next/server'
 import { authorizeCredentialUse } from '@/lib/auth/credential-access'
-import { createLogger } from '@/lib/logs/console/logger'
-import { validateMicrosoftGraphId } from '@/lib/security/input-validation'
-import { generateRequestId } from '@/lib/utils'
+import { validateMicrosoftGraphId } from '@/lib/core/security/input-validation'
+import { generateRequestId } from '@/lib/core/utils/request'
 import { getCredential, refreshAccessTokenIfNeeded } from '@/app/api/auth/oauth/utils'
 
 export const dynamic = 'force-dynamic'
@@ -38,13 +38,18 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: authz.error || 'Unauthorized' }, { status })
     }
 
-    const credential = await getCredential(requestId, credentialId, authz.credentialOwnerUserId)
+    const resolvedCredentialId = authz.resolvedCredentialId || credentialId
+    const credential = await getCredential(
+      requestId,
+      resolvedCredentialId,
+      authz.credentialOwnerUserId
+    )
     if (!credential) {
       return NextResponse.json({ error: 'Credential not found' }, { status: 404 })
     }
 
     const accessToken = await refreshAccessTokenIfNeeded(
-      credentialId,
+      resolvedCredentialId,
       authz.credentialOwnerUserId,
       requestId
     )

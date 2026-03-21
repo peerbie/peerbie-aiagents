@@ -1,63 +1,53 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { SIDEBAR_WIDTH } from '@/stores/constants'
+import type { SidebarState } from './types'
 
-/**
- * Sidebar state interface
- */
-interface SidebarState {
-  workspaceDropdownOpen: boolean
-  sidebarWidth: number
-  isCollapsed: boolean
-  setWorkspaceDropdownOpen: (isOpen: boolean) => void
-  setSidebarWidth: (width: number) => void
-  setIsCollapsed: (isCollapsed: boolean) => void
+function applySidebarWidth(width: number) {
+  if (typeof window !== 'undefined') {
+    document.documentElement.style.setProperty('--sidebar-width', `${width}px`)
+  }
 }
-
-/**
- * Sidebar width constraints
- * Note: Maximum width is enforced dynamically at 30% of viewport width in the resize hook
- */
-export const DEFAULT_SIDEBAR_WIDTH = 232
-export const MIN_SIDEBAR_WIDTH = 232
 
 export const useSidebarStore = create<SidebarState>()(
   persist(
     (set, get) => ({
       workspaceDropdownOpen: false,
-      sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
+      sidebarWidth: SIDEBAR_WIDTH.DEFAULT,
       isCollapsed: false,
+      isResizing: false,
+      _hasHydrated: false,
       setWorkspaceDropdownOpen: (isOpen) => set({ workspaceDropdownOpen: isOpen }),
       setSidebarWidth: (width) => {
-        // Only enforce minimum - maximum is enforced dynamically by the resize hook
-        const clampedWidth = Math.max(MIN_SIDEBAR_WIDTH, width)
+        if (get().isCollapsed) return
+        const clampedWidth = Math.max(SIDEBAR_WIDTH.MIN, width)
         set({ sidebarWidth: clampedWidth })
-        // Update CSS variable for immediate visual feedback
-        if (typeof window !== 'undefined') {
-          document.documentElement.style.setProperty('--sidebar-width', `${clampedWidth}px`)
-        }
+        applySidebarWidth(clampedWidth)
       },
-      setIsCollapsed: (isCollapsed) => {
-        set({ isCollapsed })
-        // Set width to 0 when collapsed (floating UI doesn't need sidebar space)
-        if (isCollapsed && typeof window !== 'undefined') {
-          document.documentElement.style.setProperty('--sidebar-width', '0px')
-        } else if (!isCollapsed && typeof window !== 'undefined') {
-          // Restore to stored width when expanding
-          const currentWidth = get().sidebarWidth
-          document.documentElement.style.setProperty('--sidebar-width', `${currentWidth}px`)
-        }
+      toggleCollapsed: () => {
+        const { isCollapsed, sidebarWidth } = get()
+        const nextCollapsed = !isCollapsed
+        set({ isCollapsed: nextCollapsed })
+        applySidebarWidth(nextCollapsed ? SIDEBAR_WIDTH.COLLAPSED : sidebarWidth)
       },
+      setIsResizing: (isResizing) => {
+        set({ isResizing })
+      },
+      setHasHydrated: (hasHydrated) => set({ _hasHydrated: hasHydrated }),
     }),
     {
       name: 'sidebar-state',
       onRehydrateStorage: () => (state) => {
-        // Validate and enforce constraints after rehydration
-        if (state && typeof window !== 'undefined') {
-          // Use 0 width if collapsed (floating UI), otherwise use stored width
-          const width = state.isCollapsed ? 0 : state.sidebarWidth
-          document.documentElement.style.setProperty('--sidebar-width', `${width}px`)
+        if (state) {
+          state.setHasHydrated(true)
+          const width = state.isCollapsed ? SIDEBAR_WIDTH.COLLAPSED : state.sidebarWidth
+          applySidebarWidth(width)
         }
       },
+      partialize: (state) => ({
+        sidebarWidth: state.sidebarWidth,
+        isCollapsed: state.isCollapsed,
+      }),
     }
   )
 )

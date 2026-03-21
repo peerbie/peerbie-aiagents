@@ -1,7 +1,9 @@
+import { createLogger } from '@sim/logger'
+import JSON5 from 'json5'
 import { v4 as uuidv4 } from 'uuid'
 import { create } from 'zustand'
 import { devtools, persist } from 'zustand/middleware'
-import { createLogger } from '@/lib/logs/console/logger'
+import { normalizeName } from '@/executor/constants'
 import type {
   Variable,
   VariablesDimensions,
@@ -16,10 +18,10 @@ const logger = createLogger('VariablesModalStore')
 
 /**
  * Floating variables modal default dimensions.
- * Matches the chat modal baseline for visual consistency.
+ * Slightly larger than the chat modal for more comfortable editing.
  */
-const DEFAULT_WIDTH = 250
-const DEFAULT_HEIGHT = 286
+const DEFAULT_WIDTH = 320
+const DEFAULT_HEIGHT = 320
 
 /**
  * Minimum and maximum modal dimensions.
@@ -30,9 +32,12 @@ export const MIN_VARIABLES_HEIGHT = DEFAULT_HEIGHT
 export const MAX_VARIABLES_WIDTH = 500
 export const MAX_VARIABLES_HEIGHT = 600
 
+/** Inset gap between the viewport edge and the content window */
+const CONTENT_WINDOW_GAP = 8
+
 /**
  * Compute a center-biased default position, factoring in current layout chrome
- * (sidebar, right panel, and terminal), mirroring the chat modal behavior.
+ * (sidebar, right panel, terminal) and content window inset.
  */
 const calculateDefaultPosition = (): VariablesPosition => {
   if (typeof window === 'undefined') {
@@ -49,10 +54,10 @@ const calculateDefaultPosition = (): VariablesPosition => {
     getComputedStyle(document.documentElement).getPropertyValue('--terminal-height') || '0'
   )
 
-  const availableWidth = window.innerWidth - sidebarWidth - panelWidth
-  const availableHeight = window.innerHeight - terminalHeight
+  const availableWidth = window.innerWidth - sidebarWidth - CONTENT_WINDOW_GAP - panelWidth
+  const availableHeight = window.innerHeight - CONTENT_WINDOW_GAP * 2 - terminalHeight
   const x = sidebarWidth + (availableWidth - DEFAULT_WIDTH) / 2
-  const y = (availableHeight - DEFAULT_HEIGHT) / 2
+  const y = CONTENT_WINDOW_GAP + (availableHeight - DEFAULT_HEIGHT) / 2
   return { x, y }
 }
 
@@ -77,9 +82,9 @@ const constrainPosition = (
   )
 
   const minX = sidebarWidth
-  const maxX = window.innerWidth - panelWidth - width
-  const minY = 0
-  const maxY = window.innerHeight - terminalHeight - height
+  const maxX = window.innerWidth - CONTENT_WINDOW_GAP - panelWidth - width
+  const minY = CONTENT_WINDOW_GAP
+  const maxY = window.innerHeight - CONTENT_WINDOW_GAP - terminalHeight - height
 
   return {
     x: Math.max(minX, Math.min(maxX, position.x)),
@@ -124,8 +129,7 @@ function validateVariable(variable: Variable): string | undefined {
           if (!valueToEvaluate.startsWith('{') || !valueToEvaluate.endsWith('}')) {
             return 'Not a valid object format'
           }
-          // eslint-disable-next-line no-new-func
-          const parsed = new Function(`return ${valueToEvaluate}`)()
+          const parsed = JSON5.parse(valueToEvaluate)
           if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
             return 'Not a valid object'
           }
@@ -137,12 +141,12 @@ function validateVariable(variable: Variable): string | undefined {
       }
       case 'array': {
         try {
-          const parsed = JSON.parse(String(variable.value))
+          const parsed = JSON5.parse(String(variable.value))
           if (!Array.isArray(parsed)) {
-            return 'Not a valid JSON array'
+            return 'Not a valid array'
           }
         } catch {
-          return 'Invalid JSON array syntax'
+          return 'Invalid array syntax'
         }
         return undefined
       }
@@ -303,8 +307,8 @@ export const useVariablesStore = create<VariablesStore>()(
                   Object.entries(workflowValues).forEach(([blockId, blockValues]) => {
                     Object.entries(blockValues as Record<string, any>).forEach(
                       ([subBlockId, value]) => {
-                        const oldVarName = oldVariableName.replace(/\s+/g, '').toLowerCase()
-                        const newVarName = newName.replace(/\s+/g, '').toLowerCase()
+                        const oldVarName = normalizeName(oldVariableName)
+                        const newVarName = normalizeName(newName)
                         const regex = new RegExp(`<variable\\.${oldVarName}>`, 'gi')
 
                         updatedWorkflowValues[blockId][subBlockId] = updateReferences(
@@ -378,37 +382,6 @@ export const useVariablesStore = create<VariablesStore>()(
             const { [id]: _deleted, ...rest } = state.variables
             return { variables: rest }
           })
-        },
-
-        duplicateVariable: (id, providedId) => {
-          const state = get()
-          const existing = state.variables[id]
-          if (!existing) return ''
-          const newId = providedId || uuidv4()
-
-          const workflowVariables = state.getVariablesByWorkflowId(existing.workflowId)
-          const baseName = `${existing.name} (copy)`
-          let uniqueName = baseName
-          let nameIndex = 1
-          while (workflowVariables.some((v) => v.name === uniqueName)) {
-            uniqueName = `${baseName} (${nameIndex})`
-            nameIndex++
-          }
-
-          set((state) => ({
-            variables: {
-              ...state.variables,
-              [newId]: {
-                id: newId,
-                workflowId: existing.workflowId,
-                name: uniqueName,
-                type: existing.type,
-                value: existing.value,
-              },
-            },
-          }))
-
-          return newId
         },
 
         getVariablesByWorkflowId: (workflowId) => {

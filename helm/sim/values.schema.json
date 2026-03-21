@@ -81,23 +81,56 @@
             }
           }
         },
+        "secrets": {
+          "type": "object",
+          "description": "Secret management configuration",
+          "properties": {
+            "existingSecret": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Use an existing secret instead of creating one"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Name of the existing Kubernetes secret"
+                },
+                "keys": {
+                  "type": "object",
+                  "description": "Key name mappings in the existing secret"
+                }
+              }
+            }
+          }
+        },
         "env": {
           "type": "object",
           "properties": {
             "BETTER_AUTH_SECRET": {
               "type": "string",
-              "minLength": 32,
-              "description": "Auth secret (minimum 32 characters required)"
+              "description": "Auth secret (minimum 32 characters required when not using existingSecret)"
             },
             "ENCRYPTION_KEY": {
               "type": "string",
-              "minLength": 32,
-              "description": "Encryption key (minimum 32 characters required)"
+              "description": "Encryption key (minimum 32 characters required when not using existingSecret)"
             },
             "NEXT_PUBLIC_APP_URL": {
               "type": "string",
               "format": "uri",
               "description": "Public application URL"
+            },
+            "INTERNAL_API_BASE_URL": {
+              "type": "string",
+              "anyOf": [
+                {
+                  "format": "uri"
+                },
+                {
+                  "const": ""
+                }
+              ],
+              "description": "Optional server-side internal base URL for internal /api self-calls (must include http:// or https://); defaults to NEXT_PUBLIC_APP_URL when unset"
             },
             "BETTER_AUTH_URL": {
               "type": "string",
@@ -185,8 +218,7 @@
             },
             "OLLAMA_URL": {
               "type": "string",
-              "format": "uri",
-              "description": "Ollama local LLM server URL"
+              "description": "Ollama local LLM server URL (leave empty if not using Ollama)"
             },
             "ELEVENLABS_API_KEY": {
               "type": "string",
@@ -238,15 +270,15 @@
             },
             "NEXT_PUBLIC_BRAND_LOGO_URL": {
               "type": "string",
-              "description": "Custom logo URL"
+              "description": "Custom logo URL (leave empty for default)"
             },
             "NEXT_PUBLIC_BRAND_FAVICON_URL": {
               "type": "string",
-              "description": "Custom favicon URL"
+              "description": "Custom favicon URL (leave empty for default)"
             },
             "NEXT_PUBLIC_CUSTOM_CSS_URL": {
               "type": "string",
-              "description": "Custom stylesheet URL"
+              "description": "Custom stylesheet URL (leave empty for none)"
             },
             "NEXT_PUBLIC_SUPPORT_EMAIL": {
               "type": "string",
@@ -330,8 +362,7 @@
           "properties": {
             "BETTER_AUTH_SECRET": {
               "type": "string",
-              "minLength": 32,
-              "description": "Auth secret (minimum 32 characters required)"
+              "description": "Auth secret (minimum 32 characters required when not using existingSecret)"
             },
             "NEXT_PUBLIC_APP_URL": {
               "type": "string",
@@ -432,11 +463,25 @@
             },
             "password": {
               "type": "string",
-              "minLength": 8,
-              "not": {
-                "const": "CHANGE-ME-SECURE-PASSWORD"
-              },
-              "description": "PostgreSQL password (minimum 8 characters, must not be default placeholder)"
+              "description": "PostgreSQL password (minimum 8 characters when not using existingSecret)"
+            },
+            "existingSecret": {
+              "type": "object",
+              "description": "Use an existing secret for PostgreSQL credentials",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Use an existing secret instead of creating one"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Name of the existing Kubernetes secret"
+                },
+                "passwordKey": {
+                  "type": "string",
+                  "description": "Key in the secret containing the password"
+                }
+              }
             }
           }
         }
@@ -476,6 +521,24 @@
           "type": "string",
           "enum": ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"],
           "description": "SSL mode for database connection"
+        },
+        "existingSecret": {
+          "type": "object",
+          "description": "Use an existing secret for external database credentials",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Use an existing secret instead of creating one"
+            },
+            "name": {
+              "type": "string",
+              "description": "Name of the existing Kubernetes secret"
+            },
+            "passwordKey": {
+              "type": "string",
+              "description": "Key in the secret containing the password"
+            }
+          }
         }
       },
       "if": {
@@ -822,6 +885,61 @@
         }
       }
     },
+    "externalSecrets": {
+      "type": "object",
+      "description": "External Secrets Operator integration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable External Secrets Operator integration"
+        },
+        "apiVersion": {
+          "type": "string",
+          "enum": ["v1", "v1beta1"],
+          "description": "ESO API version - use v1 for ESO v0.17+ (recommended), v1beta1 for older versions"
+        },
+        "refreshInterval": {
+          "type": "string",
+          "description": "How often to sync secrets from external store"
+        },
+        "secretStoreRef": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Name of the SecretStore or ClusterSecretStore"
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["SecretStore", "ClusterSecretStore"],
+              "description": "Kind of the store"
+            }
+          }
+        },
+        "remoteRefs": {
+          "type": "object",
+          "description": "Remote key paths in external secret store",
+          "properties": {
+            "app": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+            "postgresql": {
+              "type": "object",
+              "properties": {
+                "password": { "type": "string" }
+              }
+            },
+            "externalDatabase": {
+              "type": "object",
+              "properties": {
+                "password": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
     "ingress": {
       "type": "object",
       "properties": {
@@ -902,7 +1020,31 @@
               }
             }
           }
-        }
+        },
+        "anyOf": [
+          {
+            "properties": {
+              "app": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "realtime": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        ]
       },
       "then": {
         "properties": {

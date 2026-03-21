@@ -1,10 +1,11 @@
-import { createLogger } from '@/lib/logs/console/logger'
+import { createLogger } from '@sim/logger'
 
 const logger = createLogger('RetryUtils')
 
 interface HTTPError extends Error {
   status?: number
   statusText?: string
+  retryAfterMs?: number
 }
 
 type RetryableError = HTTPError | Error | { status?: number; message?: string }
@@ -14,7 +15,7 @@ export interface RetryOptions {
   initialDelayMs?: number
   maxDelayMs?: number
   backoffMultiplier?: number
-  retryCondition?: (error: RetryableError) => boolean
+  retryCondition?: (error: unknown) => boolean
 }
 
 export interface RetryResult<T> {
@@ -30,11 +31,18 @@ function hasStatus(
   return typeof error === 'object' && error !== null && 'status' in error
 }
 
+function isRetryableErrorType(error: unknown): error is RetryableError {
+  if (!error) return false
+  if (error instanceof Error) return true
+  if (typeof error === 'object' && ('status' in error || 'message' in error)) return true
+  return false
+}
+
 /**
  * Default retry condition for rate limiting errors
  */
-export function isRetryableError(error: RetryableError): boolean {
-  if (!error) return false
+export function isRetryableError(error: unknown): boolean {
+  if (!isRetryableErrorType(error)) return false
 
   // Check for rate limiting status codes
   if (
@@ -45,7 +53,7 @@ export function isRetryableError(error: RetryableError): boolean {
   }
 
   // Check for rate limiting in error messages
-  const errorMessage = error.message || error.toString()
+  const errorMessage = error instanceof Error ? error.message : String(error)
   const rateLimitKeywords = [
     'rate limit',
     'rate_limit',
@@ -104,22 +112,44 @@ export async function retryWithExponentialBackoff<T>(
         throw lastError
       }
 
-      // Add jitter to prevent thundering herd
+      // Use Retry-After if the server told us how long to wait, otherwise exponential backoff.
+      // Cap Retry-After at maxDelayMs to bound total retry duration (matches Google Cloud SDK behavior).
+      const retryAfterMs = (lastError as HTTPError)?.retryAfterMs
+      const cappedRetryAfter = retryAfterMs ? Math.min(retryAfterMs, maxDelayMs) : undefined
+
+      if (retryAfterMs && retryAfterMs > maxDelayMs) {
+        logger.warn(
+          `Retry-After ${retryAfterMs}ms exceeds maxDelayMs ${maxDelayMs}ms — capping to ${maxDelayMs}ms`
+        )
+      }
+
       const jitter = Math.random() * 0.1 * delay
-      const actualDelay = Math.min(delay + jitter, maxDelayMs)
+      const actualDelay = cappedRetryAfter ?? Math.min(delay + jitter, maxDelayMs)
 
       logger.info(
-        `Retrying in ${Math.round(actualDelay)}ms (attempt ${attempt + 1}/${maxRetries + 1})`
+        `Retrying in ${Math.round(actualDelay)}ms (attempt ${attempt + 1}/${maxRetries + 1})${cappedRetryAfter ? ' (Retry-After)' : ''}`
       )
 
       await new Promise((resolve) => setTimeout(resolve, actualDelay))
 
-      // Exponential backoff
-      delay = Math.min(delay * backoffMultiplier, maxDelayMs)
+      // Exponential backoff (skip if we used Retry-After)
+      if (!cappedRetryAfter) {
+        delay = Math.min(delay * backoffMultiplier, maxDelayMs)
+      }
     }
   }
 
   throw lastError || new Error('Retry operation failed')
+}
+
+/**
+ * Tighter retry options for user-facing operations (e.g. validateConfig).
+ * Caps total wait at ~7s instead of ~31s to avoid API route timeouts.
+ */
+export const VALIDATE_RETRY_OPTIONS: RetryOptions = {
+  maxRetries: 3,
+  initialDelayMs: 1000,
+  maxDelayMs: 10000,
 }
 
 /**
@@ -141,6 +171,18 @@ export async function fetchWithRetry(
       )
       error.status = response.status
       error.statusText = response.statusText
+
+      // Pass Retry-After to the retry loop so it replaces exponential backoff
+      const retryAfter = response.headers.get('Retry-After')
+      if (retryAfter) {
+        const waitMs = Number.isNaN(Number(retryAfter))
+          ? Math.max(0, new Date(retryAfter).getTime() - Date.now())
+          : Number(retryAfter) * 1000
+        if (waitMs > 0) {
+          error.retryAfterMs = waitMs
+        }
+      }
+
       throw error
     }
 

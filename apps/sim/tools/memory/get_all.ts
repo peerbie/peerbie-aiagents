@@ -10,24 +10,13 @@ export const memoryGetAllTool: ToolConfig<any, MemoryResponse> = {
   params: {},
 
   request: {
-    url: (params): any => {
-      const workflowId = params._context?.workflowId
-
-      if (!workflowId) {
-        return {
-          _errorResponse: {
-            status: 400,
-            data: {
-              success: false,
-              error: {
-                message: 'workflowId is required and must be provided in execution context',
-              },
-            },
-          },
-        }
+    url: (params) => {
+      const workspaceId = params._context?.workspaceId
+      if (!workspaceId) {
+        throw new Error('workspaceId is required in execution context')
       }
 
-      return `/api/memory?workflowId=${encodeURIComponent(workflowId)}`
+      return `/api/memory?workspaceId=${encodeURIComponent(workspaceId)}`
     },
     method: 'GET',
     headers: () => ({
@@ -64,8 +53,7 @@ export const memoryGetAllTool: ToolConfig<any, MemoryResponse> = {
     success: { type: 'boolean', description: 'Whether all memories were retrieved successfully' },
     memories: {
       type: 'array',
-      description:
-        'Array of all memory objects with key, conversationId, blockId, blockName, and data fields',
+      description: 'Array of all memory objects with key, conversationId, and data fields',
     },
     message: { type: 'string', description: 'Success or error message' },
     error: { type: 'string', description: 'Error message if operation failed' },

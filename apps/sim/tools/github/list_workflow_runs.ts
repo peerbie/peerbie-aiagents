@@ -1,4 +1,11 @@
 import type { ListWorkflowRunsParams, ListWorkflowRunsResponse } from '@/tools/github/types'
+import {
+  HEAD_COMMIT_OUTPUT,
+  PR_REFERENCE_OUTPUT,
+  REFERENCED_WORKFLOW_OUTPUT,
+  USER_OUTPUT,
+  WORKFLOW_RUN_OUTPUT_PROPERTIES,
+} from '@/tools/github/types'
 import type { ToolConfig } from '@/tools/types'
 
 export const listWorkflowRunsTool: ToolConfig<ListWorkflowRunsParams, ListWorkflowRunsResponse> = {
@@ -179,6 +186,60 @@ ${data.workflow_runs
               run_number: { type: 'number', description: 'Run number' },
             },
           },
+        },
+      },
+    },
+  },
+}
+
+export const listWorkflowRunsV2Tool: ToolConfig<ListWorkflowRunsParams, any> = {
+  id: 'github_list_workflow_runs_v2',
+  name: listWorkflowRunsTool.name,
+  description: listWorkflowRunsTool.description,
+  version: '2.0.0',
+  params: listWorkflowRunsTool.params,
+  request: listWorkflowRunsTool.request,
+
+  transformResponse: async (response: Response) => {
+    const data = await response.json()
+    return {
+      success: true,
+      output: {
+        total_count: data.total_count,
+        items: (data.workflow_runs ?? []).map((run: Record<string, unknown>) => ({
+          ...run,
+          conclusion: run.conclusion ?? null,
+          triggering_actor: run.triggering_actor,
+          pull_requests: run.pull_requests ?? [],
+          referenced_workflows: run.referenced_workflows ?? [],
+          head_commit: run.head_commit,
+          run_started_at: run.run_started_at,
+        })),
+      },
+    }
+  },
+
+  outputs: {
+    total_count: { type: 'number', description: 'Total number of workflow runs' },
+    items: {
+      type: 'array',
+      description: 'Array of workflow run objects',
+      items: {
+        type: 'object',
+        properties: {
+          ...WORKFLOW_RUN_OUTPUT_PROPERTIES,
+          triggering_actor: USER_OUTPUT,
+          pull_requests: {
+            type: 'array',
+            description: 'Associated pull requests',
+            items: PR_REFERENCE_OUTPUT,
+          },
+          referenced_workflows: {
+            type: 'array',
+            description: 'Referenced workflows',
+            items: REFERENCED_WORKFLOW_OUTPUT,
+          },
+          head_commit: HEAD_COMMIT_OUTPUT,
         },
       },
     },
