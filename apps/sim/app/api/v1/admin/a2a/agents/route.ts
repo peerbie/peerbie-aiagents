@@ -68,6 +68,10 @@ export const POST = withAdminAuth(async (request) => {
       return notFoundResponse('Workflow')
     }
 
+    if (!wf.isDeployed) {
+      return badRequestResponse('Workflow must be deployed before exposing as an A2A agent')
+    }
+
     // Check if A2A agent already exists for this workflow
     const [existing] = await db
       .select({ id: a2aAgent.id })
