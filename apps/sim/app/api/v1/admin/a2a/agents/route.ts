@@ -116,7 +116,7 @@ export const POST = withAdminAuth(async (request) => {
       capabilities: A2A_DEFAULT_CAPABILITIES,
       skills,
       authentication: { schemes: ['bearer', 'apiKey'] },
-      isPublished: false,
+      isPublished: true,
     })
 
     const agentUrl = `${env.NEXT_PUBLIC_APP_URL}/api/a2a/serve/${agentId}`
