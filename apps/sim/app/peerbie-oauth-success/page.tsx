@@ -1,21 +1,9 @@
 'use client'
 
-import { useEffect } from 'react'
+import { Suspense, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 
-/**
- * OAuth success landing page for PeerBie-initiated credential connections.
- *
- * This page is the callbackURL for OAuth flows started by peerbie-brain
- * via the admin OAuth URL endpoint. After Better Auth processes the OAuth
- * callback and stores the credential, it redirects here.
- *
- * This page:
- * 1. Reads the providerId from the URL
- * 2. Notifies the PeerBie parent window via postMessage
- * 3. Closes the popup
- */
-export default function PeerbieOAuthSuccessPage() {
+function OAuthSuccessContent() {
   const searchParams = useSearchParams()
 
   useEffect(() => {
@@ -28,7 +16,6 @@ export default function PeerbieOAuthSuccessPage() {
       )
       setTimeout(() => window.close(), 800)
     } else {
-      // Opened directly (not as popup) — redirect to workspace settings
       window.location.href = '/'
     }
   }, [searchParams])
@@ -51,5 +38,13 @@ export default function PeerbieOAuthSuccessPage() {
         Closing this window...
       </div>
     </div>
+  )
+}
+
+export default function PeerbieOAuthSuccessPage() {
+  return (
+    <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh' }}>Connecting...</div>}>
+      <OAuthSuccessContent />
+    </Suspense>
   )
 }
