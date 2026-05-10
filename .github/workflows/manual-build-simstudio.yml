@@ -33,5 +33,5 @@ jobs:
           file: ./docker/app.Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ghcr.io/simstudioai/simstudio:latest
+          tags: ghcr.io/peerbie/simstudio:latest
           provenance: false
