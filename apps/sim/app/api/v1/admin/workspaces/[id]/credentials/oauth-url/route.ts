@@ -16,7 +16,7 @@
 import { db } from '@sim/db'
 import { pendingCredentialDraft, session, workspace } from '@sim/db/schema'
 import { createLogger } from '@sim/logger'
-import { and, eq, lt } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { NextResponse } from 'next/server'
 import { withAdminAuthParams } from '@/app/api/v1/admin/middleware'
 import {
@@ -118,21 +118,24 @@ export const POST = withAdminAuthParams<RouteParams>(async (request, context) =>
     const tempHeaders = new Headers({ cookie: `better-auth.session_token=${tempToken}` })
 
     const { auth } = await import('@/lib/auth/auth')
-    const data = (await auth.api.oAuth2LinkAccount({
-      body: { providerId, callbackURL },
-      headers: tempHeaders,
-    })) as { url?: string }
+    let oauthData: { url?: string } | null = null
+    try {
+      oauthData = (await auth.api.oAuth2LinkAccount({
+        body: { providerId, callbackURL },
+        headers: tempHeaders,
+      })) as { url?: string }
+    } finally {
+      // Always clean up the temp session — it was only needed to get the URL
+      await db.delete(session).where(eq(session.id, tempSessionId))
+    }
 
-    // Clean up temp session — no longer needed
-    await db.delete(session).where(eq(session.id, tempSessionId))
-
-    if (!data?.url) {
+    if (!oauthData?.url) {
       logger.error('oAuth2LinkAccount returned no URL', { workspaceId, providerId })
       return internalErrorResponse('Failed to generate OAuth URL')
     }
 
     logger.info(`Admin API: Generated OAuth URL for ${providerId} in workspace ${workspaceId}`)
-    return NextResponse.json({ oauthUrl: data.url, providerId })
+    return NextResponse.json({ oauthUrl: oauthData.url, providerId })
   } catch (error) {
     logger.error('Admin API: Failed to generate OAuth URL', { error, workspaceId, providerId })
     return internalErrorResponse('Failed to generate OAuth URL')
