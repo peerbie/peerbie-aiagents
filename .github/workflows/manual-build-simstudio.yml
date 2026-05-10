@@ -35,3 +35,13 @@ jobs:
           push: true
           tags: ghcr.io/peerbie/simstudio:latest
           provenance: false
+
+      - name: Build and push migrations
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/db.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/peerbie/simstudio-migrations:latest
+          provenance: false
