@@ -1,0 +1,122 @@
+# PeerBie AI Studio — Hetzner K3s production values
+# Deploy via: helm upgrade --install simstudio ./helm/sim -n peerbie-prod -f helm/sim/values-peerbie.yaml --set ...
+# Ingress is handled by peerbie-backend/k8-deployment/ingress.yml (disabled here)
+
+global:
+  imagePullSecrets:
+    - name: ghcr-pull-secret
+
+app:
+  enabled: true
+
+  image:
+    repository: ghcr.io/peerbie/simstudio
+    tag: latest
+    pullPolicy: Always
+
+  replicaCount: 1
+
+  resources:
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+    requests:
+      memory: "2Gi"
+      cpu: "500m"
+
+  env:
+    NEXT_PUBLIC_APP_URL: "https://studio.peerbie.com"
+    BETTER_AUTH_URL: "https://studio.peerbie.com"
+    NEXT_PUBLIC_SOCKET_URL: "https://studio.peerbie.com"
+    NODE_ENV: "production"
+    NEXT_TELEMETRY_DISABLED: "1"
+
+    # Secrets — set via --set flags in deploy pipeline (GitHub Secrets)
+    BETTER_AUTH_SECRET: ""
+    ENCRYPTION_KEY: ""
+    INTERNAL_API_SECRET: ""
+    CRON_SECRET: ""
+    API_ENCRYPTION_KEY: ""
+
+    # Branding
+    NEXT_PUBLIC_BRAND_NAME: "PeerBie AI Studio"
+    NEXT_PUBLIC_SUPPORT_EMAIL: "semih@peerbie.com"
+
+    # Registration — invite only
+    DISABLE_REGISTRATION: "true"
+    EMAIL_VERIFICATION_ENABLED: "false"
+
+realtime:
+  enabled: true
+
+  image:
+    repository: ghcr.io/peerbie/simstudio-realtime
+    tag: latest
+    pullPolicy: Always
+
+  replicaCount: 1
+
+  resources:
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+
+  env:
+    NEXT_PUBLIC_APP_URL: "https://studio.peerbie.com"
+    BETTER_AUTH_URL: "https://studio.peerbie.com"
+    NEXT_PUBLIC_SOCKET_URL: "https://studio.peerbie.com"
+    BETTER_AUTH_SECRET: ""  # Set via --set in pipeline
+    ALLOWED_ORIGINS: "https://studio.peerbie.com"
+    NODE_ENV: "production"
+
+migrations:
+  enabled: true
+
+  image:
+    repository: ghcr.io/peerbie/simstudio-migrations
+    tag: latest
+    pullPolicy: Always
+
+  resources:
+    limits:
+      memory: "1Gi"
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+
+postgresql:
+  enabled: true
+
+  auth:
+    username: postgres
+    password: ""  # Set via --set in pipeline
+    database: simstudio
+
+  persistence:
+    enabled: true
+    storageClass: ""  # K3s default (local-path)
+    size: 20Gi
+
+  resources:
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+
+# Ingress is managed by peerbie-backend/k8-deployment/ingress.yml
+ingress:
+  enabled: false
+
+ollama:
+  enabled: false
+
+cronjobs:
+  enabled: true
+
+autoscaling:
+  enabled: false
