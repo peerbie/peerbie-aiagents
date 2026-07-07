@@ -21,8 +21,8 @@ app:
       memory: "4Gi"
       cpu: "2000m"
     requests:
-      memory: "2Gi"
-      cpu: "500m"
+      memory: "512Mi"
+      cpu: "100m"
 
   env:
     NEXT_PUBLIC_APP_URL: "https://studio.peerbie.com"
@@ -59,8 +59,8 @@ realtime:
       memory: "1Gi"
       cpu: "500m"
     requests:
-      memory: "256Mi"
-      cpu: "100m"
+      memory: "128Mi"
+      cpu: "50m"
 
   env:
     NEXT_PUBLIC_APP_URL: "https://studio.peerbie.com"
