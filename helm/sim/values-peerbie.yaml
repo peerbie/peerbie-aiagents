@@ -42,8 +42,8 @@ app:
     NEXT_PUBLIC_BRAND_NAME: "PeerBie AI Studio"
     NEXT_PUBLIC_SUPPORT_EMAIL: "semih@peerbie.com"
 
-    # Registration — invite only
-    DISABLE_REGISTRATION: "true"
+    # Registration — open for initial account creation, re-enable after setup
+    DISABLE_REGISTRATION: ""
     EMAIL_VERIFICATION_ENABLED: "false"
 
 realtime:
