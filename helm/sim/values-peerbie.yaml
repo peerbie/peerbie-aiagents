@@ -42,6 +42,7 @@ app:
     NEXT_PUBLIC_BRAND_NAME: "PeerBie AI Studio"
     NEXT_PUBLIC_SUPPORT_EMAIL: "semih@peerbie.com"
 
+    DISABLE_REGISTRATION: "true"
     EMAIL_VERIFICATION_ENABLED: "false"
 
 realtime:
