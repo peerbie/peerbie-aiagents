@@ -3,7 +3,7 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import CareersConfirmationEmail from '@/components/emails/careers/careers-confirmation-email'
 import CareersSubmissionEmail from '@/components/emails/careers/careers-submission-email'
-import { sendEmail } from '@/lib/email/mailer'
+import { sendEmail } from '@/lib/messaging/email/mailer'
 import { createLogger } from '@/lib/logs/console/logger'
 import { generateRequestId } from '@/lib/core/utils/request'
 

@@ -13,8 +13,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { quickValidateEmail } from '@/lib/email/validation'
-import { isHosted } from '@/lib/environment'
+import { quickValidateEmail } from '@/lib/messaging/email/validation'
+import { isHosted } from '@/lib/core/config/feature-flags'
 import { createLogger } from '@/lib/logs/console/logger'
 import { cn } from '@/lib/core/utils/cn'
 import { soehne } from '@/app/_styles/fonts/soehne/soehne'
