@@ -43,7 +43,7 @@ app:
     NEXT_PUBLIC_BRAND_LOGO_URL: "/logo/reverse/text/medium.png"
     NEXT_PUBLIC_SUPPORT_EMAIL: "semih@peerbie.com"
 
-    DISABLE_REGISTRATION: "false"
+    DISABLE_REGISTRATION: "true"
     EMAIL_VERIFICATION_ENABLED: "false"
 
 realtime:
