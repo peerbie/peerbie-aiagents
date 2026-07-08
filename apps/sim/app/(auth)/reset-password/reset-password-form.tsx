@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { Eye, EyeOff } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ArrowRight, ChevronRight, Eye, EyeOff } from 'lucide-react'
 import { Input, Label } from '@/components/emcn'
 import { cn } from '@/lib/core/utils/cn'
 import { BrandedButton } from '@/app/(auth)/components/branded-button'
@@ -108,7 +108,7 @@ export function RequestResetForm({
             )}
           </span>
         </span>
-      </Button>
+      </BrandedButton>
     </form>
   )
 }
@@ -288,7 +288,6 @@ export function SetNewPasswordForm({
       <BrandedButton
         type='submit'
         disabled={isSubmitting || !token}
-        type='submit'
         onMouseEnter={() => setIsButtonHovered(true)}
         onMouseLeave={() => setIsButtonHovered(false)}
         className='group inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[#1992fc] bg-gradient-to-b from-[#1992fc] to-[#1992fc] py-[6px] pr-[10px] pl-[12px] text-[15px] text-white shadow-[inset_0_2px_4px_0_#1992fc] transition-all'
@@ -303,7 +302,7 @@ export function SetNewPasswordForm({
             )}
           </span>
         </span>
-      </Button>
+      </BrandedButton>
     </form>
   )
 }

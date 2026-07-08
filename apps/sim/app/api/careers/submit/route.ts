@@ -5,7 +5,7 @@ import CareersConfirmationEmail from '@/components/emails/careers/careers-confir
 import CareersSubmissionEmail from '@/components/emails/careers/careers-submission-email'
 import { sendEmail } from '@/lib/email/mailer'
 import { createLogger } from '@/lib/logs/console/logger'
-import { generateRequestId } from '@/lib/utils'
+import { generateRequestId } from '@/lib/core/utils/request'
 
 export const dynamic = 'force-dynamic'
 
