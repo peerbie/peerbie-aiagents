@@ -182,7 +182,8 @@ html[data-sidebar-collapsed] .sidebar-container .sidebar-collapse-btn {
     --border-success: #e0e0e0;
 
     /* Brand & state */
-    --brand-400: #8e4cfb;
+    --brand-400: #1992fc;
+    --brand-500: #3ba0f8;
     --brand-secondary: #33b4ff;
     --brand-tertiary: #22c55e;
     --brand-tertiary-2: #33c482;
@@ -240,7 +241,7 @@ html[data-sidebar-collapsed] .sidebar-container .sidebar-collapse-btn {
     --c-601EE0: #601ee0;
     --c-611F69: #611f69;
     --c-802FFF: #802fff;
-    --c-8357FF: #8357ff;
+    --c-8357FF: #1992fc;
     --c-8C10FF: #8c10ff;
 
     /* Greens */
@@ -304,7 +305,7 @@ html[data-sidebar-collapsed] .sidebar-container .sidebar-collapse-btn {
     --border-success: #575757;
 
     /* Brand & state */
-    --brand-400: #8e4cfb;
+    --brand-400: #1992fc;
     --brand-secondary: #33b4ff;
     --brand-tertiary: #22c55e;
     --brand-tertiary-2: #33c482;
@@ -365,7 +366,7 @@ html[data-sidebar-collapsed] .sidebar-container .sidebar-collapse-btn {
     --c-601EE0: #601ee0;
     --c-611F69: #611f69;
     --c-802FFF: #802fff;
-    --c-8357FF: #8357ff;
+    --c-8357FF: #1992fc;
     --c-8C10FF: #8c10ff;
 
     /* Greens */
@@ -710,10 +711,10 @@ input[type="search"]::-ms-clear {
     --base-muted-foreground: #737373;
     --gradient-primary: 263 85% 70%;
     --gradient-secondary: 336 95% 65%;
-    --brand-primary-hex: #6f3dfa;
+    --brand-primary-hex: #1992fc;
     --brand-primary-hover-hex: #6338d9;
-    --brand-accent-hex: #6f3dfa;
-    --brand-accent-hover-hex: #6f3dfa;
+    --brand-accent-hex: #1992fc;
+    --brand-accent-hover-hex: #1992fc;
     --brand-background-hex: #ffffff;
     --surface-elevated: #202020;
   }

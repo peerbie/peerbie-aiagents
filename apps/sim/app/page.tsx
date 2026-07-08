@@ -27,7 +27,7 @@ export const metadata: Metadata = {
       'Sim is the open-source platform to build AI agents and run your agentic workforce. Connect 1,000+ integrations and LLMs to orchestrate agentic workflows. Create agents, workflows, knowledge bases, tables, and docs. Join over 100,000 builders.',
     type: 'website',
     url: baseUrl,
-    siteName: 'Sim',
+    siteName: 'Peerbie Agent Studio',
     locale: 'en_US',
     images: [
       {

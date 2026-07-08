@@ -148,6 +148,17 @@ export const POST = withMcpAuth('read')(
                 args[paramName] = []
               }
             }
+            else if (schema.type === 'object' && typeof value === 'string') {
+              try {
+                const parsed = JSON.parse(value);
+                if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+                  args[paramName] = parsed
+                }
+              } catch (error) {
+                // Ignore parsing errors
+              }
+            }
+            // Cast objects
           }
         }
       } catch (error) {

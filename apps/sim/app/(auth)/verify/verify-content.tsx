@@ -56,6 +56,35 @@ function VerificationForm({
     setCountdown(30)
   }
 
+  const [buttonClass, setButtonClass] = useState('auth-button-gradient')
+
+  useEffect(() => {
+    const checkCustomBrand = () => {
+      const computedStyle = getComputedStyle(document.documentElement)
+      const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
+
+      if (brandAccent && brandAccent !== '#1992fc') {
+        setButtonClass('auth-button-custom')
+      } else {
+        setButtonClass('auth-button-gradient')
+      }
+    }
+
+    checkCustomBrand()
+
+    window.addEventListener('resize', checkCustomBrand)
+    const observer = new MutationObserver(checkCustomBrand)
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['style', 'class'],
+    })
+
+    return () => {
+      window.removeEventListener('resize', checkCustomBrand)
+      observer.disconnect()
+    }
+  }, [])
+
   return (
     <>
       <div className='space-y-1 text-center'>

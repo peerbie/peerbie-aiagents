@@ -334,7 +334,7 @@ describe('Function Execute API Route', () => {
         code: 'return "Email sent to user"',
         params: {
           email: {
-            from: 'Waleed Latif <waleed@sim.ai>',
+            from: 'Waleed Latif <waleed@peerbie.com>',
             to: 'User <user@example.com>',
           },
         },
@@ -343,6 +343,7 @@ describe('Function Execute API Route', () => {
       const response = await POST(req)
 
       expect(response.status).toBe(200)
+      // Should not try to replace <waleed@peerbie.com> as a template variable
     })
 
     it.concurrent('should only match valid variable names in angle brackets', async () => {
@@ -368,12 +369,23 @@ describe('Function Execute API Route', () => {
     it.concurrent(
       'should handle Gmail webhook data with email addresses containing angle brackets',
       async () => {
-        const emailData = {
-          id: '123',
-          from: 'Waleed Latif <waleed@sim.ai>',
-          to: 'User <user@example.com>',
-          subject: 'Test Email',
-          bodyText: 'Hello world',
+        const gmailData = {
+          email: {
+            id: '123',
+            from: 'Waleed Latif <waleed@peerbie.com>',
+            to: 'User <user@example.com>',
+            subject: 'Test Email',
+            bodyText: 'Hello world',
+          },
+          rawEmail: {
+            id: '123',
+            payload: {
+              headers: [
+                { name: 'From', value: 'Waleed Latif <waleed@peerbie.com>' },
+                { name: 'To', value: 'User <user@example.com>' },
+              ],
+            },
+          },
         }
 
         const req = createMockRequest('POST', {

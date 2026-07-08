@@ -125,7 +125,7 @@ export function McpDynamicArgs({
       if (paramSchema.maxLength && paramSchema.maxLength > 100) return 'long-input'
       return 'short-input'
     }
-    if (paramSchema.type === 'array') return 'long-input'
+    if (paramSchema.type === 'array' || paramSchema.type == 'object') return 'long-input'
     return 'short-input'
   }
 

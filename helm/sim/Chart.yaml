@@ -4,14 +4,14 @@ description: A Helm chart for Sim - AI agent workflow platform
 type: application
 version: 0.1.0
 appVersion: "1.0.0"
-home: https://sim.ai
-icon: https://raw.githubusercontent.com/simstudioai/sim/main/apps/sim/public/logo/primary/primary.svg
+home: https://peerbie.com
+icon: https://raw.githubusercontent.com/simstudioai/sim/main/apps/sim/public/sim.svg
 sources:
   - https://github.com/simstudioai/sim
 maintainers:
   - name: Sim Team
-    email: help@sim.ai
-    url: https://sim.ai
+    email: help@peerbie.com
+    url: https://peerbie.com
 keywords:
   - ai
   - workflow

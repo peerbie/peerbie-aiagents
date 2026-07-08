@@ -25,6 +25,36 @@ export function RequestResetForm({
   statusMessage,
   className,
 }: RequestResetFormProps) {
+  const [buttonClass, setButtonClass] = useState('auth-button-gradient')
+  const [isButtonHovered, setIsButtonHovered] = useState(false)
+
+  useEffect(() => {
+    const checkCustomBrand = () => {
+      const computedStyle = getComputedStyle(document.documentElement)
+      const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
+
+      if (brandAccent && brandAccent !== '#1992fc') {
+        setButtonClass('auth-button-custom')
+      } else {
+        setButtonClass('auth-button-gradient')
+      }
+    }
+
+    checkCustomBrand()
+
+    window.addEventListener('resize', checkCustomBrand)
+    const observer = new MutationObserver(checkCustomBrand)
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['style', 'class'],
+    })
+
+    return () => {
+      window.removeEventListener('resize', checkCustomBrand)
+      observer.disconnect()
+    }
+  }, [])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     onSubmit(email)
@@ -64,11 +94,21 @@ export function RequestResetForm({
       <BrandedButton
         type='submit'
         disabled={isSubmitting}
-        loading={isSubmitting}
-        loadingText='Sending'
+        onMouseEnter={() => setIsButtonHovered(true)}
+        onMouseLeave={() => setIsButtonHovered(false)}
+        className='group inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[#1992fc] bg-gradient-to-b from-[#1992fc] to-[#1992fc] py-[6px] pr-[10px] pl-[12px] text-[15px] text-white shadow-[inset_0_2px_4px_0_#1992fc] transition-all'
       >
-        Send Reset Link
-      </BrandedButton>
+        <span className='flex items-center gap-1'>
+          {isSubmitting ? 'Sending...' : 'Send Reset Link'}
+          <span className='inline-flex transition-transform duration-200 group-hover:translate-x-0.5'>
+            {isButtonHovered ? (
+              <ArrowRight className='h-4 w-4' aria-hidden='true' />
+            ) : (
+              <ChevronRight className='h-4 w-4' aria-hidden='true' />
+            )}
+          </span>
+        </span>
+      </Button>
     </form>
   )
 }
@@ -95,6 +135,35 @@ export function SetNewPasswordForm({
   const [validationMessage, setValidationMessage] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
+  const [buttonClass, setButtonClass] = useState('auth-button-gradient')
+  const [isButtonHovered, setIsButtonHovered] = useState(false)
+
+  useEffect(() => {
+    const checkCustomBrand = () => {
+      const computedStyle = getComputedStyle(document.documentElement)
+      const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
+
+      if (brandAccent && brandAccent !== '#1992fc') {
+        setButtonClass('auth-button-custom')
+      } else {
+        setButtonClass('auth-button-gradient')
+      }
+    }
+
+    checkCustomBrand()
+
+    window.addEventListener('resize', checkCustomBrand)
+    const observer = new MutationObserver(checkCustomBrand)
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['style', 'class'],
+    })
+
+    return () => {
+      window.removeEventListener('resize', checkCustomBrand)
+      observer.disconnect()
+    }
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -219,11 +288,22 @@ export function SetNewPasswordForm({
       <BrandedButton
         type='submit'
         disabled={isSubmitting || !token}
-        loading={isSubmitting}
-        loadingText='Resetting'
+        type='submit'
+        onMouseEnter={() => setIsButtonHovered(true)}
+        onMouseLeave={() => setIsButtonHovered(false)}
+        className='group inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[#1992fc] bg-gradient-to-b from-[#1992fc] to-[#1992fc] py-[6px] pr-[10px] pl-[12px] text-[15px] text-white shadow-[inset_0_2px_4px_0_#1992fc] transition-all'
       >
-        Reset Password
-      </BrandedButton>
+        <span className='flex items-center gap-1'>
+          {isSubmitting ? 'Resetting...' : 'Reset Password'}
+          <span className='inline-flex transition-transform duration-200 group-hover:translate-x-0.5'>
+            {isButtonHovered ? (
+              <ArrowRight className='h-4 w-4' aria-hidden='true' />
+            ) : (
+              <ChevronRight className='h-4 w-4' aria-hidden='true' />
+            )}
+          </span>
+        </span>
+      </Button>
     </form>
   )
 }

@@ -4,22 +4,22 @@ export default function StructuredData() {
     '@graph': [
       {
         '@type': 'Organization',
-        '@id': 'https://sim.ai/#organization',
-        name: 'Sim',
-        alternateName: 'Sim',
+        '@id': 'https://peerbie.com/#organization',
+        name: 'Peerbie',
+        alternateName: 'Peerbie Agent Studio',
         description:
-          'Sim is the open-source platform to build AI agents and run your agentic workforce. Connect 1,000+ integrations and LLMs to deploy and orchestrate agentic workflows.',
-        url: 'https://sim.ai',
+          'Open-source AI agent workflow builder used by developers at trail-blazing startups to Fortune 500 companies',
+        url: 'https://peerbie.com',
         logo: {
           '@type': 'ImageObject',
-          '@id': 'https://sim.ai/#logo',
-          url: 'https://sim.ai/logo/b&w/text/b&w.svg',
-          contentUrl: 'https://sim.ai/logo/b&w/text/b&w.svg',
+          '@id': 'https://peerbie.com/#logo',
+          url: 'https://peerbie.com/logo/b&w/text/b&w.svg',
+          contentUrl: 'https://peerbie.com/logo/b&w/text/b&w.svg',
           width: 49.78314,
           height: 24.276,
-          caption: 'Sim Logo',
+          caption: 'Peerbie Logo',
         },
-        image: { '@id': 'https://sim.ai/#logo' },
+        image: { '@id': 'https://peerbie.com/#logo' },
         sameAs: [
           'https://x.com/simdotai',
           'https://github.com/simstudioai/sim',
@@ -34,58 +34,69 @@ export default function StructuredData() {
       },
       {
         '@type': 'WebSite',
-        '@id': 'https://sim.ai/#website',
-        url: 'https://sim.ai',
-        name: 'Sim — Build AI Agents & Run Your Agentic Workforce',
+        '@id': 'https://peerbie.com/#website',
+        url: 'https://peerbie.com',
+        name: 'Peerbie - AI Agent Workflow Builder',
         description:
           'Sim is the open-source platform to build AI agents and run your agentic workforce. Connect 1,000+ integrations and LLMs to deploy and orchestrate agentic workflows. Join 100,000+ builders.',
         publisher: {
-          '@id': 'https://sim.ai/#organization',
+          '@id': 'https://peerbie.com/#organization',
         },
+        potentialAction: [
+          {
+            '@type': 'SearchAction',
+            '@id': 'https://peerbie.com/#searchaction',
+            target: {
+              '@type': 'EntryPoint',
+              urlTemplate: 'https://peerbie.com/search?q={search_term_string}',
+            },
+            'query-input': 'required name=search_term_string',
+          },
+        ],
         inLanguage: 'en-US',
       },
       {
         '@type': 'WebPage',
-        '@id': 'https://sim.ai/#webpage',
-        url: 'https://sim.ai',
-        name: 'Sim — Build AI Agents & Run Your Agentic Workforce',
+        '@id': 'https://peerbie.com/#webpage',
+        url: 'https://peerbie.com',
+        name: 'Peerbie - Workflows for LLMs | Build AI Agent Workflows',
         isPartOf: {
-          '@id': 'https://sim.ai/#website',
+          '@id': 'https://peerbie.com/#website',
         },
         about: {
-          '@id': 'https://sim.ai/#software',
+          '@id': 'https://peerbie.com/#software',
         },
         datePublished: '2024-01-01T00:00:00+00:00',
         dateModified: new Date().toISOString(),
         description:
-          'Sim is the open-source platform to build AI agents and run your agentic workforce. Connect 1,000+ integrations and LLMs to deploy and orchestrate agentic workflows. Create agents, workflows, knowledge bases, tables, and docs.',
+          'Build and deploy AI agent workflows with Peerbie Agent Studio. Visual drag-and-drop interface for creating powerful LLM-powered automations.',
         breadcrumb: {
-          '@id': 'https://sim.ai/#breadcrumb',
+          '@id': 'https://peerbie.com/#breadcrumb',
         },
         inLanguage: 'en-US',
         potentialAction: [
           {
             '@type': 'ReadAction',
-            target: ['https://sim.ai'],
+            target: ['https://peerbie.com'],
           },
         ],
       },
       {
         '@type': 'BreadcrumbList',
-        '@id': 'https://sim.ai/#breadcrumb',
+        '@id': 'https://peerbie.com/#breadcrumb',
         itemListElement: [
           {
             '@type': 'ListItem',
             position: 1,
             name: 'Home',
-            item: 'https://sim.ai',
+            item: 'https://peerbie.com',
           },
         ],
       },
       {
         '@type': 'SoftwareApplication',
-        '@id': 'https://sim.ai/#software',
-        name: 'Sim — Build AI Agents & Run Your Agentic Workforce',
+        '@id': 'https://peerbie.com/#software',
+        name: 'Peerbie Agent Studio - AI Agent Workflow Builder',
         description:
           'Sim is the open-source platform to build AI agents and run your agentic workforce. Connect 1,000+ integrations and LLMs to deploy and orchestrate agentic workflows. Create agents, workflows, knowledge bases, tables, and docs. Trusted by over 100,000 builders. SOC2 and HIPAA compliant.',
         applicationCategory: 'DeveloperApplication',
@@ -95,7 +106,7 @@ export default function StructuredData() {
         offers: [
           {
             '@type': 'Offer',
-            '@id': 'https://sim.ai/#offer-free',
+            '@id': 'https://peerbie.com/#offer-free',
             name: 'Community Plan',
             price: '0',
             priceCurrency: 'USD',
@@ -103,7 +114,7 @@ export default function StructuredData() {
             itemCondition: 'https://schema.org/NewCondition',
             availability: 'https://schema.org/InStock',
             seller: {
-              '@id': 'https://sim.ai/#organization',
+              '@id': 'https://peerbie.com/#organization',
             },
             eligibleRegion: {
               '@type': 'Place',
@@ -112,7 +123,7 @@ export default function StructuredData() {
           },
           {
             '@type': 'Offer',
-            '@id': 'https://sim.ai/#offer-pro',
+            '@id': 'https://peerbie.com/#offer-pro',
             name: 'Pro Plan',
             price: '20',
             priceCurrency: 'USD',
@@ -127,12 +138,12 @@ export default function StructuredData() {
             itemCondition: 'https://schema.org/NewCondition',
             availability: 'https://schema.org/InStock',
             seller: {
-              '@id': 'https://sim.ai/#organization',
+              '@id': 'https://peerbie.com/#organization',
             },
           },
           {
             '@type': 'Offer',
-            '@id': 'https://sim.ai/#offer-team',
+            '@id': 'https://peerbie.com/#offer-team',
             name: 'Team Plan',
             price: '40',
             priceCurrency: 'USD',
@@ -147,7 +158,7 @@ export default function StructuredData() {
             itemCondition: 'https://schema.org/NewCondition',
             availability: 'https://schema.org/InStock',
             seller: {
-              '@id': 'https://sim.ai/#organization',
+              '@id': 'https://peerbie.com/#organization',
             },
           },
         ],
@@ -174,14 +185,14 @@ export default function StructuredData() {
         screenshot: [
           {
             '@type': 'ImageObject',
-            url: 'https://sim.ai/logo/426-240/primary/small.png',
-            caption: 'Sim — build AI agents and run your agentic workforce',
+            url: 'https://peerbie.com/screenshots/workflow-builder.png',
+            caption: 'Sim workflow builder interface',
           },
         ],
       },
       {
         '@type': 'FAQPage',
-        '@id': 'https://sim.ai/#faq',
+        '@id': 'https://peerbie.com/#faq',
         mainEntity: [
           {
             '@type': 'Question',

@@ -71,8 +71,8 @@ export default async function Layout({ children, params }: LayoutProps) {
     url: 'https://docs.sim.ai',
     publisher: {
       '@type': 'Organization',
-      name: 'Sim',
-      url: 'https://sim.ai',
+      name: 'Peerbie Agent Studio',
+      url: 'https://peerbie.com',
       logo: {
         '@type': 'ImageObject',
         url: 'https://docs.sim.ai/static/logo.png',

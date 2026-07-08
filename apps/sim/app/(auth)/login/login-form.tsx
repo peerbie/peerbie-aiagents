@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createLogger } from '@sim/logger'
-import { Eye, EyeOff } from 'lucide-react'
+import { Eye, EyeOff, ArrowRight, ChevronRight } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { Inter } from 'next/font/google'
 import {
   Input,
   Label,
@@ -13,6 +14,7 @@ import {
   ModalContent,
   ModalDescription,
   ModalHeader,
+  Button,
 } from '@/components/emcn'
 import { client } from '@/lib/auth/auth-client'
 import { getEnv, isFalsy, isTruthy } from '@/lib/core/config/env'
@@ -26,6 +28,7 @@ import { SSOLoginButton } from '@/app/(auth)/components/sso-login-button'
 import { useBrandedButtonClass } from '@/hooks/use-branded-button-class'
 
 const logger = createLogger('LoginForm')
+const inter = Inter({ subsets: ['latin'] })
 
 const validateEmailField = (emailValue: string): string[] => {
   const errors: string[] = []
@@ -87,6 +90,9 @@ export default function LoginPage({
   const [passwordErrors, setPasswordErrors] = useState<string[]>([])
   const [showValidationError, setShowValidationError] = useState(false)
   const buttonClass = useBrandedButtonClass()
+  const [resetSuccessMessage, setResetSuccessMessage] = useState<string | null>(null)
+  const [isResetButtonHovered, setIsResetButtonHovered] = useState(false)
+  const [isButtonHovered, setIsButtonHovered] = useState(false)
 
   const callbackUrlParam = searchParams?.get('callbackUrl')
   const isValidCallbackUrl = callbackUrlParam ? validateCallbackUrl(callbackUrlParam) : false
@@ -109,11 +115,6 @@ export default function LoginPage({
   const [email, setEmail] = useState('')
   const [emailErrors, setEmailErrors] = useState<string[]>([])
   const [showEmailValidationError, setShowEmailValidationError] = useState(false)
-  const [resetSuccessMessage, setResetSuccessMessage] = useState<string | null>(() =>
-    searchParams?.get('resetSuccess') === 'true'
-      ? 'Password reset successful. Please sign in with your new password.'
-      : null
-  )
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -380,8 +381,9 @@ export default function LoginPage({
       )}
 
       {/* Email/Password Form - show unless explicitly disabled */}
-      {!isFalsy(getEnv('NEXT_PUBLIC_EMAIL_PASSWORD_SIGNUP_ENABLED')) && (
-        <form onSubmit={onSubmit} className='mt-8 space-y-8'>
+      {/*!isFalsy(getEnv('NEXT_PUBLIC_EMAIL_PASSWORD_SIGNUP_ENABLED')) && */}
+      {(
+        <form onSubmit={onSubmit} className={`${inter.className} mt-8 space-y-8`}>
           <div className='space-y-6'>
             <div className='space-y-2'>
               <div className='flex items-center justify-between'>
@@ -414,13 +416,13 @@ export default function LoginPage({
             <div className='space-y-2'>
               <div className='flex items-center justify-between'>
                 <Label htmlFor='password'>Password</Label>
-                <button
+                {/* <button
                   type='button'
                   onClick={() => setForgotPasswordOpen(true)}
                   className='font-medium text-[#999] text-xs transition hover:text-[#ECECEC]'
                 >
                   Forgot password?
-                </button>
+                </button> */}
               </div>
               <div className='relative'>
                 <Input
@@ -462,6 +464,9 @@ export default function LoginPage({
 
           <BrandedButton
             type='submit'
+            onMouseEnter={() => setIsButtonHovered(true)}
+            onMouseLeave={() => setIsButtonHovered(false)}
+            className='group inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[#1992fc] bg-gradient-to-b from-[#1992fc] to-[#1992fc] py-[6px] pr-[10px] pl-[12px] text-[15px] text-white shadow-[inset_0_2px_4px_0_#1992fc] transition-all'
             disabled={isLoading}
             loading={isLoading}
             loadingText='Signing in'
@@ -518,7 +523,7 @@ export default function LoginPage({
       <div className='absolute right-0 bottom-0 left-0 px-8 pb-8 text-center font-[340] text-[#999] text-[13px] leading-relaxed sm:px-8 md:px-[44px]'>
         By signing in, you agree to our{' '}
         <Link
-          href='/terms'
+          href='/'
           target='_blank'
           rel='noopener noreferrer'
           className='text-[#999] underline-offset-4 transition hover:text-[#ECECEC] hover:underline'
@@ -527,7 +532,7 @@ export default function LoginPage({
         </Link>{' '}
         and{' '}
         <Link
-          href='/privacy'
+          href='/'
           target='_blank'
           rel='noopener noreferrer'
           className='text-[#999] underline-offset-4 transition hover:text-[#ECECEC] hover:underline'
@@ -547,41 +552,54 @@ export default function LoginPage({
             <div className='space-y-4'>
               <div className='space-y-2'>
                 <Label htmlFor='reset-email'>Email</Label>
-                <Input
-                  id='reset-email'
-                  value={forgotPasswordEmail}
-                  onChange={(e) => setForgotPasswordEmail(e.target.value)}
-                  placeholder='Enter your email'
-                  required
-                  type='email'
-                  className={cn(
-                    resetStatus.type === 'error' && 'border-red-500 focus:border-red-500'
-                  )}
-                />
-                {resetStatus.type === 'error' && (
-                  <div className='mt-1 text-red-400 text-xs'>
-                    <p>{resetStatus.message}</p>
-                  </div>
-                )}
               </div>
-              {resetStatus.type === 'success' && (
-                <div className='mt-1 text-[#4CAF50] text-xs'>
+              <Input
+                id='reset-email'
+                value={forgotPasswordEmail}
+                onChange={(e) => setForgotPasswordEmail(e.target.value)}
+                placeholder='Enter your email'
+                required
+                type='email'
+                className={cn(
+                  'rounded-[10px] shadow-sm transition-colors focus:border-gray-400 focus:ring-2 focus:ring-gray-100',
+                  resetStatus.type === 'error' &&
+                    'border-red-500 focus:border-red-500 focus:ring-red-100 focus-visible:ring-red-500'
+                )}
+              />
+              {resetStatus.type === 'error' && (
+                <div className='mt-1 space-y-1 text-red-400 text-xs'>
                   <p>{resetStatus.message}</p>
                 </div>
               )}
-              <BrandedButton
-                type='button'
-                onClick={handleForgotPassword}
-                disabled={isSubmittingReset}
-                loading={isSubmittingReset}
-                loadingText='Sending'
-              >
-                Send Reset Link
-              </BrandedButton>
             </div>
+            {resetStatus.type === 'success' && (
+              <div className='mt-1 space-y-1 text-[#4CAF50] text-xs'>
+                <p>{resetStatus.message}</p>
+              </div>
+            )}
+            <Button
+              type='button'
+              onClick={handleForgotPassword}
+              onMouseEnter={() => setIsResetButtonHovered(true)}
+              onMouseLeave={() => setIsResetButtonHovered(false)}
+              className='group inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[#1992fc] bg-gradient-to-b from-[#1992fc] to-[#1992fc] py-[6px] pr-[10px] pl-[12px] text-[15px] text-white shadow-[inset_0_2px_4px_0_#1992fc] transition-all'
+              disabled={isSubmittingReset}
+            >
+              <span className='flex items-center gap-1'>
+                {isSubmittingReset ? 'Sending...' : 'Send Reset Link'}
+                <span className='inline-flex transition-transform duration-200 group-hover:translate-x-0.5'>
+                  {isResetButtonHovered ? (
+                    <ArrowRight className='h-4 w-4' aria-hidden='true' />
+                  ) : (
+                    <ChevronRight className='h-4 w-4' aria-hidden='true' />
+                  )}
+                </span>
+              </span>
+            </Button>
           </ModalBody>
         </ModalContent>
       </Modal>
     </>
   )
 }
+

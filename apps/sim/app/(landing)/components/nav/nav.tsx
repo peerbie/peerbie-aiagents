@@ -144,7 +144,7 @@ export default function Nav({ hideAuthButtons = false, variant = 'landing' }: Na
             <Image
               src='/logo/b&w/text/b&w.svg'
               alt='Sim - Workflows for LLMs'
-              width={49.78314}
+              width={75}
               height={24.276}
               priority
               loading='eager'

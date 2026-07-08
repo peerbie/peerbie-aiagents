@@ -221,7 +221,7 @@ export default function SSOForm() {
       <div className='absolute right-0 bottom-0 left-0 px-8 pb-8 text-center font-[340] text-[#999] text-[14px] leading-relaxed sm:px-8 md:px-[44px]'>
         By signing in, you agree to our{' '}
         <Link
-          href='/terms'
+          href='/'
           target='_blank'
           rel='noopener noreferrer'
           className='text-[#999] underline-offset-4 transition hover:text-[#ECECEC] hover:underline'
@@ -230,7 +230,7 @@ export default function SSOForm() {
         </Link>{' '}
         and{' '}
         <Link
-          href='/privacy'
+          href='/'
           target='_blank'
           rel='noopener noreferrer'
           className='text-[#999] underline-offset-4 transition hover:text-[#ECECEC] hover:underline'

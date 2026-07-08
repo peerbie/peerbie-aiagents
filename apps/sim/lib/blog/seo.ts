@@ -82,7 +82,7 @@ export function buildArticleJsonLd(post: BlogMeta) {
       name: 'Sim',
       logo: {
         '@type': 'ImageObject',
-        url: 'https://sim.ai/logo/primary/medium.png',
+        url: 'https://peerbie.com/logo/primary/medium.png',
       },
     },
     mainEntityOfPage: {

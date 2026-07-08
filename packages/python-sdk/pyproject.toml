@@ -6,7 +6,11 @@ build-backend = "setuptools.build_meta"
 name = "simstudio-sdk"
 version = "0.1.2"
 authors = [
+<<<<<<< HEAD
+    {name = "Sim", email = "support@peerbie.com"},
+=======
     {name = "Sim", email = "help@sim.ai"},
+>>>>>>> 0fff3329427ecc90bf629b9981320db7d044bb5b
 ]
 description = "Sim SDK - Execute workflows programmatically"
 readme = "README.md"
@@ -45,7 +49,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://sim.ai"
+Homepage = "https://peerbie.com"
 Documentation = "https://docs.sim.ai"
 Repository = "https://github.com/simstudioai/sim"
 "Bug Reports" = "https://github.com/simstudioai/sim/issues"

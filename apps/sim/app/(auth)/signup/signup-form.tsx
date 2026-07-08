@@ -108,6 +108,53 @@ function SignupFormContent({
   const [nameErrors, setNameErrors] = useState<string[]>([])
   const [showNameValidationError, setShowNameValidationError] = useState(false)
 
+  useEffect(() => {
+    setMounted(true)
+    const emailParam = searchParams.get('email')
+    if (emailParam) {
+      setEmail(emailParam)
+    }
+
+    const redirectParam = searchParams.get('redirect')
+    if (redirectParam) {
+      setRedirectUrl(redirectParam)
+
+      if (redirectParam.startsWith('/invite/')) {
+        setIsInviteFlow(true)
+      }
+    }
+
+    const inviteFlowParam = searchParams.get('invite_flow')
+    if (inviteFlowParam === 'true') {
+      setIsInviteFlow(true)
+    }
+
+    const checkCustomBrand = () => {
+      const computedStyle = getComputedStyle(document.documentElement)
+      const brandAccent = computedStyle.getPropertyValue('--brand-accent-hex').trim()
+
+      if (brandAccent && brandAccent !== '#1992fc') {
+        setButtonClass('auth-button-custom')
+      } else {
+        setButtonClass('auth-button-gradient')
+      }
+    }
+
+    checkCustomBrand()
+
+    window.addEventListener('resize', checkCustomBrand)
+    const observer = new MutationObserver(checkCustomBrand)
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['style', 'class'],
+    })
+
+    return () => {
+      window.removeEventListener('resize', checkCustomBrand)
+      observer.disconnect()
+    }
+  }, [searchParams])
+
   const validatePassword = (passwordValue: string): string[] => {
     const errors: string[] = []
 
@@ -455,6 +502,9 @@ function SignupFormContent({
 
           <BrandedButton
             type='submit'
+            onMouseEnter={() => setIsButtonHovered(true)}
+            onMouseLeave={() => setIsButtonHovered(false)}
+            className='group inline-flex w-full items-center justify-center gap-2 rounded-[10px] border border-[#1992fc] bg-gradient-to-b from-[#1992fc] to-[#1992fc] py-[6px] pr-[10px] pl-[12px] text-[15px] text-white shadow-[inset_0_2px_4px_0_#1992fc] transition-all'
             disabled={isLoading}
             loading={isLoading}
             loadingText='Creating account'

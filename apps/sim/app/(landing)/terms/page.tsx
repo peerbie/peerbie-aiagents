@@ -290,8 +290,11 @@ export default function TermsOfService() {
         <p className='mb-4'>
           You have the right to opt out of the provisions of this Arbitration Agreement by sending a
           timely written notice of your decision to opt out to:{' '}
-          <Link href='mailto:legal@sim.ai' className='text-[#ECECEC] underline hover:text-white'>
-            legal@sim.ai{' '}
+          <Link
+            href='mailto:legal@peerbie.com'
+            className='text-[var(--brand-primary-hex)] underline hover:text-[var(--brand-primary-hover-hex)]'
+          >
+            legal@peerbie.com{' '}
           </Link>
           within 30 days after first becoming subject to this Arbitration Agreement.
         </p>
@@ -338,10 +341,10 @@ export default function TermsOfService() {
         <p>
           Our Copyright Agent can be reached at:{' '}
           <Link
-            href='mailto:copyright@sim.ai'
-            className='text-[#ECECEC] underline hover:text-white'
+            href='mailto:copyright@peerbie.com'
+            className='text-[var(--brand-primary-hex)] underline hover:text-[var(--brand-primary-hover-hex)]'
           >
-            copyright@sim.ai
+            copyright@peerbie.com
           </Link>
         </p>
       </section>
@@ -350,8 +353,11 @@ export default function TermsOfService() {
         <h2 className='mb-4 font-semibold text-2xl'>18. Contact Us</h2>
         <p>
           If you have any questions about these Terms, please contact us at:{' '}
-          <Link href='mailto:legal@sim.ai' className='text-[#ECECEC] underline hover:text-white'>
-            legal@sim.ai
+          <Link
+            href='mailto:legal@peerbie.com'
+            className='text-[var(--brand-primary-hex)] underline hover:text-[var(--brand-primary-hover-hex)]'
+          >
+            legal@peerbie.com
           </Link>
         </p>
       </section>

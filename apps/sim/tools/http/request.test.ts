@@ -499,7 +499,7 @@ describe('HTTP Request Tool', () => {
       Object.defineProperty(global, 'window', {
         value: {
           location: {
-            origin: 'https://sim.ai',
+            origin: 'https://peerbie.com',
           },
         },
         writable: true,

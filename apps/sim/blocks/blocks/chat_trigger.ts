@@ -16,7 +16,7 @@ export const ChatTriggerBlock: BlockConfig = {
   `,
   category: 'triggers',
   hideFromToolbar: true,
-  bgColor: '#6F3DFA',
+  bgColor: '#1992fc',
   icon: ChatTriggerIcon,
   subBlocks: [],
   tools: {

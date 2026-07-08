@@ -15,7 +15,7 @@ export function TOCFooter() {
           The open-source platform to build AI agents and run your agentic workforce.
         </div>
         <Link
-          href='https://sim.ai/signup'
+          href='https://peerbie.com/signup'
           target='_blank'
           rel='noopener noreferrer'
           className='group mt-2 inline-flex h-8 w-fit items-center justify-center gap-2 whitespace-nowrap rounded-[5px] border border-[#33C482] bg-[#33C482] px-[10px] font-medium text-black text-sm outline-none transition-[filter] hover:brightness-110 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'

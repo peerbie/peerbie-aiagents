@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: peerbie-prod
+  name: agentstudio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agentstudio
+  template:
+    metadata:
+      labels:
+        app: agentstudio
+    spec:
+      serviceAccountName: peerbie-gcr-sa
+      containers:
+      - name: agentstudio
+        image: europe-west3-docker.pkg.dev/sage-nucleus-347914/peerbie-cr/agentbuilder:v0.1
+        volumeMounts:
+            - name: gcs-credentials-volume
+              mountPath: /app/apps/sim/service-account-key.json
+              subPath: gcs-credentials # Match this with the key in your secret
+            - name: google-cloud-key
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+        envFrom:
+        - secretRef:
+            name: peerbie-studio-secret
+        ports:
+        - containerPort: 3000
+          name: studio-port
+        resources:
+          limits:
+            memory: 3Gi
+            cpu: 2000m
+          requests:
+            cpu: 1000m
+            memory: 2Gi
+        readinessProbe:
+          httpGet:
+            path: /
+            port: studio-port
+          initialDelaySeconds: 40
+          periodSeconds: 30
+      volumes:
+        - name: gcs-credentials-volume
+          secret:
+            secretName: gcs-credentials-secret
+        - name: google-cloud-key
+          projected:
+            sources:
+            - serviceAccountToken:
+                path: token
+                expirationSeconds: 3600 #adjust as needed
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentstudio-service
+spec:
+  selector:
+    app: agentstudio
+  ports:
+  - port: 80
+    targetPort: 3000
+  type: ClusterIP
