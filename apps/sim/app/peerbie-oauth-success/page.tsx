@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { peerbieOpenerOrigins, postToPeerbieOpener } from './target-origins'
 
 function OAuthSuccessContent() {
   const searchParams = useSearchParams()
@@ -10,9 +11,11 @@ function OAuthSuccessContent() {
     const providerId = searchParams.get('providerId') || ''
 
     if (window.opener) {
-      window.opener.postMessage(
+      // Addressed to PeerBie's web origins by name — never '*' (see target-origins.ts).
+      postToPeerbieOpener(
+        window.opener,
         { type: 'peerbie-credential-connected', providerId },
-        '*'
+        peerbieOpenerOrigins(process.env.NEXT_PUBLIC_PEERBIE_OPENER_ALLOW_LOCALHOST)
       )
       setTimeout(() => window.close(), 800)
     } else {
