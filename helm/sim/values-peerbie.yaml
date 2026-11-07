@@ -16,12 +16,18 @@ app:
 
   replicaCount: 1
 
+  # Memory (2026-11-07): the app idles at ~1.7Gi and grows ~190Mi/day with
+  # almost no work (every cron poll returns total=0), then hits the 4Gi limit
+  # and is OOM-killed about every 15 days (6 times since 2026-08-05; last
+  # 2026-10-31 exit 137; node itself had no memory pressure).
+  # - request 2Gi: reserve what it really uses, so the scheduler counts it.
+  # - limit stays 4Gi: the ceiling did not change.
   resources:
     limits:
       memory: "4Gi"
       cpu: "2000m"
     requests:
-      memory: "512Mi"
+      memory: "2Gi"
       cpu: "100m"
 
   env:
@@ -30,6 +36,15 @@ app:
     NEXT_PUBLIC_SOCKET_URL: "https://studio.peerbie.com"
     NODE_ENV: "production"
     NEXT_TELEMETRY_DISABLED: "1"
+
+    # The app runs on Bun (JavaScriptCore), not Node, so NODE_OPTIONS /
+    # --max-old-space-size do nothing here. JSC sizes its heap from the RAM it
+    # sees, which is the whole 15Gi node, not the 4Gi container limit, so it
+    # collects lazily and walks into the limit. forceRAMSize (bytes) tells the
+    # GC the real budget: 3Gi, below the 4Gi limit so there is headroom for
+    # non-heap memory and the isolated-vm / python child processes.
+    # It is a GC hint, not a hard cap. Remove the line to roll back.
+    BUN_JSC_forceRAMSize: "3221225472"
 
     # Secrets — set via --set flags in deploy pipeline (GitHub Secrets)
     BETTER_AUTH_SECRET: ""
